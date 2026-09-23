@@ -1,0 +1,40 @@
+// ui/tpl.baga — server-rendered pages (tplbaga). Phase 0 keeps the UI
+// minimal: login form + home shell. Templates are Baga fns returning str;
+// if they grow, move to .tpl files loaded at boot.
+// tplbaga syntax: {{ var }} (escaped), {% if var %}…{% else %}…{% endif %}.
+
+fn ui_page_login() -> str {
+    let mut t = "<!doctype html><html lang=\"bg\"><head><meta charset=\"utf-8\">"
+    t = concat(t, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+    t = concat(t, "<title>secp · Вход</title>")
+    t = concat(t, "<style>body{font-family:system-ui,sans-serif;background:#f4f5f7;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}")
+    t = concat(t, ".card{background:#fff;padding:2rem 2.5rem;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08);width:320px}")
+    t = concat(t, "h1{font-size:1.25rem;margin:0 0 .25rem}p.sub{color:#666;font-size:.85rem;margin:0 0 1.5rem}")
+    t = concat(t, "label{display:block;font-size:.8rem;color:#444;margin:.75rem 0 .25rem}")
+    t = concat(t, "input{width:100%;padding:.5rem;border:1px solid #ccc;border-radius:6px;box-sizing:border-box}")
+    t = concat(t, "button{margin-top:1.25rem;width:100%;padding:.6rem;border:0;border-radius:6px;background:#2f6fed;color:#fff;font-size:.95rem;cursor:pointer}")
+    t = concat(t, ".err{color:#c0392b;font-size:.85rem;margin-top:.75rem}</style></head><body>")
+    t = concat(t, "<div class=\"card\"><h1>7x7office · secp</h1><p class=\"sub\">Вход в платформата</p>")
+    t = concat(t, "<form method=\"post\" action=\"/v1/auth/login\">")
+    t = concat(t, "<label for=\"email\">Имейл</label><input id=\"email\" name=\"email\" type=\"email\" required autofocus>")
+    t = concat(t, "<label for=\"password\">Парола</label><input id=\"password\" name=\"password\" type=\"password\" required>")
+    t = concat(t, "<button type=\"submit\">Вход</button></form>")
+    t = concat(t, "{% if error %}<div class=\"err\">{{ error }}</div>{% endif %}")
+    t = concat(t, "</div></body></html>")
+    return t
+}
+
+fn ui_page_home() -> str {
+    let mut t = "<!doctype html><html lang=\"bg\"><head><meta charset=\"utf-8\">"
+    t = concat(t, "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
+    t = concat(t, "<title>secp · 7x7office</title>")
+    t = concat(t, "<style>body{font-family:system-ui,sans-serif;margin:0;background:#f4f5f7}")
+    t = concat(t, "header{background:#1f2733;color:#fff;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem}")
+    t = concat(t, "header b{font-size:1.05rem}header .sp{flex:1}header a,header button{color:#cdd6e4;font-size:.85rem;text-decoration:none;background:none;border:0;cursor:pointer}")
+    t = concat(t, "main{padding:2rem 1.5rem;color:#333}.muted{color:#777;font-size:.85rem}</style></head><body>")
+    t = concat(t, "<header><b>7x7office · secp</b><span class=\"sp\"></span>")
+    t = concat(t, "{% if user %}<span>{{ user }}</span><form method=\"post\" action=\"/v1/auth/logout\" style=\"margin:0\"><button>Изход</button></form>{% else %}<a href=\"/login\">Вход</a>{% endif %}")
+    t = concat(t, "</header><main><h2>Файлове</h2><p class=\"muted\">Фаза 0 — скелет. Файловият мениджър идва във Фаза 1 (tree + data модули).</p></main>")
+    t = concat(t, "</body></html>")
+    return t
+}

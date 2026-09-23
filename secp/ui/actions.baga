@@ -1,0 +1,81 @@
+// ui/actions.baga — server-rendered pages: GET / (home) and GET /login.
+// Auth state comes from the secp_token cookie (JWT HS256, verified with
+// jwtbaga); the API bearer flow (act_require_auth) stays untouched.
+
+import "tpl.baga"
+import "../idm/auth_actions.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "jwtbaga/jwt.baga"
+import "tplbaga/tpl.baga"
+import "std/str/str.baga"
+
+// Pull "secp_token" out of the Cookie header; "" when absent.
+fn ui_cookie_token(ctx: FmrCtx) -> str {
+    let raw = fmr_header(ctx, "Cookie")
+    if raw == "" {
+        return ""
+    }
+    let parts = str_split(raw, ";")
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        let pair = str_trim(vec_get(parts, i))
+        let name = concat(secp_cookie_name(), "=")
+        if str_starts_with(pair, name) {
+            let kv = str_split(pair, "=")
+            if vec_len(kv) > 1 {
+                return vec_get(kv, 1)
+            }
+            return ""
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Logged-in user's email from the cookie JWT, or "" (anonymous / bad token).
+fn ui_cookie_user(ctx: FmrCtx) -> str {
+    let token = ui_cookie_token(ctx)
+    if token == "" {
+        return ""
+    }
+    if jwt_verify_hs256(ctx.jwt_secret, token) == 0 {
+        return ""
+    }
+    return jwt_claim_str(token, "sub")
+}
+
+fn ui_html_response(status: i64, html: str) -> Response {
+    let mut r = http_response(status, html)
+    r = http_set_header(r, "Content-Type", "text/html; charset=utf-8")
+    return r
+}
+
+fn act_ui_home(ctx: FmrCtx, db: OrmDb) -> FmrOut {
+    let m = map_new()
+    map_set(m, "user", ui_cookie_user(ctx))
+    let out = tpl_render(ui_page_home(), m)
+    if out.ok == 0 {
+        return act_err(db, 500, out.err)
+    }
+    return fmr_out(ui_html_response(200, out.html), db)
+}
+
+fn act_ui_login(ctx: FmrCtx, db: OrmDb) -> FmrOut {
+    // Already logged in → home.
+    if ui_cookie_user(ctx) != "" {
+        let mut r = http_response(303, "")
+        r = http_set_header(r, "Location", "/")
+        return fmr_out(r, db)
+    }
+    let m = map_new()
+    map_set(m, "error", fmr_query(ctx, "error"))
+    let out = tpl_render(ui_page_login(), m)
+    if out.ok == 0 {
+        return act_err(db, 500, out.err)
+    }
+    return fmr_out(ui_html_response(200, out.html), db)
+}

@@ -1,0 +1,89 @@
+// lib/pass.baga — password hashing: PBKDF2-HMAC-SHA256 (RFC 8018), 32-byte dk.
+// std/crypto has no bcrypt/argon2 — this is the interim KDF (see gaps.md).
+// Candidate to become a universal `passbaga` package once the API settles.
+
+import "std/crypto/hmac.baga"
+import "std/crypto/ct.baga"
+import "std/bytes/bytes.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn pass_default_iters() -> i64 {
+    return 10000
+}
+
+// Iteration count from SECP_PASS_ITERS (min 1000), else default.
+fn pass_iters_cfg() -> i64 !IO {
+    let raw = env("SECP_PASS_ITERS")?
+    if raw == "" {
+        return pass_default_iters()
+    }
+    let n = parse_int(raw)
+    if n < 1000 {
+        return pass_default_iters()
+    }
+    return n
+}
+
+// 16 random bytes → 32 hex chars.
+fn pass_new_salt() -> str !Random {
+    return bytes_to_hex(random_bytes(16))
+}
+
+// INT32_BE(1) block counter for the single PBKDF2 block.
+fn pass_block_one() -> bytes {
+    let v = vec_new()
+    vec_push(v, 0)
+    vec_push(v, 0)
+    vec_push(v, 0)
+    vec_push(v, 1)
+    return bytes_from_vec(v)
+}
+
+// Copy a digest into a Vec<i64> for XOR accumulation.
+fn pass_vec_of(b: bytes) -> Vec<i64> {
+    let v = vec_new()
+    let mut i: i64 = 0
+    while i < bytes_len(b) {
+        vec_push(v, bytes_at(b, i))
+        i = i + 1
+    }
+    return v
+}
+
+// PBKDF2-HMAC-SHA256, dkLen = 32 (single block — no block loop needed).
+fn pass_pbkdf2(password: str, salt: bytes, iters: i64) -> bytes {
+    let key = bytes_of_str(password)
+    let mut u = hmac_sha256_b(key, bytes_concat(salt, pass_block_one()))
+    let t = pass_vec_of(u)
+    let mut i: i64 = 1
+    while i < iters {
+        u = hmac_sha256_b(key, u)
+        let mut j: i64 = 0
+        while j < 32 {
+            vec_set(t, j, vec_get(t, j) ^ bytes_at(u, j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return bytes_from_vec(t)
+}
+
+// password + hex salt → hex dk. Store (hash, salt, iters) per user.
+fn pass_make(password: str, salt_hex: str, iters: i64) -> str {
+    let dk = pass_pbkdf2(password, bytes_from_vec(bytes_from_hex(salt_hex)), iters)
+    return bytes_to_hex(pass_vec_of(dk))
+}
+
+// Constant-time verify against stored (salt, iters, hash).
+fn pass_verify(password: str, salt_hex: str, iters: i64, expected_hex: str) -> i64 {
+    if expected_hex == "" || salt_hex == "" || iters < 1 {
+        return 0
+    }
+    let actual = pass_make(password, salt_hex, iters)
+    if ct_eq(actual, expected_hex) {
+        return 1
+    }
+    return 0
+}

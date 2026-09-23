@@ -1,0 +1,223 @@
+// tree/model.baga — tree_nodes helpers over ormbaga.
+// Module tree owns this table; paths are virtual (Cells-style), the
+// local-fs blob store only sees content hashes.
+// Every query is scoped by owner_id — v1 = one personal space per user;
+// workspaces arrive in Phase 2 by widening owner scoping, not the schema.
+
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "pathbaga/path.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+import "bufbaga/buf.baga"
+
+fn tree_table() -> str {
+    return "tree_nodes"
+}
+
+fn tree_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn tree_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM tree_nodes")?
+}
+
+// Normalize a virtual path: leading "/", no trailing "/" (except root),
+// "." / ".." / duplicate slashes resolved lexically by pathbaga.
+fn tree_norm(p: str) -> str {
+    let mut c = path_clean(p)
+    if str_starts_with(c, "/") == false {
+        c = concat("/", c)
+    }
+    if c != "/" {
+        c = path_trim_right_slash(c)
+        if c == "" {
+            c = "/"
+        }
+    }
+    return c
+}
+
+fn tree_parent_of(path: str) -> str {
+    if path == "/" {
+        return "/"
+    }
+    return path_dirname(path)
+}
+
+fn tree_name_of(path: str) -> str {
+    if path == "/" {
+        return "/"
+    }
+    return path_basename(path)
+}
+
+// Suffix of p after dropping the first `from` chars (bufbaga has no slice).
+fn tree_tail(p: str, from: i64) -> str {
+    let mut b = buf_new()
+    let mut i: i64 = from
+    while i < len(p) {
+        b = buf_push_chr(b, char_at(p, i))
+        i = i + 1
+    }
+    return buf_str(b)
+}
+
+fn tree_cols() -> str {
+    return "id, owner_id, path, parent_path, name, is_dir, size, hash, thumb_hash, created_at, updated_at"
+}
+
+fn tree_find(db: OrmDb, owner: i64, path: str) -> OrmQuery !IO !Net {
+    let sql = concat("SELECT ", tree_cols())
+    let sql2 = concat(sql, " FROM tree_nodes WHERE owner_id = $1 AND path = $2")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, path)
+    return orm_query_params_str(db, sql2, vals)?
+}
+
+fn tree_children(db: OrmDb, owner: i64, parent_path: str) -> OrmQuery !IO !Net {
+    let sql = concat("SELECT ", tree_cols())
+    let sql2 = concat(sql, " FROM tree_nodes WHERE owner_id = $1 AND parent_path = $2 ORDER BY is_dir DESC, name")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, parent_path)
+    return orm_query_params_str(db, sql2, vals)?
+}
+
+// The node itself plus every descendant (for delete / move).
+fn tree_subtree(db: OrmDb, owner: i64, path: str) -> OrmQuery !IO !Net {
+    let sql = concat("SELECT ", tree_cols())
+    let sql2 = concat(sql, " FROM tree_nodes WHERE owner_id = $1 AND (path = $2 OR path LIKE $3) ORDER BY path")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, path)
+    vec_push(vals, concat(path, "/%"))
+    return orm_query_params_str(db, sql2, vals)?
+}
+
+fn tree_insert(db: OrmDb, owner: i64, path: str, parent_path: str, name: str, is_dir: i64, size: i64, hash: str, thumb_hash: str) -> OrmExec !IO !Net {
+    if tree_backend_boila()? == 1 {
+        let c = tree_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "owner_id")
+        vec_push(cols, "path")
+        vec_push(cols, "parent_path")
+        vec_push(cols, "name")
+        vec_push(cols, "is_dir")
+        vec_push(cols, "size")
+        vec_push(cols, "hash")
+        vec_push(cols, "thumb_hash")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(owner))
+        vec_push(vals, path)
+        vec_push(vals, parent_path)
+        vec_push(vals, name)
+        vec_push(vals, int_to_str(is_dir))
+        vec_push(vals, int_to_str(size))
+        vec_push(vals, hash)
+        vec_push(vals, thumb_hash)
+        return orm_insert_strs(d, tree_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "owner_id")
+    vec_push(cols, "path")
+    vec_push(cols, "parent_path")
+    vec_push(cols, "name")
+    vec_push(cols, "is_dir")
+    vec_push(cols, "size")
+    vec_push(cols, "hash")
+    vec_push(cols, "thumb_hash")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, path)
+    vec_push(vals, parent_path)
+    vec_push(vals, name)
+    vec_push(vals, int_to_str(is_dir))
+    vec_push(vals, int_to_str(size))
+    vec_push(vals, hash)
+    vec_push(vals, thumb_hash)
+    return orm_insert_strs(db, tree_table(), cols, vals)?
+}
+
+// Overwrite file content columns (updated_at stays DB-default on PG;
+// boila has no triggers — accepted v1, versions land in Phase 5).
+fn tree_update_file(db: OrmDb, id: i64, size: i64, hash: str, thumb_hash: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "size")
+    vec_push(cols, "hash")
+    vec_push(cols, "thumb_hash")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(size))
+    vec_push(vals, hash)
+    vec_push(vals, thumb_hash)
+    return orm_update_by_id(db, tree_table(), id, cols, vals)?
+}
+
+fn tree_update_path(db: OrmDb, id: i64, path: str, parent_path: str, name: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "path")
+    vec_push(cols, "parent_path")
+    vec_push(cols, "name")
+    let vals = vec_new()
+    vec_push(vals, path)
+    vec_push(vals, parent_path)
+    vec_push(vals, name)
+    return orm_update_by_id(db, tree_table(), id, cols, vals)?
+}
+
+fn tree_delete_subtree(db: OrmDb, owner: i64, path: str) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM tree_nodes WHERE owner_id = $1 AND (path = $2 OR path LIKE $3)"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, path)
+    vec_push(vals, concat(path, "/%"))
+    return orm_exec_params_str(db, sql, vals)?
+}
+
+// Bytes used by an owner's files (dirs count 0).
+fn tree_usage(db: OrmDb, owner: i64) -> OrmCount !IO !Net {
+    let sql = "SELECT COALESCE(SUM(size), 0) AS count FROM tree_nodes WHERE owner_id = "
+    let sql2 = concat(sql, int_to_str(owner))
+    return orm_count_sql(db, concat(sql2, " AND is_dir = 0"))?
+}
+
+// Nodes still referencing a blob hash (hash is server-generated hex — safe to interpolate).
+fn tree_hash_refs(db: OrmDb, hash: str) -> OrmCount !IO !Net {
+    let mut sql = "SELECT COUNT(*) AS count FROM tree_nodes WHERE hash = '"
+    sql = concat(sql, hash)
+    sql = concat(sql, "' OR thumb_hash = '")
+    sql = concat(sql, hash)
+    return orm_count_sql(db, concat(sql, "'"))?
+}
+
+fn tree_node_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_str(o, "path", orm_cell_by(q, row, "path"))
+    o = jobj_i64(o, "is_dir", orm_cell_by_i64(q, row, "is_dir"))
+    o = jobj_i64(o, "size", orm_cell_by_i64(q, row, "size"))
+    if orm_cell_by(q, row, "thumb_hash") != "" {
+        o = jobj_i64(o, "has_thumb", 1)
+    } else {
+        o = jobj_i64(o, "has_thumb", 0)
+    }
+    let ua = orm_cell_by(q, row, "updated_at")
+    if ua != "" {
+        o = jobj_str(o, "updated_at", ua)
+    }
+    return o
+}

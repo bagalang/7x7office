@@ -1,0 +1,524 @@
+// tree/actions.baga — file API: list / stat / mkdir / put / get / thumb / delete / move / usage.
+// Paths come as ?path= query params because the fmrbaga router matches
+// per-segment params only (no wildcards yet — gaps G5). Real path URLs
+// arrive with the WebDAV gateway (davbaga, Phase 4).
+
+import "model.baga"
+import "../data/blobs.baga"
+import "../idm/user_model.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "imgbaga/img.baga"
+import "imgbaga/ops.baga"
+import "pathbaga/path.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+// ---------- config ----------
+
+fn tree_max_file_bytes() -> i64 !IO {
+    let raw = env("SECP_MAX_FILE_MB")?
+    if raw == "" {
+        return 104857600  // 100 MiB
+    }
+    let n = parse_int(raw)
+    if n < 1 {
+        return 104857600
+    }
+    return n * 1048576
+}
+
+fn tree_quota_bytes() -> i64 !IO {
+    let raw = env("SECP_QUOTA_MB")?
+    if raw == "" {
+        return 1073741824  // 1 GiB
+    }
+    let n = parse_int(raw)
+    if n < 1 {
+        return 1073741824
+    }
+    return n * 1048576
+}
+
+// ---------- auth: bearer → owner id ----------
+
+struct TreeAuth {
+    ok: i64,
+    owner: i64,
+    out: FmrOut
+}
+
+fn tree_auth(ctx: FmrCtx, db: OrmDb) -> TreeAuth !IO !Net {
+    let a = act_require_auth(ctx, db)
+    if a.ok == 0 {
+        return TreeAuth { ok: 0, owner: 0, out: a.out }
+    }
+    let q = idm_user_find_by_email(db, a.ctx.user_sub)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        let mut d = db
+        if orm_ok_q(q) == 1 {
+            d = orm_db_q(q)
+        }
+        return TreeAuth { ok: 0, owner: 0, out: act_err(d, 401, "unknown user") }
+    }
+    return TreeAuth { ok: 1, owner: orm_cell_by_i64(q, 0, "id"), out: fmr_out(http_response(200, ""), orm_db_q(q)) }
+}
+
+// ---------- mime ----------
+
+fn tree_mime(path: str) -> str {
+    let ext = path_ext(path)
+    if ext == "png" { return "image/png" }
+    if ext == "jpg" { return "image/jpeg" }
+    if ext == "jpeg" { return "image/jpeg" }
+    if ext == "gif" { return "image/gif" }
+    if ext == "webp" { return "image/webp" }
+    if ext == "bmp" { return "image/bmp" }
+    if ext == "ico" { return "image/x-icon" }
+    if ext == "svg" { return "image/svg+xml" }
+    if ext == "pdf" { return "application/pdf" }
+    if ext == "txt" { return "text/plain; charset=utf-8" }
+    if ext == "md" { return "text/markdown; charset=utf-8" }
+    if ext == "csv" { return "text/csv; charset=utf-8" }
+    if ext == "json" { return "application/json" }
+    if ext == "html" { return "text/html; charset=utf-8" }
+    if ext == "zip" { return "application/zip" }
+    if ext == "docx" { return "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
+    if ext == "xlsx" { return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+    if ext == "odt" { return "application/vnd.oasis.opendocument.text" }
+    if ext == "ods" { return "application/vnd.oasis.opendocument.spreadsheet" }
+    return "application/octet-stream"
+}
+
+fn tree_mime_inline(mime: str) -> i64 {
+    if str_starts_with(mime, "image/") { return 1 }
+    if str_starts_with(mime, "text/") { return 1 }
+    if mime == "application/pdf" { return 1 }
+    return 0
+}
+
+// ---------- thumbnails ----------
+
+// 256px-max PNG thumbnail into the blob store; "" when not an image.
+fn tree_make_thumb(content: bytes) -> str !IO {
+    if bytes_len(content) > 20971520 {
+        return ""
+    }
+    let info = img_info(content)
+    if info.ok == 0 {
+        return ""
+    }
+    if info.w < 1 || info.h < 1 {
+        return ""
+    }
+    if info.w <= 256 && info.h <= 256 {
+        return ""  // small enough — clients use the file itself
+    }
+    let im = img_load(content)
+    if im.ok == 0 {
+        return ""
+    }
+    let mut tw: i64 = 256
+    let mut th: i64 = 256
+    if info.w >= info.h {
+        th = info.h * 256 / info.w
+    } else {
+        tw = info.w * 256 / info.h
+    }
+    if tw < 1 { tw = 1 }
+    if th < 1 { th = 1 }
+    let rim = img_resize_bilinear(im, tw, th)
+    if rim.ok == 0 {
+        return ""
+    }
+    let png = img_encode(rim, img_fmt_png())
+    if bytes_len(png) == 0 {
+        return ""
+    }
+    return data_blob_put(png)?
+}
+
+// ---------- mkdir -p ----------
+
+// Create missing dir nodes along `path` (each level). Returns "" on success.
+fn tree_mkdir_p(db: OrmDb, owner: i64, path: str) -> str !IO !Net {
+    if path == "/" {
+        return ""
+    }
+    let parts = str_split(path, "/")
+    let mut cur = ""
+    let mut parent = "/"
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        let seg = vec_get(parts, i)
+        if seg != "" {
+            cur = concat(cur, "/")
+            cur = concat(cur, seg)
+            let q = tree_find(db, owner, cur)?
+            if orm_ok_q(q) == 0 {
+                return orm_err_q(q)
+            }
+            if orm_nrows(q) > 0 {
+                if orm_cell_by_i64(q, 0, "is_dir") == 0 {
+                    return concat("not a directory: ", cur)
+                }
+            } else {
+                let ins = tree_insert(orm_db_q(q), owner, cur, parent, seg, 1, 0, "", "")?
+                if orm_ok(ins) == 0 {
+                    return orm_err_exec(ins)
+                }
+            }
+            parent = cur
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ---------- blob GC for replaced/deleted content ----------
+
+fn tree_blob_gc(db: OrmDb, hash: str) -> i64 !IO !Net {
+    if hash == "" {
+        return 0
+    }
+    let c = tree_hash_refs(db, hash)?
+    if orm_ok_c(c) == 0 {
+        return 0
+    }
+    if orm_count_n(c) == 0 {
+        data_blob_delete(hash)?
+    }
+    return 0
+}
+
+// ---------- handlers ----------
+
+fn act_fs_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let mut d = db
+    let path = tree_norm(fmr_query(ctx, "path"))
+    if path != "/" {
+        let nq = tree_find(d, t.owner, path)?
+        if orm_ok_q(nq) == 0 {
+            return act_err(orm_db_q(nq), 500, orm_err_q(nq))
+        }
+        if orm_nrows(nq) < 1 {
+            return act_404(orm_db_q(nq), "path not found")
+        }
+        if orm_cell_by_i64(nq, 0, "is_dir") == 0 {
+            return act_err(orm_db_q(nq), 400, "not a directory")
+        }
+        d = orm_db_q(nq)
+    }
+    let q = tree_children(d, t.owner, path)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, tree_node_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "path", path)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_fs_stat(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let path = tree_norm(fmr_query(ctx, "path"))
+    let q = tree_find(db, t.owner, path)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "path not found")
+    }
+    return act_ok(orm_db_q(q), tree_node_json(q, 0))
+}
+
+fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let path = tree_norm(fmr_query(ctx, "path"))
+    if path == "/" {
+        return act_err(db, 400, "root exists")
+    }
+    let err = tree_mkdir_p(db, t.owner, path)?
+    if err != "" {
+        return act_err(db, 409, err)
+    }
+    let q = tree_find(db, t.owner, path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(db, 500, "mkdir ok but node missing")
+    }
+    return act_created(orm_db_q(q), tree_node_json(q, 0))
+}
+
+fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let path = tree_norm(fmr_query(ctx, "path"))
+    if path == "/" {
+        return act_err(db, 400, "cannot overwrite root")
+    }
+    let body = http_body_bytes(ctx.req)
+    let size = bytes_len(body)
+    if size < 1 {
+        return act_err(db, 400, "empty body")
+    }
+    let maxf = tree_max_file_bytes()?
+    if size > maxf {
+        return act_err(db, 413, "file too large")
+    }
+    let mut d = db
+    // quota: usage + new - replaced <= quota
+    let existing = tree_find(d, t.owner, path)?
+    if orm_ok_q(existing) == 0 {
+        return act_err(orm_db_q(existing), 500, orm_err_q(existing))
+    }
+    let mut old_size: i64 = 0
+    let mut old_hash = ""
+    let mut old_thumb = ""
+    let mut existing_id: i64 = 0
+    if orm_nrows(existing) > 0 {
+        if orm_cell_by_i64(existing, 0, "is_dir") == 1 {
+            return act_err(orm_db_q(existing), 409, "is a directory")
+        }
+        old_size = orm_cell_by_i64(existing, 0, "size")
+        old_hash = orm_cell_by(existing, 0, "hash")
+        old_thumb = orm_cell_by(existing, 0, "thumb_hash")
+        existing_id = orm_cell_by_i64(existing, 0, "id")
+    }
+    d = orm_db_q(existing)
+    let usage = tree_usage(d, t.owner)?
+    if orm_ok_c(usage) == 0 {
+        return act_err(orm_db_c(usage), 500, orm_err_c(usage))
+    }
+    let quota = tree_quota_bytes()?
+    if orm_count_n(usage) + size - old_size > quota {
+        return act_err(orm_db_c(usage), 413, "quota exceeded")
+    }
+    d = orm_db_c(usage)
+    // parents (mkdir -p), blob, thumbnail
+    let perr = tree_mkdir_p(d, t.owner, tree_parent_of(path))?
+    if perr != "" {
+        return act_err(d, 409, perr)
+    }
+    let hash = data_blob_put(body)?
+    let thumb = tree_make_thumb(body)?
+    if existing_id > 0 {
+        let upd = tree_update_file(d, existing_id, size, hash, thumb)?
+        if orm_ok(upd) == 0 {
+            return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+        }
+        d = orm_db_exec(upd)
+        tree_blob_gc(d, old_hash)?
+        tree_blob_gc(d, old_thumb)?
+    } else {
+        let ins = tree_insert(d, t.owner, path, tree_parent_of(path), tree_name_of(path), 0, size, hash, thumb)?
+        if orm_ok(ins) == 0 {
+            return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+        }
+        d = orm_db_exec(ins)
+    }
+    let q = tree_find(d, t.owner, path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(db, 500, "write ok but node missing")
+    }
+    let mut o = tree_node_json(q, 0)
+    o = jobj_str(o, "etag", hash)
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let path = tree_norm(fmr_query(ctx, "path"))
+    let q = tree_find(db, t.owner, path)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return act_404(orm_db_q(q), "path not found")
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        return act_err(orm_db_q(q), 400, "is a directory")
+    }
+    let hash = orm_cell_by(q, 0, "hash")
+    let name = orm_cell_by(q, 0, "name")
+    let body = data_blob_get(hash)?
+    if bytes_len(body) == 0 && orm_cell_by_i64(q, 0, "size") > 0 {
+        return act_err(orm_db_q(q), 500, "blob missing")
+    }
+    let mime = tree_mime(path)
+    let mut r = http_response_bytes(200, body)
+    r = http_set_header(r, "Content-Type", mime)
+    r = http_set_header(r, "ETag", hash)
+    let mut disp = "attachment"
+    if tree_mime_inline(mime) == 1 {
+        disp = "inline"
+    }
+    r = http_set_header(r, "Content-Disposition", concat(concat(disp, "; filename=\""), concat(name, "\"")))
+    return fmr_out(r, orm_db_q(q))
+}
+
+fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let path = tree_norm(fmr_query(ctx, "path"))
+    let q = tree_find(db, t.owner, path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(db, "path not found")
+    }
+    let thumb = orm_cell_by(q, 0, "thumb_hash")
+    if thumb == "" {
+        return act_404(orm_db_q(q), "no thumbnail")
+    }
+    let body = data_blob_get(thumb)?
+    if bytes_len(body) == 0 {
+        return act_err(orm_db_q(q), 500, "thumb blob missing")
+    }
+    let mut r = http_response_bytes(200, body)
+    r = http_set_header(r, "Content-Type", "image/png")
+    r = http_set_header(r, "Cache-Control", "private, max-age=3600")
+    return fmr_out(r, orm_db_q(q))
+}
+
+fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let path = tree_norm(fmr_query(ctx, "path"))
+    if path == "/" {
+        return act_err(db, 400, "cannot delete root")
+    }
+    // collect blob hashes before deleting rows
+    let sub = tree_subtree(db, t.owner, path)?
+    if orm_ok_q(sub) == 0 {
+        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
+    }
+    if orm_nrows(sub) < 1 {
+        return act_404(orm_db_q(sub), "path not found")
+    }
+    let hashes = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(sub) {
+        let h = orm_cell_by(sub, i, "hash")
+        if h != "" {
+            vec_push(hashes, h)
+        }
+        let th = orm_cell_by(sub, i, "thumb_hash")
+        if th != "" {
+            vec_push(hashes, th)
+        }
+        i = i + 1
+    }
+    let mut d = orm_db_q(sub)
+    let del = tree_delete_subtree(d, t.owner, path)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    d = orm_db_exec(del)
+    i = 0
+    while i < vec_len(hashes) {
+        tree_blob_gc(d, vec_get(hashes, i))?
+        i = i + 1
+    }
+    return act_no_content(d)
+}
+
+fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let from = tree_norm(fmr_query(ctx, "from"))
+    let to = tree_norm(fmr_query(ctx, "to"))
+    if from == "/" || to == "/" {
+        return act_err(db, 400, "cannot move root")
+    }
+    if from == to {
+        return act_err(db, 400, "same path")
+    }
+    // no moving a dir into itself
+    if str_starts_with(to, concat(from, "/")) {
+        return act_err(db, 409, "cannot move into own subtree")
+    }
+    let dst = tree_find(db, t.owner, to)?
+    if orm_ok_q(dst) == 0 {
+        return act_err(orm_db_q(dst), 500, orm_err_q(dst))
+    }
+    if orm_nrows(dst) > 0 {
+        return act_err(orm_db_q(dst), 409, "destination exists")
+    }
+    let mut d = orm_db_q(dst)
+    let sub = tree_subtree(d, t.owner, from)?
+    if orm_ok_q(sub) == 0 {
+        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
+    }
+    if orm_nrows(sub) < 1 {
+        return act_404(orm_db_q(sub), "path not found")
+    }
+    d = orm_db_q(sub)
+    // target parent must exist (mkdir -p it, like put)
+    let perr = tree_mkdir_p(d, t.owner, tree_parent_of(to))?
+    if perr != "" {
+        return act_err(d, 409, perr)
+    }
+    // rewrite paths row by row (small trees; bulk SQL rewrite lands with versions)
+    let mut i: i64 = 0
+    while i < orm_nrows(sub) {
+        let old_path = orm_cell_by(sub, i, "path")
+        let new_path = concat(to, tree_tail(old_path, len(from)))
+        let id = orm_cell_by_i64(sub, i, "id")
+        let upd = tree_update_path(d, id, new_path, tree_parent_of(new_path), tree_name_of(new_path))?
+        if orm_ok(upd) == 0 {
+            return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+        }
+        d = orm_db_exec(upd)
+        i = i + 1
+    }
+    let q = tree_find(d, t.owner, to)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(db, 500, "move ok but node missing")
+    }
+    return act_ok(orm_db_q(q), tree_node_json(q, 0))
+}
+
+fn act_fs_usage(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let usage = tree_usage(db, t.owner)?
+    if orm_ok_c(usage) == 0 {
+        return act_err(orm_db_c(usage), 500, orm_err_c(usage))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "used_bytes", orm_count_n(usage))
+    o = jobj_i64(o, "quota_bytes", tree_quota_bytes()?)
+    return act_ok(orm_db_c(usage), o)
+}

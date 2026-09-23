@@ -1,0 +1,83 @@
+// system/actions.baga — health / ready / meta / openapi / metrics.
+// Module system owns process introspection; no domain state.
+
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "fmrbaga/openapi.baga"
+import "fmrbaga/respond.baga"
+import "metbaga/met.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+
+fn act_health(ctx: FmrCtx, db: OrmDb) -> FmrOut {
+    let mut o = jobj_new()
+    o = jobj_str(o, "status", "ok")
+    o = jobj_str(o, "app", "secp")
+    return act_ok(db, o)
+}
+
+fn act_ready(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    if fmr_shutting_down() == 1 {
+        return act_err(db, 503, "shutting down")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let q = orm_query(db, "SELECT 1 AS ok")?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 503, "database ping failed")
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "status", "ready")
+    o = jobj_str(o, "database", "up")
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_meta(ctx: FmrCtx, db: OrmDb) -> FmrOut {
+    let mut o = jobj_new()
+    o = jobj_str(o, "title", ctx.title)
+    o = jobj_str(o, "version", ctx.version)
+    o = jobj_str(o, "product", "secp")
+    o = jobj_str(o, "suite", "7x7office")
+    o = jobj_str(o, "framework", "fmrbaga")
+    o = jobj_str(o, "openapi", "/openapi.json")
+    o = jobj_str(o, "metrics", "/metrics")
+    return act_ok(db, o)
+}
+
+fn act_openapi(ctx: FmrCtx, db: OrmDb) -> FmrOut {
+    return act_ok(db, fmr_openapi_from_router(ctx.router, ctx.title, ctx.version))
+}
+
+// Prometheus text (metbaga). Runtime gauges from fmr_rt_* (worker pool / inflight).
+fn act_metrics(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO {
+    let m = met_new()
+    let h_up = met_gauge(m, "process_up", "1 if process accepting work")
+    let h_ready = met_gauge(m, "secp_ready", "1 if /ready would succeed (not shutting down)")
+    let h_info = met_gauge(m, "secp_info", "Constant 1; identify secp process")
+    let h_inf = met_gauge(m, "fmr_inflight_connections", "HTTP connections currently in handlers")
+    let h_acc = met_gauge(m, "fmr_accepted_connections", "Total accepted TCP connections")
+    let h_done = met_gauge(m, "fmr_completed_connections", "Total completed TCP connections")
+    let h_w = met_gauge(m, "fmr_workers", "Configured worker pool size (0 = go_bg or sync)")
+    let h_mode = met_gauge(m, "fmr_serve_mode", "0=go_bg 1=sync 2=worker_pool")
+    if fmr_shutting_down() == 1 {
+        met_set(m, h_up, 0)
+        met_set(m, h_ready, 0)
+    } else {
+        met_set(m, h_up, 1)
+        met_set(m, h_ready, 1)
+    }
+    met_set(m, h_info, 1)
+    met_set(m, h_inf, fmr_rt_inflight()?)
+    met_set(m, h_acc, fmr_rt_accepted()?)
+    met_set(m, h_done, fmr_rt_completed()?)
+    met_set(m, h_w, fmr_rt_workers()?)
+    met_set(m, h_mode, fmr_rt_mode()?)
+    let body = met_render(m)
+    let mut r = http_response(200, body)
+    r = http_set_header(r, "Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+    r = http_set_header(r, "X-Powered-By", "secp/fmrbaga")
+    return fmr_out(r, db)
+}

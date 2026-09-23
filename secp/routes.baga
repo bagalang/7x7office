@@ -1,0 +1,97 @@
+// routes.baga — secp route table + fmr_dispatch.
+// Embeds fmr_build_app / fmr_before / fmr_dispatch for the app binary.
+
+import "system/actions.baga"
+import "idm/auth_actions.baga"
+import "tree/actions.baga"
+import "ui/actions.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/deps.baga"
+import "fmrbaga/config.baga"
+import "ormbaga/orm.baga"
+
+// Route ids (stable; never reorder casually — OpenAPI operationIds use them)
+fn RID_HEALTH() -> i64 { return 1 }
+fn RID_READY() -> i64 { return 2 }
+fn RID_META() -> i64 { return 3 }
+fn RID_OPENAPI() -> i64 { return 4 }
+fn RID_METRICS() -> i64 { return 5 }
+fn RID_UI_HOME() -> i64 { return 6 }
+fn RID_UI_LOGIN() -> i64 { return 7 }
+fn RID_LOGIN() -> i64 { return 10 }
+fn RID_LOGOUT() -> i64 { return 11 }
+fn RID_ME() -> i64 { return 12 }
+fn RID_FS_LIST() -> i64 { return 20 }
+fn RID_FS_STAT() -> i64 { return 21 }
+fn RID_FS_MKDIR() -> i64 { return 22 }
+fn RID_FS_PUT() -> i64 { return 23 }
+fn RID_FS_GET() -> i64 { return 24 }
+fn RID_FS_DELETE() -> i64 { return 25 }
+fn RID_FS_MOVE() -> i64 { return 26 }
+fn RID_FS_THUMB() -> i64 { return 27 }
+fn RID_FS_USAGE() -> i64 { return 28 }
+
+fn fmr_build_app() -> FmrApp !IO {
+    let cfg = fmr_config_load()?
+    let mut app = fmr_app_new(cfg.title, cfg.version)
+    app = fmr_app_with_config(app, cfg)
+    app = fmr_route_meta(app, "GET", "/health", RID_HEALTH(), "", "system", 1, "", "Status", "200", "")
+    app = fmr_route_meta(app, "GET", "/ready", RID_READY(), "", "system", 1, "", "Ready", "200", "")
+    app = fmr_route_meta(app, "GET", "/readyz", RID_READY(), "", "system", 1, "", "Ready", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/meta", RID_META(), "", "system", 1, "", "Meta", "200", "")
+    app = fmr_route_meta(app, "GET", "/openapi.json", RID_OPENAPI(), "", "system", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "GET", "/metrics", RID_METRICS(), "", "system", 0, "", "-", "200", "")
+    app = fmr_route_meta(app, "GET", "/", RID_UI_HOME(), "", "ui", 1, "", "HomePage", "200", "")
+    app = fmr_route_meta(app, "GET", "/login", RID_UI_LOGIN(), "", "ui", 1, "", "LoginPage", "200", "error")
+    app = fmr_route_meta(app, "POST", "/v1/auth/login", RID_LOGIN(), "", "auth", 1, "LoginRequest", "TokenResponse", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/logout", RID_LOGOUT(), "", "auth", 1, "", "-", "303", "")
+    app = fmr_route_meta(app, "GET", "/v1/me", RID_ME(), "", "auth", 0, "", "Me", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/fs/list", RID_FS_LIST(), "", "fs", 0, "", "NodeList", "200", "path")
+    app = fmr_route_meta(app, "GET", "/v1/fs/stat", RID_FS_STAT(), "", "fs", 0, "", "Node", "200", "path")
+    app = fmr_route_meta(app, "POST", "/v1/fs/mkdir", RID_FS_MKDIR(), "", "fs", 0, "", "Node", "201", "path")
+    app = fmr_route_meta(app, "PUT", "/v1/fs/file", RID_FS_PUT(), "", "fs", 0, "bytes", "Node", "200", "path")
+    app = fmr_route_meta(app, "GET", "/v1/fs/file", RID_FS_GET(), "", "fs", 0, "", "bytes", "200", "path")
+    app = fmr_route_meta(app, "DELETE", "/v1/fs/file", RID_FS_DELETE(), "", "fs", 0, "", "-", "204", "path")
+    app = fmr_route_meta(app, "POST", "/v1/fs/move", RID_FS_MOVE(), "", "fs", 0, "", "Node", "200", "from,to")
+    app = fmr_route_meta(app, "GET", "/v1/fs/thumb", RID_FS_THUMB(), "", "fs", 0, "", "bytes", "200", "path")
+    app = fmr_route_meta(app, "GET", "/v1/fs/usage", RID_FS_USAGE(), "", "fs", 0, "", "Usage", "200", "")
+    return app
+}
+
+fn fmr_before(ctx: FmrCtx) -> DepResult {
+    return dep_ok(ctx)
+}
+
+// secp has no gRPC surface yet — dual hook returns empty unimplemented.
+fn fmr_grpc_handle(path: str, body: bytes, db: OrmDb) -> FmrOut !IO !Net {
+    let mut r = http_response_bytes(200, bytes_new(0))
+    r = http_set_header(r, "Content-Type", "application/grpc")
+    r = http_set_header(r, "grpc-status", "12")
+    r = http_set_header(r, "grpc-message", "UNIMPLEMENTED")
+    return fmr_out(r, db)
+}
+
+fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let id = ctx.route_id
+    if id == RID_HEALTH() { return act_health(ctx, db) }
+    if id == RID_READY() { return act_ready(ctx, db)? }
+    if id == RID_META() { return act_meta(ctx, db) }
+    if id == RID_OPENAPI() { return act_openapi(ctx, db) }
+    if id == RID_METRICS() { return act_metrics(ctx, db)? }
+    if id == RID_UI_HOME() { return act_ui_home(ctx, db) }
+    if id == RID_UI_LOGIN() { return act_ui_login(ctx, db) }
+    if id == RID_LOGIN() { return act_login(ctx, db)? }
+    if id == RID_LOGOUT() { return act_logout(ctx, db) }
+    if id == RID_ME() { return act_me(ctx, db) }
+    if id == RID_FS_LIST() { return act_fs_list(ctx, db)? }
+    if id == RID_FS_STAT() { return act_fs_stat(ctx, db)? }
+    if id == RID_FS_MKDIR() { return act_fs_mkdir(ctx, db)? }
+    if id == RID_FS_PUT() { return act_fs_put(ctx, db)? }
+    if id == RID_FS_GET() { return act_fs_get(ctx, db)? }
+    if id == RID_FS_DELETE() { return act_fs_delete(ctx, db)? }
+    if id == RID_FS_MOVE() { return act_fs_move(ctx, db)? }
+    if id == RID_FS_THUMB() { return act_fs_thumb(ctx, db)? }
+    if id == RID_FS_USAGE() { return act_fs_usage(ctx, db)? }
+    return fmr_out(fmr_500("unhandled route"), db)
+}

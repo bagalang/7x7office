@@ -1,0 +1,15 @@
+# Референтният Cells v5 checkout (само за четене, не се качва)
+secp/cells-5-dev/
+
+# Билд изход и локално състояние
+.sandak/
+target/
+sandak.lock
+*.o
+
+# Runtime данни (blobs, локална БД)
+secp/data/
+
+# Секрети
+.env
+**/.env

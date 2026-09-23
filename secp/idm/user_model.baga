@@ -1,0 +1,132 @@
+// idm/user_model.baga — idm_users helpers over ormbaga.
+// Table DDL lives in this app's schema.baga (secp_migrations / secp_boila_migrations).
+// Module idm owns this table — nothing outside idm/ queries it.
+
+import "lib/pass.baga"
+import "ormbaga/orm.baga"
+import "ormbaga/sql.baga"
+import "fmrbaga/jsonx.baga"
+import "pgbaga/pg.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn idm_user_table() -> str {
+    return "idm_users"
+}
+
+fn idm_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+// Next PK for backends without SERIAL (boila). NULL max → 0.
+fn idm_user_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM idm_users")?
+}
+
+// Public JSON — never exposes pass_hash / pass_salt.
+fn idm_user_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "email", orm_cell_by(q, row, "email"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_i64(o, "is_admin", orm_cell_by_i64(q, row, "is_admin"))
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+fn idm_user_find_by_email(db: OrmDb, email: str) -> OrmQuery !IO !Net {
+    return orm_where_eq_str(db, idm_user_table(), "email", email)?
+}
+
+fn idm_user_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, email, name, pass_hash, pass_salt, pass_iters, is_admin, created_at FROM idm_users WHERE id = $1"
+    let vals = vec_new()
+    let nulls = vec_new()
+    pg_param_i64(vals, nulls, id)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn idm_user_create(db: OrmDb, email: str, name: str, pass_hash: str, pass_salt: str, pass_iters: i64, is_admin: i64) -> OrmExec !IO !Net {
+    if idm_backend_boila()? == 1 {
+        let c = idm_user_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let mut d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "email")
+        vec_push(cols, "name")
+        vec_push(cols, "pass_hash")
+        vec_push(cols, "pass_salt")
+        vec_push(cols, "pass_iters")
+        vec_push(cols, "is_admin")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, email)
+        vec_push(vals, name)
+        vec_push(vals, pass_hash)
+        vec_push(vals, pass_salt)
+        vec_push(vals, int_to_str(pass_iters))
+        vec_push(vals, int_to_str(is_admin))
+        return orm_insert_strs(d, idm_user_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "email")
+    vec_push(cols, "name")
+    vec_push(cols, "pass_hash")
+    vec_push(cols, "pass_salt")
+    vec_push(cols, "pass_iters")
+    vec_push(cols, "is_admin")
+    let vals = vec_new()
+    vec_push(vals, email)
+    vec_push(vals, name)
+    vec_push(vals, pass_hash)
+    vec_push(vals, pass_salt)
+    vec_push(vals, int_to_str(pass_iters))
+    vec_push(vals, int_to_str(is_admin))
+    return orm_insert_strs(db, idm_user_table(), cols, vals)?
+}
+
+// Authenticate by email + password. On ok=1, row fields are usable.
+struct IdmAuth {
+    ok: i64,
+    id: i64,
+    email: str,
+    name: str,
+    is_admin: i64
+}
+
+fn idm_auth_bad() -> IdmAuth {
+    return IdmAuth { ok: 0, id: 0, email: "", name: "", is_admin: 0 }
+}
+
+// Constant-time-ish: unknown email still runs one PBKDF2 (dummy salt).
+fn idm_user_authenticate(db: OrmDb, email: str, password: str) -> IdmAuth !IO !Net {
+    let q = idm_user_find_by_email(db, email)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        pass_verify(password, "00000000000000000000000000000000", 1000, "00")
+        return idm_auth_bad()
+    }
+    let salt = orm_cell_by(q, 0, "pass_salt")
+    let iters = orm_cell_by_i64(q, 0, "pass_iters")
+    let hash = orm_cell_by(q, 0, "pass_hash")
+    if pass_verify(password, salt, iters, hash) == 0 {
+        return idm_auth_bad()
+    }
+    return IdmAuth {
+        ok: 1,
+        id: orm_cell_by_i64(q, 0, "id"),
+        email: orm_cell_by(q, 0, "email"),
+        name: orm_cell_by(q, 0, "name"),
+        is_admin: orm_cell_by_i64(q, 0, "is_admin")
+    }
+}

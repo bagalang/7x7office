@@ -1,0 +1,104 @@
+// schema.baga — secp migrations (owned by the app, not the framework).
+// Table names carry the module prefix (idm_*) — one owner per table, so the
+// modular monolith can split into services later (README „Монолит → микросервизи").
+// Postgres set uses SERIAL; boila set is BoilaSQL-safe (explicit PK, no SERIAL).
+
+import "ormbaga/migrate.baga"
+import "std/os/os.baga"
+
+fn secp_migrations() -> MigrationSet {
+    let mut set = migrate_set_new()
+    set = migrate_add(
+        set,
+        20260924001,
+        "create_idm_users",
+        "CREATE TABLE idm_users (id BIGSERIAL PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '', pass_hash TEXT NOT NULL, pass_salt TEXT NOT NULL, pass_iters BIGINT NOT NULL DEFAULT 10000, is_admin BIGINT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS idm_users"
+    )
+    set = migrate_add(
+        set,
+        20260924002,
+        "create_idm_sessions",
+        "CREATE TABLE idm_sessions (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES idm_users(id) ON DELETE CASCADE, token_hash TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ)",
+        "DROP TABLE IF EXISTS idm_sessions"
+    )
+    set = migrate_add(
+        set,
+        20260924003,
+        "index_idm_sessions_user_id",
+        "CREATE INDEX index_idm_sessions_on_user_id ON idm_sessions (user_id)",
+        "DROP INDEX IF EXISTS index_idm_sessions_on_user_id"
+    )
+    set = migrate_add(
+        set,
+        20260924004,
+        "create_tree_nodes",
+        "CREATE TABLE tree_nodes (id BIGSERIAL PRIMARY KEY, owner_id BIGINT NOT NULL REFERENCES idm_users(id) ON DELETE CASCADE, path TEXT NOT NULL, parent_path TEXT NOT NULL DEFAULT '/', name TEXT NOT NULL, is_dir BIGINT NOT NULL DEFAULT 0, size BIGINT NOT NULL DEFAULT 0, hash TEXT NOT NULL DEFAULT '', thumb_hash TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (owner_id, path))",
+        "DROP TABLE IF EXISTS tree_nodes"
+    )
+    set = migrate_add(
+        set,
+        20260924005,
+        "index_tree_nodes_owner_parent",
+        "CREATE INDEX index_tree_nodes_on_owner_parent ON tree_nodes (owner_id, parent_path)",
+        "DROP INDEX IF EXISTS index_tree_nodes_on_owner_parent"
+    )
+    return set
+}
+
+// BoilaSQL: PRIMARY KEY required; no SERIAL/DEFAULT/NOT NULL/REFERENCES.
+fn secp_boila_migrations() -> MigrationSet {
+    let mut set = migrate_set_new()
+    set = migrate_add(
+        set,
+        20260924001,
+        "create_idm_users",
+        "CREATE TABLE IF NOT EXISTS idm_users (id BIGINT, email TEXT, name TEXT, pass_hash TEXT, pass_salt TEXT, pass_iters BIGINT, is_admin BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_users"
+    )
+    set = migrate_add(
+        set,
+        20260924002,
+        "create_idm_sessions",
+        "CREATE TABLE IF NOT EXISTS idm_sessions (id BIGINT, user_id BIGINT, token_hash TEXT, created_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_sessions"
+    )
+    set = migrate_add(
+        set,
+        20260924003,
+        "index_idm_sessions_user_id",
+        "CREATE INDEX index_idm_sessions_on_user_id ON idm_sessions (user_id)",
+        "DROP INDEX IF EXISTS index_idm_sessions_on_user_id ON idm_sessions"
+    )
+    set = migrate_add(
+        set,
+        20260924004,
+        "create_tree_nodes",
+        "CREATE TABLE IF NOT EXISTS tree_nodes (id BIGINT, owner_id BIGINT, path TEXT, parent_path TEXT, name TEXT, is_dir BIGINT, size BIGINT, hash TEXT, thumb_hash TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS tree_nodes"
+    )
+    set = migrate_add(
+        set,
+        20260924005,
+        "index_tree_nodes_owner_parent",
+        "CREATE INDEX index_tree_nodes_on_owner_parent ON tree_nodes (owner_id, parent_path)",
+        "DROP INDEX IF EXISTS index_tree_nodes_on_owner_parent ON tree_nodes"
+    )
+    return set
+}
+
+fn secp_backend_is_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+// Pick migration set for the configured backend.
+fn secp_migrations_auto() -> MigrationSet !IO {
+    if secp_backend_is_boila()? == 1 {
+        return secp_boila_migrations()
+    }
+    return secp_migrations()
+}
