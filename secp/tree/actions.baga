@@ -15,6 +15,7 @@ import "httpdbaga/http.baga"
 import "imgbaga/img.baga"
 import "imgbaga/ops.baga"
 import "pathbaga/path.baga"
+import "querybaga/query.baga"
 import "std/str/str.baga"
 import "std/os/os.baga"
 
@@ -50,6 +51,12 @@ struct TreeAuth {
     ok: i64,
     owner: i64,
     out: FmrOut
+}
+
+// Query values arrive percent-encoded (Next encodes the path). httpdbaga
+// returns them raw; decode here before tree_norm.
+fn tree_qpath(ctx: FmrCtx, name: str) -> str {
+    return tree_norm(query_decode_val(fmr_query(ctx, name)))
 }
 
 fn tree_auth(ctx: FmrCtx, db: OrmDb) -> TreeAuth !IO !Net {
@@ -203,7 +210,7 @@ fn act_fs_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return t.out
     }
     let mut d = db
-    let path = tree_norm(fmr_query(ctx, "path"))
+    let path = tree_qpath(ctx, "path")
     if path != "/" {
         let nq = tree_find(d, t.owner, path)?
         if orm_ok_q(nq) == 0 {
@@ -239,7 +246,7 @@ fn act_fs_stat(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if t.ok == 0 {
         return t.out
     }
-    let path = tree_norm(fmr_query(ctx, "path"))
+    let path = tree_qpath(ctx, "path")
     let q = tree_find(db, t.owner, path)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
@@ -255,7 +262,7 @@ fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if t.ok == 0 {
         return t.out
     }
-    let path = tree_norm(fmr_query(ctx, "path"))
+    let path = tree_qpath(ctx, "path")
     if path == "/" {
         return act_err(db, 400, "root exists")
     }
@@ -275,7 +282,7 @@ fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if t.ok == 0 {
         return t.out
     }
-    let path = tree_norm(fmr_query(ctx, "path"))
+    let path = tree_qpath(ctx, "path")
     if path == "/" {
         return act_err(db, 400, "cannot overwrite root")
     }
@@ -323,6 +330,9 @@ fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(d, 409, perr)
     }
     let hash = data_blob_put(body)?
+    if hash == "" {
+        return act_err(d, 500, "blob write failed")
+    }
     let thumb = tree_make_thumb(body)?
     if existing_id > 0 {
         let upd = tree_update_file(d, existing_id, size, hash, thumb)?
@@ -353,7 +363,7 @@ fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if t.ok == 0 {
         return t.out
     }
-    let path = tree_norm(fmr_query(ctx, "path"))
+    let path = tree_qpath(ctx, "path")
     let q = tree_find(db, t.owner, path)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
@@ -387,7 +397,7 @@ fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if t.ok == 0 {
         return t.out
     }
-    let path = tree_norm(fmr_query(ctx, "path"))
+    let path = tree_qpath(ctx, "path")
     let q = tree_find(db, t.owner, path)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_404(db, "path not found")
@@ -411,7 +421,7 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if t.ok == 0 {
         return t.out
     }
-    let path = tree_norm(fmr_query(ctx, "path"))
+    let path = tree_qpath(ctx, "path")
     if path == "/" {
         return act_err(db, 400, "cannot delete root")
     }
@@ -455,8 +465,8 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if t.ok == 0 {
         return t.out
     }
-    let from = tree_norm(fmr_query(ctx, "from"))
-    let to = tree_norm(fmr_query(ctx, "to"))
+    let from = tree_qpath(ctx, "from")
+    let to = tree_qpath(ctx, "to")
     if from == "/" || to == "/" {
         return act_err(db, 400, "cannot move root")
     }

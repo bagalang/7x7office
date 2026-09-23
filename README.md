@@ -142,10 +142,29 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
 
 ## Фронтенд
 
-Както Cells държи `frontend/` отделно (React), фронтендът **не е на Baga**:
-- **v1:** server-rendered с `tplbaga` + минимален vanilla JS (file manager, upload, preview);
-- **v2:** статична SPA (React/htmx — решава се по-късно), сервирана от fmrbaga;
-редакторите за DOCX/XLSX/ODT комуникират с бекенда чрез officebaga JSON API.
+Фронтендът **не е на Baga**. Продуктовият UI е **Next.js** в `frontend/`
+(същият модел като bagabuch: браузърът говори само с Next, Next проксира
+`/v1/*` към secp). `tplbaga` страниците в `secp/ui/` остават тънък fallback
+за логин без Node.
+
+```bash
+# API. Стартира се от secp/, за да остане ./storage до изходния код.
+cd app-product/7x7office/secp
+export PATH="$(cd ../../.. && pwd):$PATH"
+sandak build
+PORT=8085 JWT_SECRET=dev-secret \
+  PGHOST=127.0.0.1 PGPORT=5432 PGUSER=bagatest PGPASSWORD='pas+123' PGDATABASE=secp \
+  SECP_ADMIN_EMAIL=admin@secp.local SECP_ADMIN_PASSWORD=admin123 \
+  SECP_DATA_ROOT=./storage \
+  ./target/secp
+
+# UI — http://127.0.0.1:3010 , API през SECP_API_PROXY (по подразбиране :8085)
+cd app-product/7x7office/frontend
+npm install
+npm run dev
+```
+
+Вход за локалния seed: `admin@secp.local` / `admin123`.
 
 ## Принципи (по BASE.md)
 

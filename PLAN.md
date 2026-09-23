@@ -33,15 +33,15 @@
 
 ## Фаза 1 — Файлове MVP
 
-**Резултат:** през браузър: качване, сваляне, списък, преименуване, триене; thumbnails за картинки.
+**Резултат:** през браузъра (Next.js в `frontend/`, порт 3010): качване, сваляне, списък, преименуване, триене; thumbnails за картинки. API-то остава в secp.
 
-- [ ] Модул `data`: datasource `local-fs` (blobs на диска, content-addressed по SHA-256 от std/crypto)
-- [ ] Модул `tree`: таблица `nodes` (id, parent, path, type, size, mtime, etag), виртуални пътища чрез pathbaga
-- [ ] REST: `PUT/GET/DELETE /fs/...`, листване с paging; streaming чрез httpdbaga (без цял файл в паметта)
-- [ ] Upload: multipart + resumable (TUS-подобен chunking) — оценява се; v1 = multipart
-- [ ] Проверка: има ли resize в imgbaga → ако не, добавя се bilinear resize в imgbaga
-- [ ] Thumbnails job в queuebaga (PNG 256px), кеш на диска
-- [ ] Квоти по потребител (soft), граница на размер от конфиг
+- [x] Модул `data`: datasource `local-fs` (blobs на диска, content-addressed по SHA-256 от std/crypto). Коренът е `SECP_DATA_ROOT` (`./storage`)
+- [x] Модул `tree`: таблица `tree_nodes`, виртуални пътища чрез pathbaga
+- [x] REST: `PUT/GET/DELETE /v1/fs/file?path=`, list/stat/mkdir/move/thumb/usage. Тялото се чете цяло (още няма streaming); paging на списъка липсва
+- [ ] Upload: multipart + resumable — v1 е суров PUT на тялото
+- [x] imgbaga има `img_resize_bilinear`; thumbnails го ползват
+- [x] Thumbnail при качване (PNG, дългата страна 256px), кеш в blob store. Опашка в queuebaga остава за по-късно
+- [x] Квота (`SECP_QUOTA_MB`, подразбиране 1 GiB) и горна граница (`SECP_MAX_FILE_MB`)
 
 **Зависимости:** ormbaga, pathbaga, uuidbaga, imgbaga, queuebaga, ctxbaga, relbaga
 

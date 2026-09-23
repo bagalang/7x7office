@@ -34,7 +34,7 @@ fn ui_page_home() -> str {
     t = concat(t, "main{padding:2rem 1.5rem;color:#333}.muted{color:#777;font-size:.85rem}</style></head><body>")
     t = concat(t, "<header><b>7x7office · secp</b><span class=\"sp\"></span>")
     t = concat(t, "{% if user %}<span>{{ user }}</span><form method=\"post\" action=\"/v1/auth/logout\" style=\"margin:0\"><button>Изход</button></form>{% else %}<a href=\"/login\">Вход</a>{% endif %}")
-    t = concat(t, "</header><main><h2>Файлове</h2><p class=\"muted\">Фаза 0 — скелет. Файловият мениджър идва във Фаза 1 (tree + data модули).</p></main>")
+    t = concat(t, "</header><main><h2>Файлове</h2><p class=\"muted\">Файловият мениджър е Next.js приложението в frontend/ (порт 3010). Тук остава само входът.</p></main>")
     t = concat(t, "</body></html>")
     return t
 }

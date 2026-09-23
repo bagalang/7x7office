@@ -30,7 +30,13 @@ fn tree_next_id(db: OrmDb) -> OrmCount !IO !Net {
 // Normalize a virtual path: leading "/", no trailing "/" (except root),
 // "." / ".." / duplicate slashes resolved lexically by pathbaga.
 fn tree_norm(p: str) -> str {
+    if p == "" {
+        return "/"
+    }
     let mut c = path_clean(p)
+    if c == "" || c == "." {
+        return "/"
+    }
     if str_starts_with(c, "/") == false {
         c = concat("/", c)
     }

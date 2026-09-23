@@ -7,8 +7,11 @@ target/
 sandak.lock
 *.o
 
-# Runtime данни (blobs, локална БД)
-secp/data/
+# Runtime blob-ове. Източникът secp/data/blobs.baga се следи.
+secp/storage/
+secp/data/blobs/
+frontend/node_modules/
+frontend/.next/
 
 # Секрети
 .env

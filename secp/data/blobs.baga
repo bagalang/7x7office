@@ -1,0 +1,142 @@
+// data/blobs.baga — local-fs datasource: content-addressed blob store.
+// Blobs live at <SECP_DATA_ROOT>/blobs/<h[0:2]>/<h[2:4]>/<sha256-hex>.
+// The DB (tree_nodes) is the source of truth for paths; blobs are shared
+// by content hash (dedup) and removed only when unreferenced.
+// Module data owns everything under the data root — no path strings leak out.
+
+import "std/os/os.baga"
+import "std/str/str.baga"
+import "std/crypto/sha256.baga"
+import "bufbaga/buf.baga"
+
+fn data_root() -> str !IO {
+    let r = env("SECP_DATA_ROOT")?
+    if r == "" {
+        return "./storage"
+    }
+    return r
+}
+
+// mkdir -p. Keeps relative paths relative: "./storage/a" must not become
+// "/storage/a". extern mkdir is single-level; an existing dir is success
+// when access(F_OK) sees it. Returns 0, or -1 if a segment is missing.
+fn data_mkdir_p(path: str) -> i64 !IO {
+    let mut absolute: i64 = 0
+    if str_starts_with(path, "/") {
+        absolute = 1
+    }
+    let parts = str_split(path, "/")
+    let mut cur = ""
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        let p = vec_get(parts, i)
+        if p == "." {
+            if cur == "" {
+                if absolute == 0 {
+                    cur = "."
+                }
+            }
+        }
+        if p != "" {
+            if p != "." {
+                if cur == "" {
+                    if absolute == 1 {
+                        cur = concat("/", p)
+                    }
+                    if absolute == 0 {
+                        cur = p
+                    }
+                } else {
+                    if cur == "/" {
+                        cur = concat("/", p)
+                    } else {
+                        cur = concat(concat(cur, "/"), p)
+                    }
+                }
+                mkdir(cur, 493)  // 0755; EEXIST is fine
+                if file_exists(cur) == 0 {
+                    return -1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn data_blob_path(root: str, hash: str) -> str {
+    let mut b = buf_from(root)
+    b = buf_push(b, "/blobs/")
+    // h[0:2] / h[2:4] / hash — sha256 hex is always 64 chars
+    let mut i: i64 = 0
+    while i < 2 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    b = buf_push(b, "/")
+    while i < 4 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    b = buf_push(b, "/")
+    b = buf_push(b, hash)
+    return buf_str(b)
+}
+
+fn data_blob_dir(root: str, hash: str) -> str {
+    let mut b = buf_from(root)
+    b = buf_push(b, "/blobs/")
+    let mut i: i64 = 0
+    while i < 2 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    b = buf_push(b, "/")
+    while i < 4 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    return buf_str(b)
+}
+
+// Store content; returns the sha256 hex id. Idempotent (same content → same blob).
+fn data_blob_put(content: bytes) -> str !IO {
+    let hash = sha256_b_hex(content)
+    let root = data_root()?
+    let path = data_blob_path(root, hash)
+    if file_exists(path) == 1 {
+        return hash
+    }
+    let dir = data_blob_dir(root, hash)
+    if data_mkdir_p(dir)? < 0 {
+        eprintln(concat("blob mkdir failed: ", dir))
+        return ""
+    }
+    // write_file_bytes returns -1 without raising !IO; `?` does not see that.
+    let rc = write_file_bytes(path, content)?
+    if rc < 0 || file_exists(path) == 0 {
+        eprintln(concat("blob write failed: ", path))
+        return ""
+    }
+    return hash
+}
+
+// Read a blob by id; empty bytes when missing (callers check hash != "").
+fn data_blob_get(hash: str) -> bytes !IO {
+    let root = data_root()?
+    let path = data_blob_path(root, hash)
+    if file_exists(path) == 0 {
+        return bytes_new(0)
+    }
+    return read_file_bytes(path)?
+}
+
+// Remove a blob; callers must verify it is unreferenced first.
+fn data_blob_delete(hash: str) -> i64 !IO {
+    let root = data_root()?
+    let path = data_blob_path(root, hash)
+    if file_exists(path) == 0 {
+        return 0
+    }
+    return unlink(path)?
+}
