@@ -67,6 +67,7 @@ export function FileBrowser() {
   const [reload, setReload] = useState(0);
   const [renamePath, setRenamePath] = useState("");
   const [renameValue, setRenameValue] = useState("");
+  const [open, setOpen] = useState<FsNode | null>(null);
 
   useEffect(() => {
     let cancel = false;
@@ -178,7 +179,7 @@ export function FileBrowser() {
           {crumbs(path).map((c, i) => (
             <span key={c.path}>
               {i > 0 ? <span className="sep">/</span> : null}
-              <button type="button" className="crumb" onClick={() => setPath(c.path)}>
+              <button type="button" className="crumb" onClick={() => { setOpen(null); setPath(c.path); }}>
                 {c.name}
               </button>
             </span>
@@ -224,7 +225,7 @@ export function FileBrowser() {
         <ul className="files">
           {path !== "/" ? (
             <li>
-              <button type="button" className="name" onClick={() => setPath(parentOf(path))}>
+              <button type="button" className="name" onClick={() => { setOpen(null); setPath(parentOf(path)); }}>
                 ..
               </button>
             </li>
@@ -251,7 +252,12 @@ export function FileBrowser() {
                   type="button"
                   className="name"
                   onClick={() => {
-                    if (node.is_dir) setPath(node.path);
+                    if (node.is_dir) {
+                      setOpen(null);
+                      setPath(node.path);
+                    } else {
+                      setOpen(node);
+                    }
                   }}
                 >
                   {node.name}
@@ -289,8 +295,66 @@ export function FileBrowser() {
             </li>
           ))}
         </ul>
+        {open ? <FilePreview node={open} onClose={() => setOpen(null)} /> : null}
       </main>
     </>
+  );
+}
+
+function FilePreview({ node, onClose }: { node: FsNode; onClose: () => void }) {
+  const [kind, setKind] = useState("");
+  const [text, setText] = useState("");
+  const [img, setImg] = useState("");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let dead = false;
+    let obj = "";
+    setKind("");
+    setText("");
+    setImg("");
+    setErr("");
+    (async () => {
+      const prev = await api.get<{ kind: string; text: string }>(`/v1/fs/preview?path=${qpath(node.path)}`);
+      if (dead) return;
+      setKind(prev.kind);
+      setText(prev.text ?? "");
+      if (prev.kind !== "image") return;
+      const res = await authedFetch(`/v1/fs/file?path=${qpath(node.path)}`);
+      if (!res.ok || dead) return;
+      obj = URL.createObjectURL(await res.blob());
+      if (dead) {
+        URL.revokeObjectURL(obj);
+        return;
+      }
+      setImg(obj);
+    })().catch((e: unknown) => {
+      if (!dead) setErr(messageOf(e));
+    });
+    return () => {
+      dead = true;
+      if (obj) URL.revokeObjectURL(obj);
+    };
+  }, [node.path]);
+
+  return (
+    <section className="preview">
+      <div className="preview-bar">
+        <b>{node.name}</b>
+        <span className="grow" />
+        <button type="button" onClick={() => void downloadFile(node).catch((e) => setErr(messageOf(e)))}>
+          Свали
+        </button>
+        <button type="button" className="ghost" onClick={onClose}>
+          Затвори
+        </button>
+      </div>
+      {err ? <p className="err">{err}</p> : null}
+      {kind === "image" && img ? <img className="preview-img" src={img} alt="" /> : null}
+      {kind === "text" ? <pre>{text}</pre> : null}
+      {kind === "empty" ? <p className="muted">Файлът е записан. Няма текстов преглед — сваля се с „Свали“.</p> : null}
+      {kind === "" && !err ? <p className="muted">Отваряне…</p> : null}
+    </section>
   );
 }
 

@@ -14,6 +14,7 @@ import "ormbaga/orm.baga"
 import "httpdbaga/http.baga"
 import "imgbaga/img.baga"
 import "imgbaga/ops.baga"
+import "officebaga/office.baga"
 import "pathbaga/path.baga"
 import "querybaga/query.baga"
 import "std/str/str.baga"
@@ -77,8 +78,17 @@ fn tree_auth(ctx: FmrCtx, db: OrmDb) -> TreeAuth !IO !Net {
 
 // ---------- mime ----------
 
+// path_ext keeps the leading dot (".docx"). Comparisons want "docx".
+fn tree_ext(path: str) -> str {
+    let mut ext = path_ext(path)
+    if str_starts_with(ext, ".") {
+        ext = substr(ext, 1, len(ext))
+    }
+    return to_lower(ext)
+}
+
 fn tree_mime(path: str) -> str {
-    let ext = path_ext(path)
+    let ext = tree_ext(path)
     if ext == "png" { return "image/png" }
     if ext == "jpg" { return "image/jpeg" }
     if ext == "jpeg" { return "image/jpeg" }
@@ -390,6 +400,70 @@ fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     r = http_set_header(r, "Content-Disposition", concat(concat(disp, "; filename=\""), concat(name, "\"")))
     return fmr_out(r, orm_db_q(q))
+}
+
+// Text preview for the file manager. Office files go through officebaga.
+// Images stay on /v1/fs/file — this returns kind "image" without the bytes.
+fn tree_preview_cap(text: str) -> str {
+    if len(text) <= 20000 {
+        return text
+    }
+    return concat(substr(text, 0, 20000), "\n…")
+}
+
+fn tree_office_text(body: bytes) -> str {
+    let opened = office_open_bytes(body)
+    if opened.ok == 0 {
+        return ""
+    }
+    let md = office_to_markdown(opened.doc)
+    if md != "" {
+        return md
+    }
+    return office_plain_text(opened.doc)
+}
+
+fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let path = tree_qpath(ctx, "path")
+    let q = tree_find(db, t.owner, path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(db, "path not found")
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        return act_err(orm_db_q(q), 400, "is a directory")
+    }
+    let name = orm_cell_by(q, 0, "name")
+    let ext = tree_ext(path)
+    let mut kind = "empty"
+    let mut text = ""
+    if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "webp" || ext == "bmp" {
+        kind = "image"
+    } else {
+        let hash = orm_cell_by(q, 0, "hash")
+        let body = data_blob_get(hash)?
+        if bytes_len(body) == 0 && orm_cell_by_i64(q, 0, "size") > 0 {
+            return act_err(orm_db_q(q), 500, "blob missing")
+        }
+        if ext == "txt" || ext == "md" || ext == "csv" || ext == "json" || ext == "html" {
+            text = str_of_bytes(body)
+        }
+        if ext == "docx" || ext == "doc" || ext == "odt" || ext == "xlsx" || ext == "xls" || ext == "ods" {
+            text = tree_office_text(body)
+        }
+        if text != "" {
+            kind = "text"
+            text = tree_preview_cap(text)
+        }
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "name", name)
+    o = jobj_str(o, "kind", kind)
+    o = jobj_str(o, "text", text)
+    return act_ok(orm_db_q(q), o)
 }
 
 fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {

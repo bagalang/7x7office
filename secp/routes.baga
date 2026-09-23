@@ -34,6 +34,7 @@ fn RID_FS_THUMB() -> i64 { return 27 }
 fn RID_FS_USAGE() -> i64 { return 28 }
 fn RID_USERS_LIST() -> i64 { return 30 }
 fn RID_USERS_CREATE() -> i64 { return 31 }
+fn RID_FS_PREVIEW() -> i64 { return 32 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -61,6 +62,7 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "POST", "/v1/fs/move", RID_FS_MOVE(), "", "fs", 0, "", "Node", "200", "from,to")
     app = fmr_route_meta(app, "GET", "/v1/fs/thumb", RID_FS_THUMB(), "", "fs", 0, "", "bytes", "200", "path")
     app = fmr_route_meta(app, "GET", "/v1/fs/usage", RID_FS_USAGE(), "", "fs", 0, "", "Usage", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/fs/preview", RID_FS_PREVIEW(), "", "fs", 0, "", "Preview", "200", "path")
     return app
 }
 
@@ -100,5 +102,6 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if id == RID_FS_MOVE() { return act_fs_move(ctx, db)? }
     if id == RID_FS_THUMB() { return act_fs_thumb(ctx, db)? }
     if id == RID_FS_USAGE() { return act_fs_usage(ctx, db)? }
+    if id == RID_FS_PREVIEW() { return act_fs_preview(ctx, db)? }
     return fmr_out(fmr_500("unhandled route"), db)
 }

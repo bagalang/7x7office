@@ -13,4 +13,5 @@ tplbaga = { path = "../../tplbaga" }
 querybaga = { path = "../../querybaga" }
 pathbaga = { path = "../../pathbaga" }
 imgbaga = { path = "../../imgbaga" }
+officebaga = { path = "../../officebaga" }
 bufbaga = { path = "../../bufbaga" }
