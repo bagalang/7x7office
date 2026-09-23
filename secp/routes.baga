@@ -3,6 +3,7 @@
 
 import "system/actions.baga"
 import "idm/auth_actions.baga"
+import "idm/user_actions.baga"
 import "tree/actions.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
@@ -31,6 +32,8 @@ fn RID_FS_DELETE() -> i64 { return 25 }
 fn RID_FS_MOVE() -> i64 { return 26 }
 fn RID_FS_THUMB() -> i64 { return 27 }
 fn RID_FS_USAGE() -> i64 { return 28 }
+fn RID_USERS_LIST() -> i64 { return 30 }
+fn RID_USERS_CREATE() -> i64 { return 31 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -47,6 +50,8 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "POST", "/v1/auth/login", RID_LOGIN(), "", "auth", 1, "LoginRequest", "TokenResponse", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/auth/logout", RID_LOGOUT(), "", "auth", 1, "", "-", "303", "")
     app = fmr_route_meta(app, "GET", "/v1/me", RID_ME(), "", "auth", 0, "", "Me", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/users", RID_USERS_LIST(), "", "idm", 0, "", "UserList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/users", RID_USERS_CREATE(), "", "idm", 0, "UserCreate", "User", "201", "")
     app = fmr_route_meta(app, "GET", "/v1/fs/list", RID_FS_LIST(), "", "fs", 0, "", "NodeList", "200", "path")
     app = fmr_route_meta(app, "GET", "/v1/fs/stat", RID_FS_STAT(), "", "fs", 0, "", "Node", "200", "path")
     app = fmr_route_meta(app, "POST", "/v1/fs/mkdir", RID_FS_MKDIR(), "", "fs", 0, "", "Node", "201", "path")
@@ -72,7 +77,7 @@ fn fmr_grpc_handle(path: str, body: bytes, db: OrmDb) -> FmrOut !IO !Net {
     return fmr_out(r, db)
 }
 
-fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     let id = ctx.route_id
     if id == RID_HEALTH() { return act_health(ctx, db) }
     if id == RID_READY() { return act_ready(ctx, db)? }
@@ -83,7 +88,9 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if id == RID_UI_LOGIN() { return act_ui_login(ctx, db) }
     if id == RID_LOGIN() { return act_login(ctx, db)? }
     if id == RID_LOGOUT() { return act_logout(ctx, db) }
-    if id == RID_ME() { return act_me(ctx, db) }
+    if id == RID_ME() { return act_me(ctx, db)? }
+    if id == RID_USERS_LIST() { return act_users_list(ctx, db)? }
+    if id == RID_USERS_CREATE() { return act_users_create(ctx, db)? }
     if id == RID_FS_LIST() { return act_fs_list(ctx, db)? }
     if id == RID_FS_STAT() { return act_fs_stat(ctx, db)? }
     if id == RID_FS_MKDIR() { return act_fs_mkdir(ctx, db)? }

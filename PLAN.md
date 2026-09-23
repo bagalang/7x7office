@@ -49,7 +49,7 @@
 
 **Резултат:** админ създава потребители/роли/workspaces; достъпът до възли се филтрира по ACL.
 
-- [ ] Модул `idm`: `roles`, `groups`, `workspaces` (по модела `idm/` на Cells)
+- [ ] Модул `idm`: списък и създаване на потребители (API + Next, само админ). `roles`, `groups`, `workspaces` остават
 - [ ] ACL таблица: (subject: user/role, node, right: read/write/share, inherited)
 - [ ] Изчисляване на ефективни права по пътя (кеш; по-късно policy engine)
 - [ ] Админ UI (tplbaga): потребители, роли, workspaces

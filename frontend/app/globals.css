@@ -42,6 +42,17 @@ button.link, .top button {
   font-size: 0.85rem;
 }
 
+.top a {
+  color: #cdd6e4;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.check { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; }
+.check input { width: auto; }
+.name.static { color: var(--ink); cursor: default; }
+h1 { font-size: 1.25rem; font-weight: 600; }
+
 .wrap { padding: 1.25rem; max-width: 960px; margin: 0 auto; }
 
 .crumbs { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; margin-bottom: 1rem; }

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "./AuthProvider";
 import {
@@ -59,6 +60,7 @@ export function FileBrowser() {
   const [items, setItems] = useState<FsNode[]>([]);
   const [usage, setUsage] = useState<FsUsage | null>(null);
   const [who, setWho] = useState("");
+  const [admin, setAdmin] = useState(false);
   const [folder, setFolder] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,12 +77,13 @@ export function FileBrowser() {
         const [list, use, me] = await Promise.all([
           api.get<FsList>(`/v1/fs/list?path=${qpath(path)}`),
           api.get<FsUsage>("/v1/fs/usage"),
-          api.get<{ sub?: string }>("/v1/me"),
+          api.get<{ sub?: string; is_admin?: number }>("/v1/me"),
         ]);
         if (cancel) return;
         setItems(list.items ?? []);
         setUsage(use);
         setWho(me.sub ?? "");
+        setAdmin(me.is_admin === 1);
       } catch (err) {
         if (!cancel) setError(messageOf(err));
       } finally {
@@ -156,6 +159,7 @@ export function FileBrowser() {
     <>
       <header className="top">
         <b>7x7office · secp</b>
+        {admin ? <Link href="/users">Потребители</Link> : null}
         <span className="grow" />
         <span className="who">{who}</span>
         <button
