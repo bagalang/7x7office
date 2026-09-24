@@ -243,6 +243,27 @@ a { color: var(--accent); text-decoration: none; }
 }
 .topbar-search .input:focus { background: var(--surface); }
 
+/* Превключвател на работно пространство — в горната лента, до профила.
+   Икона + select; на тясно се свива, за да не изяде търсенето. */
+.ws-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  max-width: 220px;
+}
+.ws-switch svg { flex: none; }
+.ws-switch .select {
+  background: var(--bg);
+  border-color: transparent;
+  font-weight: 500;
+  color: var(--ink);
+}
+.ws-switch .select:focus { background: var(--surface); }
+@media (max-width: 760px) {
+  .ws-switch .select { max-width: 120px; }
+}
+
 .avatar {
   display: grid;
   place-items: center;

@@ -2,6 +2,7 @@ import { readStorage, writeStorage } from "./storage";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 export const TOKEN_KEY = "secp.token";
+const WS_KEY = "secp.ws";
 
 export function getToken(): string | null {
   return readStorage(TOKEN_KEY);
@@ -9,6 +10,32 @@ export function getToken(): string | null {
 
 export function setToken(token: string | null): void {
   writeStorage(TOKEN_KEY, token);
+}
+
+// --- активен workspace (фаза 2) ---
+// Файловете живеят в workspace, не в потребител. Клиентът пази кой е
+// избраният и всички файлови заявки минават през него. `0` = не е избран →
+// сървърът ползва личния workspace, т.е. поведението отпреди фаза 2.
+export function getActiveWorkspace(): number {
+  const raw = readStorage(WS_KEY);
+  if (!raw) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+export function setActiveWorkspace(id: number): void {
+  writeStorage(WS_KEY, id > 0 ? String(id) : null);
+}
+
+// Добавя workspace_id към заявка, ако има избран workspace. Едно място за
+// цялото приложение — иначе всеки извикващ трябва да помни да го сложи.
+// Идемпотентно: ако вече има workspace_id (напр. `/v1/workspaces?workspace_id=`)
+// не слага втори — иначе заявката носи `workspace_id=1&workspace_id=1`.
+function withWs(path: string): string {
+  const id = getActiveWorkspace();
+  if (!id) return path;
+  if (path.includes("workspace_id=")) return path;
+  return `${path}${path.includes("?") ? "&" : "?"}workspace_id=${id}`;
 }
 
 export class ApiError extends Error {
@@ -37,12 +64,22 @@ async function readBody(res: Response): Promise<unknown> {
   }
 }
 
+// Файловите пътища носят workspace-а (Фаза 2). Правим го в едно място, а не
+// във всеки извикващ: иначе рано или късно някой `api.get("/v1/fs/...")`
+// остава без скоуп и чете личния workspace, докато UI-ът показва екипен.
+function scoped(path: string): string {
+  if (path.startsWith("/v1/fs/") || path.startsWith("/v1/doc/") || path.startsWith("/v1/search")) {
+    return withWs(path);
+  }
+  return path;
+}
+
 export async function request<T>(path: string, method: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${API_BASE}${scoped(path)}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -60,7 +97,7 @@ export const api = {
   del: <T>(path: string) => request<T>(path, "DELETE"),
   // Preview връща типизиран `kind`; текстовото съдържание (ако има) е в `text`.
   preview: (path: string) =>
-    request<{ kind: string; text: string }>(`/v1/fs/preview?path=${qpath(path)}`, "GET"),
+    request<{ kind: string; text: string }>(withWs(`/v1/fs/preview?path=${qpath(path)}`), "GET"),
 };
 
 export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -68,6 +105,12 @@ export async function authedFetch(path: string, init: RequestInit = {}): Promise
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   return fetch(`${API_BASE}${path}`, { ...init, headers, cache: "no-store" });
+}
+
+// Същото, но със активния workspace — за файловите заявки, които носят
+// двоично съдържание (качване/сваляне/преглед на картинки).
+export async function authedFetchWs(path: string, init: RequestInit = {}): Promise<Response> {
+  return authedFetch(withWs(path), init);
 }
 
 export type TokenResponse = {
@@ -125,14 +168,14 @@ export function qpath(path: string): string {
 }
 
 export async function putFile(path: string, body: Blob): Promise<FsNode> {
-  const res = await authedFetch(`/v1/fs/file?path=${qpath(path)}`, { method: "PUT", body });
+  const res = await authedFetchWs(`/v1/fs/file?path=${qpath(path)}`, { method: "PUT", body });
   const data = await readBody(res);
   if (!res.ok) throw new ApiError(res.status, detailOf(data, res.statusText));
   return data as FsNode;
 }
 
 export async function downloadFile(node: FsNode): Promise<void> {
-  const res = await authedFetch(`/v1/fs/file?path=${qpath(node.path)}`);
+  const res = await authedFetchWs(`/v1/fs/file?path=${qpath(node.path)}`);
   if (!res.ok) {
     const data = await readBody(res);
     throw new ApiError(res.status, detailOf(data, res.statusText));
@@ -156,14 +199,14 @@ export type DocContent = {
 };
 
 export async function loadDoc(path: string): Promise<DocContent> {
-  return request<DocContent>(`/v1/doc/load?path=${qpath(path)}`, "GET");
+  return request<DocContent>(withWs(`/v1/doc/load?path=${qpath(path)}`), "GET");
 }
 
 // The editor sends the etag it loaded; on a mismatch the backend stores the
 // new content as a `.conflict-*` copy and answers 409 instead of overwriting.
 export async function saveDoc(path: string, text: string, etag?: string): Promise<FsNode> {
   const q = etag ? `&etag=${encodeURIComponent(etag)}` : "";
-  const res = await authedFetch(`/v1/doc/save?path=${qpath(path)}${q}`, {
+  const res = await authedFetchWs(`/v1/doc/save?path=${qpath(path)}${q}`, {
     method: "PUT",
     body: text,
   });
@@ -176,11 +219,11 @@ export type ZipEntry = { name: string; size: number; is_dir: number };
 export type ZipList = { path: string; items: ZipEntry[]; count: number };
 
 export async function listZip(path: string): Promise<ZipList> {
-  return request<ZipList>(`/v1/fs/zip/list?path=${qpath(path)}`, "GET");
+  return request<ZipList>(withWs(`/v1/fs/zip/list?path=${qpath(path)}`), "GET");
 }
 
 export async function downloadZipEntry(node: FsNode, entry: string): Promise<void> {
-  const res = await authedFetch(`/v1/fs/zip/get?path=${qpath(node.path)}&entry=${encodeURIComponent(entry)}`);
+  const res = await authedFetchWs(`/v1/fs/zip/get?path=${qpath(node.path)}&entry=${encodeURIComponent(entry)}`);
   if (!res.ok) {
     const data = await readBody(res);
     throw new ApiError(res.status, detailOf(data, res.statusText));
@@ -204,15 +247,15 @@ export type FsVersion = {
 export type FsVersionList = { path: string; items: FsVersion[]; count: number };
 
 export async function listVersions(path: string): Promise<FsVersionList> {
-  return request<FsVersionList>(`/v1/fs/versions?path=${qpath(path)}`, "GET");
+  return request<FsVersionList>(withWs(`/v1/fs/versions?path=${qpath(path)}`), "GET");
 }
 
 export async function restoreVersion(path: string, version: number): Promise<FsNode> {
-  return request<FsNode>(`/v1/fs/version/restore?path=${qpath(path)}&version=${version}`, "POST");
+  return request<FsNode>(withWs(`/v1/fs/version/restore?path=${qpath(path)}&version=${version}`), "POST");
 }
 
 export async function downloadVersion(node: FsNode, version: number): Promise<void> {
-  const res = await authedFetch(`/v1/fs/version/get?path=${qpath(node.path)}&version=${version}`);
+  const res = await authedFetchWs(`/v1/fs/version/get?path=${qpath(node.path)}&version=${version}`);
   if (!res.ok) {
     const data = await readBody(res);
     throw new ApiError(res.status, detailOf(data, res.statusText));
@@ -246,7 +289,7 @@ export type SearchResult = {
 };
 
 export async function searchFiles(query: string, limit = 25): Promise<SearchResult> {
-  return request<SearchResult>(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`, "GET");
+  return request<SearchResult>(withWs(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`), "GET");
 }
 
 // --- workspaces + членство (фаза 2) ---

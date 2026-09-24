@@ -14,7 +14,7 @@ import {
   FsVersion,
   ZipEntry,
   api,
-  authedFetch,
+  authedFetchWs,
   downloadFile,
   downloadVersion,
   downloadZipEntry,
@@ -24,6 +24,7 @@ import {
   restoreVersion,
 } from "../lib/api";
 import { mdToHtml } from "../lib/markdown";
+import { useWorkspace, canWrite } from "./WorkspaceProvider";
 import { formatBytes, formatDate, messageOf } from "./FileBrowser";
 
 export function FilePreview({
@@ -42,6 +43,8 @@ export function FilePreview({
   onError: (msg: string) => void;
 }) {
   const { t } = useI18n();
+  const { active } = useWorkspace();
+  const writable = canWrite(active);
   const router = useRouter();
   const [kind, setKind] = useState("");
   const [text, setText] = useState("");
@@ -70,7 +73,7 @@ export function FilePreview({
       setKind(prev.kind);
       setText(prev.text ?? "");
       if (prev.kind !== "image" && prev.kind !== "pdf") return;
-      const res = await authedFetch(`/v1/fs/file?path=${qpath(node.path)}`);
+      const res = await authedFetchWs(`/v1/fs/file?path=${qpath(node.path)}`);
       if (!res.ok || dead) return;
       obj = URL.createObjectURL(await res.blob());
       if (dead) {
@@ -128,7 +131,7 @@ export function FilePreview({
         </dl>
 
         <div className="preview-actions">
-          {editable ? (
+          {editable && writable ? (
             <button
               type="button"
               className="btn"
@@ -139,7 +142,7 @@ export function FilePreview({
           ) : null}
           <button
             type="button"
-            className={editable ? "btn ghost" : "btn"}
+            className={editable && writable ? "btn ghost" : "btn"}
             onClick={() => void downloadFile(node).catch((e) => onError(messageOf(e, t("common.error"))))}
           >
             <IconDownload width={16} height={16} /> {t("preview.download")}
@@ -147,12 +150,16 @@ export function FilePreview({
           <button type="button" className="btn ghost" onClick={onShowVersions}>
             <IconHistory width={16} height={16} /> {t("preview.versions")}
           </button>
-          <button type="button" className="btn ghost" onClick={onRename}>
-            <IconPencil width={16} height={16} /> {t("preview.rename")}
-          </button>
-          <button type="button" className="btn danger-ghost" onClick={onDelete}>
-            <IconTrash width={16} height={16} /> {t("preview.delete")}
-          </button>
+          {writable ? (
+            <>
+              <button type="button" className="btn ghost" onClick={onRename}>
+                <IconPencil width={16} height={16} /> {t("preview.rename")}
+              </button>
+              <button type="button" className="btn danger-ghost" onClick={onDelete}>
+                <IconTrash width={16} height={16} /> {t("preview.delete")}
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
     </aside>
@@ -248,6 +255,8 @@ export function VersionsDialog({
   onRestored: () => void;
 }) {
   const { t } = useI18n();
+  const { active } = useWorkspace();
+  const canRestore = canWrite(active);
   const [items, setItems] = useState<FsVersion[]>([]);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -304,7 +313,7 @@ export function VersionsDialog({
                 type="button"
                 className="icon-btn"
                 title={t("versions.restore")}
-                disabled={busy}
+                disabled={busy || !canRestore}
                 onClick={() => void onRestore(v)}
               >
                 <IconHistory />

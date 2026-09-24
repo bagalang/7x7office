@@ -3,6 +3,7 @@ import "./globals.css";
 import { AuthProvider } from "../components/AuthProvider";
 import { ThemeProvider } from "../components/ThemeProvider";
 import { I18nProvider } from "../components/I18nProvider";
+import { WorkspaceProvider } from "../components/WorkspaceProvider";
 import { THEME_SCRIPT } from "../lib/theme";
 
 export const metadata: Metadata = {
@@ -22,7 +23,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <ThemeProvider>
           <I18nProvider>
-            <AuthProvider>{children}</AuthProvider>
+            <AuthProvider>
+              <WorkspaceProvider>{children}</WorkspaceProvider>
+            </AuthProvider>
           </I18nProvider>
         </ThemeProvider>
       </body>

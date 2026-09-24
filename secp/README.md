@@ -6,7 +6,7 @@
 Модулен монолит по шаблона `apps/*` от [BASE.md](../../BASE.md):
 `fmrbaga → httpdbaga · jwtbaga · ormbaga → pgbaga (Postgres) или boilaDB`.
 
-## Статус: Фаза 2 — workspaces + роли (в ход)
+## Статус: Фаза 2 — workspaces + роли (почти готова)
 
 - миграции: `idm_users`, `idm_sessions`, `idm_resets`, `idm_workspaces`, `idm_workspace_members`, `tree_*`, `ops_jobs` (Postgres + boila двойни сетове)
 - вход: `POST /v1/auth/login` (JSON **или** форма) → JWT + HttpOnly cookie
@@ -15,6 +15,13 @@
 - работни пространства: `GET/POST /v1/workspaces`, `PATCH/DELETE ?workspace_id=`;
   членове по имейл с роли `owner > editor > viewer` (личният се създава лениво,
   не се трие; последният owner е защитен)
+- **файловете са в пространството, не в потребителя**: всички `/v1/fs/*`, `/v1/doc/*`
+  и `/v1/search` приемат `?workspace_id=`; без него → личното пространство. Достъпът се
+  резолвва през ролята (`tree/auth.baga`, нива read(1)/write(2)). Старите възли се
+  връзват към личното пространство на собственика при boot (`tree/backfill.baga`).
+  Изтриване на пространство маха цялото дърво — възли, версии, текст и blob-ове
+  (`tree/ws_cleanup.baga`).
+- избор на пространство в UI (горна лента); при роля `viewer` действията за запис са скрити
 - `POST /v1/auth/logout`, `GET /v1/me` (bearer)
 - системни: `/health`, `/ready`, `/v1/meta`, `/openapi.json`, `/metrics`
 - UI (tplbaga, SSR): `GET /login`, `GET /`
@@ -32,7 +39,7 @@ secp/
   idm/                  идентичности: users, workspaces, auth, поща
     user_model.baga     idm_users CRUD + authenticate
     ws_model.baga       idm_workspaces + членство (CRUD, достъп, JSON)
-    ws_roles.baga       роли и нива (чист модул, тестван в tests/ws_test.baga)
+    ws_roles.baga       роли и нива (чист модул, тестван в tests/ws_roles_test.baga)
     ws_actions.baga     списък/създаване/преименуване/триене на пространства
     ws_members.baga     членове (само owner/админ; последният owner е защитен)
     auth_actions.baga   login / logout / me
@@ -40,6 +47,15 @@ secp/
     reset_actions.baga  forgot / reset
     mail.baga           SMTP конфигурация от средата + изпращане
     mail_text.baga      текстовете на писмата (чист модул, без зависимости)
+  tree/                 файлово дърво в пространство (Фаза 2 скоуп)
+    auth.baga           резолвва workspace + ниво read(1)/write(2)
+    model.baga          възли по workspace_id (owner_id е само одит)
+    store.baga          mkdir -p / запис на файл
+    versions.baga       версии; versions_files.baga — възстановяване и zip
+    text.baga           текстов индекс; search.baga/search_actions.baga — търсене
+    backfill.baga       boot: стари възли → личното пространство на собственика
+    ws_cleanup.baga     триене на пространство маха дървото и blob-овете
+    actions.baga docs.baga   API заяви (fs/* и doc/*)
   system/scheduler.baga фонови задачи (ops_jobs): extract-text, mail-send
   system/mail_jobs.baga mail-send: разчита payload и праща
   tools/mock_smtp.baga  dev SMTP сървър (пише писмата във файл)

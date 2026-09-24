@@ -17,7 +17,7 @@ fn tree_ver_table() -> str {
 }
 
 fn tree_ver_cols() -> str {
-    return "id, node_id, owner_id, path, size, hash, created_at"
+    return "id, node_id, workspace_id, owner_id, path, size, hash, created_at"
 }
 
 fn tree_ver_next_id(db: OrmDb) -> OrmCount !IO !Net {
@@ -25,16 +25,19 @@ fn tree_ver_next_id(db: OrmDb) -> OrmCount !IO !Net {
 }
 
 // Snapshot `hash` as previous content of node_id. Callers skip empty
-// hashes (dirs) and no-op overwrites (same hash).
-fn tree_ver_snapshot(db: OrmDb, node_id: i64, owner: i64, path: str, size: i64, hash: str) -> OrmExec !IO !Net {
+// hashes (dirs) and no-op overwrites (same hash). ws е скоупът (Фаза 2),
+// owner е само „кой го е записал" — версията принадлежи на workspace-а.
+fn tree_ver_snapshot(db: OrmDb, node_id: i64, ws: i64, owner: i64, path: str, size: i64, hash: str) -> OrmExec !IO !Net {
     let cols = vec_new()
     vec_push(cols, "node_id")
+    vec_push(cols, "workspace_id")
     vec_push(cols, "owner_id")
     vec_push(cols, "path")
     vec_push(cols, "size")
     vec_push(cols, "hash")
     let vals = vec_new()
     vec_push(vals, int_to_str(node_id))
+    vec_push(vals, int_to_str(ws))
     vec_push(vals, int_to_str(owner))
     vec_push(vals, path)
     vec_push(vals, int_to_str(size))
@@ -47,6 +50,7 @@ fn tree_ver_snapshot(db: OrmDb, node_id: i64, owner: i64, path: str, size: i64, 
         let cols2 = vec_new()
         vec_push(cols2, "id")
         vec_push(cols2, "node_id")
+        vec_push(cols2, "workspace_id")
         vec_push(cols2, "owner_id")
         vec_push(cols2, "path")
         vec_push(cols2, "size")
@@ -54,6 +58,7 @@ fn tree_ver_snapshot(db: OrmDb, node_id: i64, owner: i64, path: str, size: i64, 
         let vals2 = vec_new()
         vec_push(vals2, int_to_str(orm_count_n(c) + 1))
         vec_push(vals2, int_to_str(node_id))
+        vec_push(vals2, int_to_str(ws))
         vec_push(vals2, int_to_str(owner))
         vec_push(vals2, path)
         vec_push(vals2, int_to_str(size))

@@ -27,14 +27,14 @@ import "std/os/os.baga"
 // ---------- handlers ----------
 
 fn act_fs_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
     let mut d = db
     let path = tree_qpath(ctx, "path")
     if path != "/" {
-        let nq = tree_find(d, t.owner, path)?
+        let nq = tree_find(d, t.ws, path)?
         if orm_ok_q(nq) == 0 {
             return act_err(orm_db_q(nq), 500, orm_err_q(nq))
         }
@@ -46,7 +46,7 @@ fn act_fs_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         }
         d = orm_db_q(nq)
     }
-    let q = tree_children(d, t.owner, path)?
+    let q = tree_children(d, t.ws, path)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -64,12 +64,12 @@ fn act_fs_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_fs_stat(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
     let path = tree_qpath(ctx, "path")
-    let q = tree_find(db, t.owner, path)?
+    let q = tree_find(db, t.ws, path)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -80,7 +80,7 @@ fn act_fs_stat(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 2)?
     if t.ok == 0 {
         return t.out
     }
@@ -88,11 +88,11 @@ fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if path == "/" {
         return act_err(db, 400, "root exists")
     }
-    let err = tree_mkdir_p(db, t.owner, path)?
+    let err = tree_mkdir_p(db, t.ws, t.owner, path)?
     if err != "" {
         return act_err(db, 409, err)
     }
-    let q = tree_find(db, t.owner, path)?
+    let q = tree_find(db, t.ws, path)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(db, 500, "mkdir ok but node missing")
     }
@@ -100,7 +100,7 @@ fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 2)?
     if t.ok == 0 {
         return t.out
     }
@@ -117,16 +117,16 @@ fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if size > maxf {
         return act_err(db, 413, "file too large")
     }
-    return tree_store_file(db, t.owner, path, body, 1)?
+    return tree_store_file(db, t.ws, t.owner, path, body, 1)?
 }
 
 fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
     let path = tree_qpath(ctx, "path")
-    let q = tree_find(db, t.owner, path)?
+    let q = tree_find(db, t.ws, path)?
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
@@ -176,12 +176,12 @@ fn tree_office_text(body: bytes) -> str {
 }
 
 fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
     let path = tree_qpath(ctx, "path")
-    let q = tree_find(db, t.owner, path)?
+    let q = tree_find(db, t.ws, path)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_404(db, "path not found")
     }
@@ -252,12 +252,12 @@ fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
     let path = tree_qpath(ctx, "path")
-    let q = tree_find(db, t.owner, path)?
+    let q = tree_find(db, t.ws, path)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_404(db, "path not found")
     }
@@ -276,7 +276,7 @@ fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 2)?
     if t.ok == 0 {
         return t.out
     }
@@ -285,7 +285,7 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(db, 400, "cannot delete root")
     }
     // collect blob hashes before deleting rows (nodes + their versions)
-    let sub = tree_subtree(db, t.owner, path)?
+    let sub = tree_subtree(db, t.ws, path)?
     if orm_ok_q(sub) == 0 {
         return act_err(orm_db_q(sub), 500, orm_err_q(sub))
     }
@@ -326,7 +326,7 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         tree_text_drop(d, nid)?
         i = i + 1
     }
-    let del = tree_delete_subtree(d, t.owner, path)?
+    let del = tree_delete_subtree(d, t.ws, path)?
     if orm_ok(del) == 0 {
         return act_err(orm_db_exec(del), 500, orm_err_exec(del))
     }
@@ -340,7 +340,7 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 2)?
     if t.ok == 0 {
         return t.out
     }
@@ -356,7 +356,7 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if str_starts_with(to, concat(from, "/")) {
         return act_err(db, 409, "cannot move into own subtree")
     }
-    let dst = tree_find(db, t.owner, to)?
+    let dst = tree_find(db, t.ws, to)?
     if orm_ok_q(dst) == 0 {
         return act_err(orm_db_q(dst), 500, orm_err_q(dst))
     }
@@ -364,7 +364,7 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_q(dst), 409, "destination exists")
     }
     let mut d = orm_db_q(dst)
-    let sub = tree_subtree(d, t.owner, from)?
+    let sub = tree_subtree(d, t.ws, from)?
     if orm_ok_q(sub) == 0 {
         return act_err(orm_db_q(sub), 500, orm_err_q(sub))
     }
@@ -373,7 +373,7 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     d = orm_db_q(sub)
     // target parent must exist (mkdir -p it, like put)
-    let perr = tree_mkdir_p(d, t.owner, tree_parent_of(to))?
+    let perr = tree_mkdir_p(d, t.ws, t.owner, tree_parent_of(to))?
     if perr != "" {
         return act_err(d, 409, perr)
     }
@@ -390,7 +390,7 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         d = orm_db_exec(upd)
         i = i + 1
     }
-    let q = tree_find(d, t.owner, to)?
+    let q = tree_find(d, t.ws, to)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(db, 500, "move ok but node missing")
     }
@@ -398,16 +398,17 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_fs_usage(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
-    let usage = tree_usage(db, t.owner)?
+    let usage = tree_usage(db, t.ws)?
     if orm_ok_c(usage) == 0 {
         return act_err(orm_db_c(usage), 500, orm_err_c(usage))
     }
     let mut o = jobj_new()
     o = jobj_i64(o, "used_bytes", orm_count_n(usage))
     o = jobj_i64(o, "quota_bytes", tree_quota_bytes()?)
+    o = jobj_i64(o, "workspace_id", t.ws)
     return act_ok(orm_db_c(usage), o)
 }

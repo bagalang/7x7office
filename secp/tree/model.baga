@@ -1,8 +1,11 @@
 // tree/model.baga — tree_nodes helpers over ormbaga.
 // Module tree owns this table; paths are virtual (Cells-style), the
 // local-fs blob store only sees content hashes.
-// Every query is scoped by owner_id — v1 = one personal space per user;
-// workspaces arrive in Phase 2 by widening owner scoping, not the schema.
+//
+// Скоупът е WORKSPACE (Фаза 2): един и същ път може да съществува в личния
+// workspace и в екипен, без да си пречат. `owner_id` остава само като „кой
+// го е качил" (одит и бъдещи отчети) — НЕ като филтър за достъп. Правата
+// се проверяват в auth.baga през ws_access, не тук.
 
 import "ormbaga/orm.baga"
 import "fmrbaga/jsonx.baga"
@@ -75,29 +78,29 @@ fn tree_tail(p: str, from: i64) -> str {
 }
 
 fn tree_cols() -> str {
-    return "id, owner_id, path, parent_path, name, is_dir, size, hash, thumb_hash, created_at, updated_at"
+    return "id, workspace_id, owner_id, path, parent_path, name, is_dir, size, hash, thumb_hash, created_at, updated_at"
 }
 
-fn tree_find(db: OrmDb, owner: i64, path: str) -> OrmQuery !IO !Net {
+fn tree_find(db: OrmDb, ws: i64, path: str) -> OrmQuery !IO !Net {
     let sql = concat("SELECT ", tree_cols())
-    let sql2 = concat(sql, " FROM tree_nodes WHERE owner_id = $1 AND path = $2")
+    let sql2 = concat(sql, " FROM tree_nodes WHERE workspace_id = $1 AND path = $2")
     let vals = vec_new()
-    vec_push(vals, int_to_str(owner))
+    vec_push(vals, int_to_str(ws))
     vec_push(vals, path)
     return orm_query_params_str(db, sql2, vals)?
 }
 
-fn tree_children(db: OrmDb, owner: i64, parent_path: str) -> OrmQuery !IO !Net {
+fn tree_children(db: OrmDb, ws: i64, parent_path: str) -> OrmQuery !IO !Net {
     let sql = concat("SELECT ", tree_cols())
-    let sql2 = concat(sql, " FROM tree_nodes WHERE owner_id = $1 AND parent_path = $2 ORDER BY is_dir DESC, name")
+    let sql2 = concat(sql, " FROM tree_nodes WHERE workspace_id = $1 AND parent_path = $2 ORDER BY is_dir DESC, name")
     let vals = vec_new()
-    vec_push(vals, int_to_str(owner))
+    vec_push(vals, int_to_str(ws))
     vec_push(vals, parent_path)
     return orm_query_params_str(db, sql2, vals)?
 }
 
-// Червей: възел по id (scheduler-ът получава само id-та; owner-ското
-// филтриране тук не важи — задачата е системна, не потребителска).
+// Червей: възел по id (scheduler-ът получава само id-та; скоупът тук не
+// важи — задачата е системна, не потребителска).
 fn tree_find_id(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
     let sql = concat("SELECT ", tree_cols())
     let sql2 = concat(sql, " FROM tree_nodes WHERE id = $1")
@@ -107,17 +110,17 @@ fn tree_find_id(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
 }
 
 // The node itself plus every descendant (for delete / move).
-fn tree_subtree(db: OrmDb, owner: i64, path: str) -> OrmQuery !IO !Net {
+fn tree_subtree(db: OrmDb, ws: i64, path: str) -> OrmQuery !IO !Net {
     let sql = concat("SELECT ", tree_cols())
-    let sql2 = concat(sql, " FROM tree_nodes WHERE owner_id = $1 AND (path = $2 OR path LIKE $3) ORDER BY path")
+    let sql2 = concat(sql, " FROM tree_nodes WHERE workspace_id = $1 AND (path = $2 OR path LIKE $3) ORDER BY path")
     let vals = vec_new()
-    vec_push(vals, int_to_str(owner))
+    vec_push(vals, int_to_str(ws))
     vec_push(vals, path)
     vec_push(vals, concat(path, "/%"))
     return orm_query_params_str(db, sql2, vals)?
 }
 
-fn tree_insert(db: OrmDb, owner: i64, path: str, parent_path: str, name: str, is_dir: i64, size: i64, hash: str, thumb_hash: str) -> OrmExec !IO !Net {
+fn tree_insert(db: OrmDb, ws: i64, owner: i64, path: str, parent_path: str, name: str, is_dir: i64, size: i64, hash: str, thumb_hash: str) -> OrmExec !IO !Net {
     if tree_backend_boila()? == 1 {
         let c = tree_next_id(db)?
         if orm_ok_c(c) == 0 {
@@ -127,6 +130,7 @@ fn tree_insert(db: OrmDb, owner: i64, path: str, parent_path: str, name: str, is
         let mut d = orm_db_c(c)
         let cols = vec_new()
         vec_push(cols, "id")
+        vec_push(cols, "workspace_id")
         vec_push(cols, "owner_id")
         vec_push(cols, "path")
         vec_push(cols, "parent_path")
@@ -137,6 +141,7 @@ fn tree_insert(db: OrmDb, owner: i64, path: str, parent_path: str, name: str, is
         vec_push(cols, "thumb_hash")
         let vals = vec_new()
         vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(ws))
         vec_push(vals, int_to_str(owner))
         vec_push(vals, path)
         vec_push(vals, parent_path)
@@ -148,6 +153,7 @@ fn tree_insert(db: OrmDb, owner: i64, path: str, parent_path: str, name: str, is
         return orm_insert_strs(d, tree_table(), cols, vals)?
     }
     let cols = vec_new()
+    vec_push(cols, "workspace_id")
     vec_push(cols, "owner_id")
     vec_push(cols, "path")
     vec_push(cols, "parent_path")
@@ -157,6 +163,7 @@ fn tree_insert(db: OrmDb, owner: i64, path: str, parent_path: str, name: str, is
     vec_push(cols, "hash")
     vec_push(cols, "thumb_hash")
     let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
     vec_push(vals, int_to_str(owner))
     vec_push(vals, path)
     vec_push(vals, parent_path)
@@ -194,21 +201,21 @@ fn tree_update_path(db: OrmDb, id: i64, path: str, parent_path: str, name: str) 
     return orm_update_by_id(db, tree_table(), id, cols, vals)?
 }
 
-fn tree_delete_subtree(db: OrmDb, owner: i64, path: str) -> OrmExec !IO !Net {
-    let sql = "DELETE FROM tree_nodes WHERE owner_id = $1 AND (path = $2 OR path LIKE $3)"
+fn tree_delete_subtree(db: OrmDb, ws: i64, path: str) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM tree_nodes WHERE workspace_id = $1 AND (path = $2 OR path LIKE $3)"
     let vals = vec_new()
-    vec_push(vals, int_to_str(owner))
+    vec_push(vals, int_to_str(ws))
     vec_push(vals, path)
     vec_push(vals, concat(path, "/%"))
     return orm_exec_params_str(db, sql, vals)?
 }
 
-// Bytes used by an owner's files (dirs count 0).
+// Bytes used by a workspace's files (dirs count 0).
 // Plain SUM — boila has no COALESCE around aggregates; pg_cell_i64 maps
 // the NULL of an empty set to 0 on both backends.
-fn tree_usage(db: OrmDb, owner: i64) -> OrmCount !IO !Net {
-    let sql = "SELECT SUM(size) AS count FROM tree_nodes WHERE owner_id = "
-    let sql2 = concat(sql, int_to_str(owner))
+fn tree_usage(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
+    let sql = "SELECT SUM(size) AS count FROM tree_nodes WHERE workspace_id = "
+    let sql2 = concat(sql, int_to_str(ws))
     return orm_count_sql(db, concat(sql2, " AND is_dir = 0"))?
 }
 

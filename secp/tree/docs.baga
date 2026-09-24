@@ -63,12 +63,12 @@ fn tree_conflict_path(path: str, hash: str) -> str {
 }
 
 fn act_doc_load(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
     let path = tree_qpath(ctx, "path")
-    let q = tree_find(db, t.owner, path)?
+    let q = tree_find(db, t.ws, path)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_404(db, "path not found")
     }
@@ -117,7 +117,7 @@ fn act_doc_load(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 }
 
 fn act_doc_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 2)?
     if t.ok == 0 {
         return t.out
     }
@@ -133,7 +133,7 @@ fn act_doc_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if kind == "legacy" {
         return act_err(db, 400, "legacy format: convert to .docx/.xlsx first")
     }
-    let q = tree_find(db, t.owner, path)?
+    let q = tree_find(db, t.ws, path)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_404(db, "path not found")
     }
@@ -167,11 +167,11 @@ fn act_doc_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let want = query_decode_val(fmr_query(ctx, "etag"))
     if want != "" && want != orm_cell_by(q, 0, "hash") {
         let cpath = tree_conflict_path(path, sha256_b_hex(out))
-        let stored = tree_store_file(orm_db_q(q), t.owner, cpath, out, 0)?
+        let stored = tree_store_file(orm_db_q(q), t.ws, t.owner, cpath, out, 0)?
         if stored.resp.status >= 200 && stored.resp.status < 300 {
             return act_err(stored.db, 409, concat("файлът е променен междувременно; записано като ", cpath))
         }
         return stored
     }
-    return tree_store_file(orm_db_q(q), t.owner, path, out, 0)?
+    return tree_store_file(orm_db_q(q), t.ws, t.owner, path, out, 0)?
 }

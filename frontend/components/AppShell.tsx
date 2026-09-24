@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "./AuthProvider";
 import { useI18n } from "./I18nProvider";
 import { PreferencesButton } from "./PreferencesButton";
+import { useWorkspace } from "./WorkspaceProvider";
 import { api, FsUsage } from "../lib/api";
 import { IconFolder, IconLogout, IconSearch, IconUsers, IconWorkspaces } from "./icons";
 
@@ -28,6 +29,7 @@ function initialsOf(email: string): string {
 export function AppShell({ search, children }: { search?: ReactNode; children: ReactNode }) {
   const { logout } = useAuth();
   const { t } = useI18n();
+  const { wsId, workspaces, select } = useWorkspace();
   const router = useRouter();
   const pathname = usePathname();
   const [me, setMe] = useState<Me | null>(null);
@@ -35,6 +37,8 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  // Квотата е на потребител, не на workspace, но се преизчислява при смяна на
+  // workspace, за да не остане стар надпис, докато файловете вече са други.
   useEffect(() => {
     let cancel = false;
     Promise.all([api.get<Me>("/v1/me"), api.get<FsUsage>("/v1/fs/usage")])
@@ -47,7 +51,7 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
     return () => {
       cancel = true;
     };
-  }, []);
+  }, [wsId]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -74,6 +78,33 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
         </Link>
         {search}
         <span className="grow" />
+        {workspaces.length > 0 ? (
+          <label className="ws-switch">
+            <IconWorkspaces width={16} height={16} />
+            <select
+              className="select"
+              aria-label={t("ws.switch_aria")}
+              value={wsId}
+              onChange={(e) => {
+                select(Number(e.target.value));
+                // Смяната на пространството сменя файловете — връщаме се в
+                // корена, за да не сочи пътят към папка, която там я няма.
+                if (pathname === "/") router.replace("/");
+                else router.push("/");
+              }}
+            >
+              {/* 0 = личният workspace; сървърът го намира сам, без id. */}
+              <option value={0}>{t("ws.personal_files")}</option>
+              {workspaces
+                .filter((w) => w.is_personal === 0)
+                .map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+        ) : null}
         <PreferencesButton />
         <div className="menu-wrap" ref={menuRef}>
           <button

@@ -11,6 +11,7 @@
 import "ws_model.baga"
 import "ws_roles.baga"
 import "user_actions.baga"
+import "../tree/ws_cleanup.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -240,12 +241,16 @@ fn act_ws_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_q(q), 409, "cannot delete the personal workspace")
     }
     let mut d = orm_db_q(q)
+    // Първо дървото: без това възлите остават сираци, а hash-овете им
+    // държат blob-ове живи завинаги.
+    let pur = tree_ws_purge(d, ws_id)?
+    if pur.err != "" {
+        return act_err(pur.db, 500, pur.err)
+    }
+    d = pur.db
     let del = ws_delete(d, ws_id)?
     if orm_ok(del) == 0 {
         return act_err(orm_db_exec(del), 500, orm_err_exec(del))
     }
-    d = orm_db_exec(del)
-    // v1: възлите още не са вързани за workspace (Фаза 2, стъпка files).
-    // Когато стане, тук ще се трие и дървото на workspace-а.
-    return act_no_content(d)
+    return act_no_content(orm_db_exec(del))
 }

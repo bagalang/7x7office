@@ -240,12 +240,12 @@ fn ops_run_extract(db: OrmDb, job: i64, payload: str) -> OpsExtract !IO !Net !Ti
         let s = ops_set_status(orm_db_q(q), job, "done")?
         return OpsExtract { ok: 1, db: orm_db_exec(s), err: "" }
     }
-    let owner = orm_cell_by_i64(q, 0, "owner_id")
+    let ws = orm_cell_by_i64(q, 0, "workspace_id")
     let path = orm_cell_by(q, 0, "path")
     let ext = tree_ext(path)
     let body = data_blob_get(orm_cell_by(q, 0, "hash"))?
     let text = tree_extract_text(ext, body)?
-    let wrote = tree_text_put(orm_db_q(q), nid, owner, text)?
+    let wrote = tree_text_put(orm_db_q(q), nid, ws, text)?
     if wrote != 0 {
         return OpsExtract { ok: 0, db: orm_db_q(q), err: "text index write failed" }
     }

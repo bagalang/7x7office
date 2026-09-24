@@ -6,6 +6,7 @@ import "schema.baga"
 import "lib/pass.baga"
 import "idm/user_model.baga"
 import "system/scheduler.baga"
+import "tree/backfill.baga"
 import "fmrbaga/app.baga"
 import "ormbaga/orm.baga"
 import "ormbaga/migrate.baga"
@@ -28,9 +29,33 @@ fn boot_migrate() -> i64 !Net !IO !Random {
         return 1
     }
     print(concat("migrate applied=", int_to_str(migrate_applied_n(up))))
+    let rc0 = boot_backfill_tree(migrate_db(up))?
+    if rc0 != 0 {
+        orm_close(migrate_db(up))?
+        return rc0
+    }
     let rc = boot_seed_admin(migrate_db(up))?
     orm_close(migrate_db(up))?
     return rc
+}
+
+// Връзва старите възли (owner-ски, отпреди Фаза 2) към личния workspace на
+// собственика. Идемпотентно: след първото пускане няма какво да мести.
+// Провалът НЕ спира стартирането — приложението работи и без него, само
+// старите файлове остават невидими до следващия рестарт. Затова е warn+0.
+//
+// ВАЖНО: връзката НЕ се затваря тук — тя е на викащия (migrate/seed я
+// ползват след това). Затварянето ѝ тук оставяше seed-а без връзка.
+fn boot_backfill_tree(db: OrmDb) -> i64 !Net !IO {
+    let r = tree_backfill(db)?
+    if r.err != "" {
+        eprintln(concat("tree backfill: ", r.err))
+        return 0
+    }
+    if r.nodes > 0 {
+        print(concat("tree backfill: вързани ", concat(int_to_str(r.nodes), " възела към личните пространства")))
+    }
+    return 0
 }
 
 // First-run installer: SECP_ADMIN_EMAIL + SECP_ADMIN_PASSWORD → admin user.

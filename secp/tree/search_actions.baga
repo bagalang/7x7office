@@ -20,7 +20,7 @@ import "std/os/os.baga"
 // ---------- GET /v1/search ----------
 
 fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db)?
+    let t = tree_auth(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
     }
@@ -31,7 +31,7 @@ fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let pat = concat(concat("%", tree_search_esc(q)), "%")
     let limit = tree_search_limit(fmr_query(ctx, "limit"))
-    let nq = tree_search_nodes(t.out.db, t.owner, pat, limit)?
+    let nq = tree_search_nodes(t.out.db, t.ws, pat, limit)?
     if orm_ok_q(nq) == 0 {
         return act_err(orm_db_q(nq), 500, orm_err_q(nq))
     }

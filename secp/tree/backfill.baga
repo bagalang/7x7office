@@ -1,0 +1,103 @@
+// tree/backfill.baga — еднократно пренасяне на старите възли в личния
+// workspace на собственика им (Фаза 2, стъпка files).
+//
+// Защо не е в миграцията: boilaDB няма INSERT/UPDATE със SELECT (виж gaps),
+// а и id-то на личния workspace се ражда чак при `ws_personal_ensure`, т.е.
+// не съществува като константа, която SQL да ползва. Затова е в кода.
+//
+// Защо изобщо: до Фаза 2 скопът беше `owner_id`. Ако просто сменим
+// заявките на `workspace_id`, всички съществуващи файлове стават
+// невидими (workspace_id = 0). Затова първо ги връзваме към личния
+// workspace — така „моите файлове" продължават да са си мои, а екипните
+// пространства започват празни.
+//
+// Идемпотентно: редовете с валиден workspace_id не се пипат.
+
+import "model.baga"
+import "versions.baga"
+import "text.baga"
+import "../idm/user_model.baga"
+import "../idm/ws_model.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+// Колко реда са вързани към личен workspace при това пускане.
+struct TreeBackfill {
+    db: OrmDb,
+    nodes: i64,
+    err: str
+}
+
+// Owner-ски редове, които още нямат workspace. `IS NULL` покрива boila
+// (колоната е добавена nullable), `= 0` — Postgres (DEFAULT 0).
+fn tree_backfill_owner_nodes(db: OrmDb, owner: i64) -> OrmCount !IO !Net {
+    let sql = concat("SELECT COUNT(*) AS count FROM tree_nodes WHERE owner_id = ", concat(int_to_str(owner), " AND (workspace_id IS NULL OR workspace_id = 0)"))
+    return orm_count_sql(db, sql)?
+}
+
+fn tree_backfill_set_ws_nodes(db: OrmDb, owner: i64, ws: i64) -> OrmExec !IO !Net {
+    let sql = concat("UPDATE tree_nodes SET workspace_id = ", concat(int_to_str(ws), concat(" WHERE owner_id = ", concat(int_to_str(owner), " AND (workspace_id IS NULL OR workspace_id = 0)"))))
+    return orm_exec(db, sql)?
+}
+
+// Версиите и текстовият индекс не са самостоятелни обекти — те следват
+// възела. Връзваме и тях, за да не останат редове без скоуп (иначе
+// търсенето и историята ще ги пропускат).
+fn tree_backfill_set_ws_derived(db: OrmDb, owner: i64, ws: i64) -> OrmExec !IO !Net {
+    let sql = concat("UPDATE tree_versions SET workspace_id = ", concat(int_to_str(ws), concat(" WHERE owner_id = ", concat(int_to_str(owner), " AND (workspace_id IS NULL OR workspace_id = 0)"))))
+    let e = orm_exec(db, sql)?
+    if orm_ok(e) == 0 {
+        return e
+    }
+    let sql2 = concat("UPDATE tree_text SET workspace_id = ", concat(int_to_str(ws), concat(" WHERE owner_id = ", concat(int_to_str(owner), " AND (workspace_id IS NULL OR workspace_id = 0)"))))
+    return orm_exec(orm_db_exec(e), sql2)?
+}
+
+// За всеки потребител: осигури личния му workspace и прехвърли
+// непренесените му редове там. Грешка при един потребител не спира
+// останалите — файловете на другите не бива да чакат.
+fn tree_backfill(db: OrmDb) -> TreeBackfill !IO !Net {
+    let uq = idm_user_list(db)?
+    if orm_ok_q(uq) == 0 {
+        return TreeBackfill { db: db, nodes: 0, err: orm_err_q(uq) }
+    }
+    let mut d = orm_db_q(uq)
+    let mut total: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(uq) {
+        let uid = orm_cell_by_i64(uq, i, "id")
+        let ens = ws_personal_ensure(d, uid)?
+        if ens.err != "" {
+            return TreeBackfill { db: ens.db, nodes: total, err: ens.err }
+        }
+        d = ens.db
+        let c = tree_backfill_owner_nodes(d, uid)?
+        if orm_ok_c(c) == 0 {
+            return TreeBackfill { db: orm_db_c(c), nodes: total, err: orm_err_c(c) }
+        }
+        d = orm_db_c(c)
+        if orm_count_n(c) < 1 {
+            i = i + 1
+        } else {
+            let n = tree_backfill_set_ws_nodes(d, uid, ens.id)?
+            if orm_ok(n) == 0 {
+                return TreeBackfill { db: orm_db_exec(n), nodes: total, err: orm_err_exec(n) }
+            }
+            d = orm_db_exec(n)
+            let v = tree_backfill_set_ws_derived(d, uid, ens.id)?
+            if orm_ok(v) == 0 {
+                return TreeBackfill { db: orm_db_exec(v), nodes: total, err: orm_err_exec(v) }
+            }
+            d = orm_db_exec(v)
+            total = total + orm_count_n(c)
+            i = i + 1
+        }
+    }
+    return TreeBackfill { db: d, nodes: total, err: "" }
+}
+
+// Колко възела още нямат workspace (за /ready и за лога). След успешен
+// backfill е 0; стойност > 0 значи, че нещо е останало недовършено.
+fn tree_backfill_left(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT COUNT(*) AS count FROM tree_nodes WHERE workspace_id IS NULL OR workspace_id = 0")?
+}

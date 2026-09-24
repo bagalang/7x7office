@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "./AppShell";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
+import { useWorkspace, canWrite } from "./WorkspaceProvider";
 import { FilePreview, VersionsDialog } from "./FilePreview";
 import {
   IconChevronRight,
@@ -25,7 +26,7 @@ import {
   FsList,
   FsNode,
   api,
-  authedFetch,
+  authedFetchWs,
   downloadFile,
   putFile,
   qpath,
@@ -76,6 +77,8 @@ type SortKey = "name" | "size" | "date";
 
 export function FileBrowser() {
   const { t, lang } = useI18n();
+  const { wsId, active } = useWorkspace();
+  const writable = canWrite(active);
   const [path, setPath] = useState("/");
   const [items, setItems] = useState<FsNode[]>([]);
   const [error, setError] = useState("");
@@ -96,6 +99,14 @@ export function FileBrowser() {
     const saved = readStorage("secp.view");
     if (saved === "grid" || saved === "list") setView(saved);
   }, []);
+
+  // Смяна на пространството = друг корен: затваряме прегледа и се връщаме в
+  // "/", за да не искаме път, който в новото пространство не съществува.
+  useEffect(() => {
+    setPath("/");
+    setOpen(null);
+    setQuery("");
+  }, [wsId]);
 
   function pickView(v: View) {
     setView(v);
@@ -120,7 +131,7 @@ export function FileBrowser() {
     return () => {
       cancel = true;
     };
-  }, [path, reload, t]);
+  }, [path, reload, t, wsId]);
 
   const filtered = items.filter((n) =>
     query ? n.name.toLowerCase().includes(query.toLowerCase()) : true
@@ -226,12 +237,16 @@ export function FileBrowser() {
           <IconDownload />
         </button>
       ) : null}
-      <button type="button" className="icon-btn" title={t("files.rename")} onClick={() => startRename(node)}>
-        <IconPencil />
-      </button>
-      <button type="button" className="icon-btn danger" title={t("files.delete")} onClick={() => setDeleteTarget(node)}>
-        <IconTrash />
-      </button>
+      {writable ? (
+        <>
+          <button type="button" className="icon-btn" title={t("files.rename")} onClick={() => startRename(node)}>
+            <IconPencil />
+          </button>
+          <button type="button" className="icon-btn danger" title={t("files.delete")} onClick={() => setDeleteTarget(node)}>
+            <IconTrash />
+          </button>
+        </>
+      ) : null}
     </span>
   );
 
@@ -261,23 +276,29 @@ export function FileBrowser() {
         </div>
 
         <div className="toolbar">
-          <label className="btn">
-            <IconUpload width={16} height={16} />
-            {t("files.upload")}
-            <input
-              type="file"
-              multiple
-              hidden
-              onChange={(e) => {
-                void onUpload(e.target.files);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <button type="button" className="btn ghost" onClick={() => setMkdirOpen(true)}>
-            <IconPlus width={16} height={16} />
-            {t("files.new_folder")}
-          </button>
+          {writable ? (
+            <label className="btn">
+              <IconUpload width={16} height={16} />
+              {t("files.upload")}
+              <input
+                type="file"
+                multiple
+                hidden
+                onChange={(e) => {
+                  void onUpload(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          ) : (
+            <span className="badge muted">{t("ws.readonly")}</span>
+          )}
+          {writable ? (
+            <button type="button" className="btn ghost" onClick={() => setMkdirOpen(true)}>
+              <IconPlus width={16} height={16} />
+              {t("files.new_folder")}
+            </button>
+          ) : null}
           <span className="grow" />
           <select
             className="select"
@@ -508,12 +529,13 @@ export function messageOf(err: unknown, fallback: string): string {
 }
 
 function Thumb({ path }: { path: string }) {
+  const { wsId } = useWorkspace();
   const [url, setUrl] = useState("");
   useEffect(() => {
     let dead = false;
     let obj = "";
     (async () => {
-      const res = await authedFetch(`/v1/fs/thumb?path=${qpath(path)}`);
+      const res = await authedFetchWs(`/v1/fs/thumb?path=${qpath(path)}`);
       if (!res.ok || dead) return;
       obj = URL.createObjectURL(await res.blob());
       if (dead) {
@@ -526,7 +548,7 @@ function Thumb({ path }: { path: string }) {
       dead = true;
       if (obj) URL.revokeObjectURL(obj);
     };
-  }, [path]);
+  }, [path, wsId]);
   if (!url) return <IconFile width={18} height={18} />;
   return <img src={url} alt="" />;
 }

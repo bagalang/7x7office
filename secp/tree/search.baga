@@ -33,10 +33,10 @@ fn tree_search_esc(q: str) -> str {
 
 // Един параметър, 2 колони → не можем `$1` на две места с ormbaga
 // (param-ите се броят по позиция), затова подаваме шаблона два пъти.
-fn tree_search_nodes(db: OrmDb, owner: i64, pat: str, limit: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT n.id, n.name, n.path, n.is_dir, n.size, n.updated_at, n.hash, CASE WHEN t.node_id IS NULL THEN 0 ELSE 1 END AS in_text FROM tree_nodes n LEFT JOIN tree_text t ON t.node_id = n.id WHERE n.owner_id = $1 AND n.is_dir = 0 AND (n.name ILIKE $2 ESCAPE '\\' OR t.text ILIKE $3 ESCAPE '\\') ORDER BY n.name LIMIT "
+fn tree_search_nodes(db: OrmDb, ws: i64, pat: str, limit: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT n.id, n.name, n.path, n.is_dir, n.size, n.updated_at, n.hash, CASE WHEN t.node_id IS NULL THEN 0 ELSE 1 END AS in_text FROM tree_nodes n LEFT JOIN tree_text t ON t.node_id = n.id WHERE n.workspace_id = $1 AND n.is_dir = 0 AND (n.name ILIKE $2 ESCAPE '\\' OR t.text ILIKE $3 ESCAPE '\\') ORDER BY n.name LIMIT "
     let vals = vec_new()
-    vec_push(vals, int_to_str(owner))
+    vec_push(vals, int_to_str(ws))
     vec_push(vals, pat)
     vec_push(vals, pat)
     return orm_query_params_str(db, concat(sql, int_to_str(limit)), vals)?

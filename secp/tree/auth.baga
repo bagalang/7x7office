@@ -1,7 +1,14 @@
-// tree/auth.baga — bearer → owner id + query path decoding + mime таблица.
+// tree/auth.baga — bearer → workspace scope + query path decoding + mime таблица.
 // Общи за всички файлови handler-и; изнесено от actions.baga (filesize gate).
+//
+// Фаза 2: файловете са на WORKSPACE, не на потребител. Всеки handler казва
+// какво ниво му трябва (`need`): 1 = четене (viewer), 2 = запис (editor).
+// Без ?workspace_id= се работи в ЛИЧНИЯ workspace — така старите URL-и
+// продължават да значат същото и никой клиент не се чупи.
 
 import "../idm/user_model.baga"
+import "../idm/ws_model.baga"
+import "../idm/ws_roles.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -10,11 +17,13 @@ import "pathbaga/path.baga"
 import "querybaga/query.baga"
 import "std/str/str.baga"
 
-// ---------- auth: bearer → owner id ----------
+// ---------- auth: bearer → workspace scope ----------
 
 struct TreeAuth {
     ok: i64,
+    ws: i64,
     owner: i64,
+    level: i64,
     out: FmrOut
 }
 
@@ -24,10 +33,37 @@ fn tree_qpath(ctx: FmrCtx, name: str) -> str {
     return tree_norm(query_decode_val(fmr_query(ctx, name)))
 }
 
-fn tree_auth(ctx: FmrCtx, db: OrmDb) -> TreeAuth !IO !Net {
+// ?workspace_id= — липсващо/нечислово → 0, което значи „личният".
+// Не ползваме parse_int директно: той приема и "-5"/"1x" и после
+// отрицателно id тихо би минало за „няма достъп" вместо за грешка.
+fn tree_qws(ctx: FmrCtx) -> i64 {
+    let raw = str_trim(fmr_query(ctx, "workspace_id"))
+    if raw == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
+fn tree_auth_deny(db: OrmDb, out: FmrOut) -> TreeAuth {
+    return TreeAuth { ok: 0, ws: 0, owner: 0, level: 0, out: out }
+}
+
+// need: 1 = може да чете, 2 = може да пише (виж ws_roles.baga).
+// Чуждият workspace дава 404, не 403 — иначе по кода се разбира, че
+// съществува (същото правило като в ws_actions.baga).
+fn tree_auth(ctx: FmrCtx, db: OrmDb, need: i64) -> TreeAuth !IO !Net {
     let a = act_require_auth(ctx, db)
     if a.ok == 0 {
-        return TreeAuth { ok: 0, owner: 0, out: a.out }
+        return tree_auth_deny(db, a.out)
     }
     let q = idm_user_find_by_email(db, a.ctx.user_sub)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
@@ -35,9 +71,51 @@ fn tree_auth(ctx: FmrCtx, db: OrmDb) -> TreeAuth !IO !Net {
         if orm_ok_q(q) == 1 {
             d = orm_db_q(q)
         }
-        return TreeAuth { ok: 0, owner: 0, out: act_err(d, 401, "unknown user") }
+        return tree_auth_deny(d, act_err(d, 401, "unknown user"))
     }
-    return TreeAuth { ok: 1, owner: orm_cell_by_i64(q, 0, "id"), out: fmr_out(http_response(200, ""), orm_db_q(q)) }
+    let mut d = orm_db_q(q)
+    let uid = orm_cell_by_i64(q, 0, "id")
+    let is_admin = orm_cell_by_i64(q, 0, "is_admin")
+    let mut ws = tree_qws(ctx)
+    if ws == 0 {
+        // Личният workspace се създава при нужда: файловете на стар
+        // потребител трябва да имат къде да живеят още при първата заявка.
+        let ens = ws_personal_ensure(d, uid)?
+        if ens.err != "" {
+            return tree_auth_deny(ens.db, act_err(ens.db, 500, ens.err))
+        }
+        ws = ens.id
+        d = ens.db
+    }
+    if ws < 1 {
+        return tree_auth_deny(d, act_404(d, "workspace not found"))
+    }
+    // Съществуването се проверява ПРЕДИ правата: админът иначе минава
+    // директно (ws_access връща admin за всеки id) и „влиза" в
+    // несъществуващ workspace, което обърква клиента с празен списък
+    // вместо с 404.
+    let wq = ws_find(d, ws)?
+    if orm_ok_q(wq) == 0 {
+        return tree_auth_deny(orm_db_q(wq), act_err(orm_db_q(wq), 500, orm_err_q(wq)))
+    }
+    if orm_nrows(wq) < 1 {
+        return tree_auth_deny(orm_db_q(wq), act_404(orm_db_q(wq), "workspace not found"))
+    }
+    d = orm_db_q(wq)
+    let acc = ws_access(d, ws, uid, is_admin)?
+    if acc.ok == 0 {
+        return tree_auth_deny(acc.db, act_404(acc.db, "workspace not found"))
+    }
+    if ws_level_allows(acc.level, need) == 0 {
+        return tree_auth_deny(acc.db, act_err(acc.db, 403, "insufficient rights"))
+    }
+    return TreeAuth {
+        ok: 1,
+        ws: ws,
+        owner: uid,
+        level: acc.level,
+        out: fmr_out(http_response(200, ""), acc.db)
+    }
 }
 
 // ---------- mime ----------

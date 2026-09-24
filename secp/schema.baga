@@ -131,6 +131,63 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_idm_workspace_members_on_user ON idm_workspace_members (user_id)",
         "DROP INDEX IF EXISTS index_idm_workspace_members_on_user"
     )
+    // Фаза 2 (стъпка files): възлите вече принадлежат на workspace, не на
+    // потребител. `owner_id` остава като „кой го е качил" (одит), но
+    // СКОУПЪТ е workspace_id — иначе споделянето е само козметично.
+    //
+    // DEFAULT 0 е нарочно: старите редове получават 0, а backfill-ът при
+    // boot ги мести в личния workspace на собственика. Не може да се
+    // напише като SQL UPDATE…FROM, защото boilaDB няма INSERT/UPDATE със
+    // SELECT (виж gaps) — затова е в кода, не в миграцията.
+    set = migrate_add(
+        set,
+        20260924017,
+        "add_tree_nodes_workspace_id",
+        "ALTER TABLE tree_nodes ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE tree_nodes DROP COLUMN workspace_id"
+    )
+    // Старият UNIQUE (owner_id, path) вече е ГРЕШЕН: един потребител може да
+    // има едно и също име в личния си workspace и в екипен, а това са два
+    // различни реда. Махаме го и слагаме индекса върху новия скоуп.
+    set = migrate_add(
+        set,
+        20260924018,
+        "drop_tree_nodes_owner_unique",
+        "ALTER TABLE tree_nodes DROP CONSTRAINT IF EXISTS tree_nodes_owner_id_path_key",
+        "ALTER TABLE tree_nodes ADD CONSTRAINT tree_nodes_owner_id_path_key UNIQUE (owner_id, path)"
+    )
+    set = migrate_add(
+        set,
+        20260924019,
+        "index_tree_nodes_workspace_parent",
+        "CREATE INDEX index_tree_nodes_on_workspace_parent ON tree_nodes (workspace_id, parent_path)",
+        "DROP INDEX IF EXISTS index_tree_nodes_on_workspace_parent"
+    )
+    // Версиите и текстовият индекс са производни на възлите — те също
+    // минават на workspace скоуп. Иначе версиите/търсенето на файлове от
+    // екипен workspace остават „закачени" за потребител и се виждат
+    // погрешно, когато членството се промени.
+    set = migrate_add(
+        set,
+        20260924020,
+        "add_tree_versions_workspace_id",
+        "ALTER TABLE tree_versions ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE tree_versions DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924021,
+        "add_tree_text_workspace_id",
+        "ALTER TABLE tree_text ADD COLUMN workspace_id BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE tree_text DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924022,
+        "index_tree_text_workspace",
+        "CREATE INDEX index_tree_text_on_workspace ON tree_text (workspace_id)",
+        "DROP INDEX IF EXISTS index_tree_text_on_workspace"
+    )
     return set
 }
 
@@ -252,6 +309,48 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_idm_workspace_members_user",
         "CREATE INDEX IF NOT EXISTS index_idm_workspace_members_on_user ON idm_workspace_members (user_id)",
         "DROP INDEX IF EXISTS index_idm_workspace_members_on_user ON idm_workspace_members"
+    )
+    // Фаза 2 (стъпка files): скоупът на възлите става workspace, не owner.
+    // boila: ALTER ADD е nullable-only (без DEFAULT/NOT NULL), затова колоната
+    // се добавя празна и backfill-ът при boot я пълни. UNIQUE няма изобщо
+    // (виж gaps G26), така че няма и какво да се маха — за разлика от PG,
+    // където старият UNIQUE (owner_id, path) вече е грешен.
+    set = migrate_add(
+        set,
+        20260924017,
+        "add_tree_nodes_workspace_id",
+        "ALTER TABLE tree_nodes ADD COLUMN workspace_id BIGINT",
+        "ALTER TABLE tree_nodes DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924019,
+        "index_tree_nodes_workspace_parent",
+        "CREATE INDEX IF NOT EXISTS index_tree_nodes_on_workspace_parent ON tree_nodes (workspace_id, parent_path)",
+        "DROP INDEX IF EXISTS index_tree_nodes_on_workspace_parent ON tree_nodes"
+    )
+    // Производните таблици (версии, текстов индекс) — също на workspace.
+    // boila: nullable-only ADD, пълни се от backfill-а при boot.
+    set = migrate_add(
+        set,
+        20260924020,
+        "add_tree_versions_workspace_id",
+        "ALTER TABLE tree_versions ADD COLUMN workspace_id BIGINT",
+        "ALTER TABLE tree_versions DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924021,
+        "add_tree_text_workspace_id",
+        "ALTER TABLE tree_text ADD COLUMN workspace_id BIGINT",
+        "ALTER TABLE tree_text DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924022,
+        "index_tree_text_workspace",
+        "CREATE INDEX IF NOT EXISTS index_tree_text_on_workspace ON tree_text (workspace_id)",
+        "DROP INDEX IF EXISTS index_tree_text_on_workspace ON tree_text"
     )
     return set
 }

@@ -59,9 +59,18 @@
       /v1/workspaces/members`. Чуждият workspace дава 404 (не издава, че съществува); личният
       не се трие и не приема членове; последният owner не може да бъде махнат/понижен.
       UI: `/workspaces` (4 езика, светла/тъмна тема)
+- [x] `tree_nodes` мина на `workspace_id` (2026-09-24): скоупът на файловете вече е
+      пространството, не собственикът. Миграции `20260924017–22`: `workspace_id` в
+      `tree_nodes`, `tree_versions`, `tree_text` + индекс `(workspace_id, parent_path)`;
+      старият `UNIQUE (owner_id, path)` е махнат, защото един потребител може да има
+      еднакво име в личното и в екипното пространство (в boila няма UNIQUE — виж G26).
+      `owner_id` остава като „кой го е качил" (одит). `tree_auth` вече приема ниво
+      read(1)/write(2) и резолвва достъпа през `ws_access`; `?workspace_id=` (липсва →
+      личното, лениво създадено). Старите възли се връзват към личното пространство на
+      собственика при boot (`tree/backfill.baga`). Изтриване на пространство маха цялото
+      дърво — възли, версии, текст и blob-ове (`tree/ws_cleanup.baga`). UI: избор на
+      пространство в горната лента; при `viewer` действията за запис са скрити (4 езика).
 - [ ] `roles`/`groups` като собствени (извън фиксираната тройка); ACL таблица: (subject: user/role, node, right: read/write/share, inherited)
-- [ ] `tree_nodes` още е с `owner_id`, не с `workspace_id` — връзването е следващата стъпка
-      (schema.baga migration), с пренасяне на съществуващите възли в личния workspace
 - [ ] Изчисляване на ефективни права по пътя (кеш; по-късно policy engine)
 - [ ] Админ UI за потребители/workspaces в tplbaga (сега е Next: `/users`, `/workspaces`)
 - [ ] otpbaga TOTP (по желание за админ), oauthbaga OIDC login (RS256/ES256 verify)

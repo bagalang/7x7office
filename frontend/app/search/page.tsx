@@ -9,6 +9,7 @@ import Link from "next/link";
 import { AppShell } from "../../components/AppShell";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useI18n } from "../../components/I18nProvider";
+import { useWorkspace } from "../../components/WorkspaceProvider";
 import { api, downloadFile, FsNode, SearchHit } from "../../lib/api";
 import { formatBytes, messageOf } from "../../components/FileBrowser";
 import { IconDownload, IconFileText, IconSearch } from "../../components/icons";
@@ -27,6 +28,7 @@ function toNode(hit: SearchHit): FsNode {
 
 function SearchInner() {
   const { t } = useI18n();
+  const { wsId } = useWorkspace();
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -43,6 +45,14 @@ function SearchInner() {
     setQuery(q);
     setSubmitted(q);
   }, []);
+
+  // Смяна на пространството: резултатите са от стария обхват — чистим, за да
+  // не останат файлове, които в новия няма (или не са достъпни).
+  useEffect(() => {
+    setHits([]);
+    setSearched(false);
+    lastSearched.current = "";
+  }, [wsId]);
 
   const run = useCallback(
     async (raw: string) => {

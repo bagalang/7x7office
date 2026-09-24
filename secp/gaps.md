@@ -57,3 +57,11 @@
 | G28 | boilaDB дава id с `MAX(id)+1`, значи изтрит workspace може да „преизползва" id | не разчитаме на id-то като дълготраен ключ навън (slug-ът е този, който влиза в URL-и); членствата се трият ръчно | `SERIAL`/`IDENTITY` и в boila, или отделен брояч, който не се връща назад |
 | G29 | `orm_where_eq_str`/`orm_count_sql` нямат параметризиран вариант за две+ условия с `count` | `ws_owner_count` сглобява `orm_query_params_str` + `COUNT(*) AS count` и чете клетката (`orm_count_sql_params` липсва) | `orm_count_params(db, sql, vals)` в ormbaga |
 | G30 | няма `str_is_digits` в std — валидирането на `?workspace_id=` стана с ръчен цикъл по байтове | локален цикъл в `ws_qid` | `str_is_digits(s) -> i64` в `std/str` |
+
+## Фаза 2 (files → workspace скоуп)
+
+| # | Дупка | Заобикаляне | Правилно решение |
+|---|-------|-------------|------------------|
+| G31 | няма `UPDATE ... FROM`/`UPDATE ... SELECT` (PG) съответствие в boilaDB, затова backfill на `workspace_id` не може да е една заявка по `owner_id` | boot backfill минава ред по ред в приложението (`tree/backfill.baga`): вдига личното пространство на собственика, после `UPDATE ... WHERE id = $n` | масова миграция в диалект-независим вид (или поддръжка на `UPDATE ... FROM` в boila) |
+| G32 | `DELETE` по условие, което зависи от JOIN („всички версии на възлите в това пространство"), не е налично преносимо | `tree_ws_purge` първо събира id-тата/хешовете с `SELECT`, после трие по списък (`tree/ws_cleanup.baga`) | `DELETE ... USING`/подзаявка в boila, или каскадно триене по FK |
+| G33 | няма начин да се разбере дали даден ред е „стар" (преди миграция), освен по `workspace_id = 0` — а 0 е валиден „няма" само защото няма такова id | backfill проверява `IS NULL OR = 0` (`tree_backfill_left`) | изрична колона `backfilled_at` или миграционен маркер в служебна таблица |
