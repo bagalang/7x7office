@@ -188,6 +188,29 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_tree_text_on_workspace ON tree_text (workspace_id)",
         "DROP INDEX IF EXISTS index_tree_text_on_workspace"
     )
+    // Фаза 2 (ACL): изрични права по ПЪТ. Ролята в пространството дава
+    // базовото ниво; този ред го разширява или стеснява. `inherit=1` значи
+    // „и за всичко под пътя". `kind` е 'user' или 'role' — subject-ът се
+    // пази в две колони, за да е прост WHERE-ът (boila няма UNION в DML).
+    //
+    // ON DELETE CASCADE: изтрит workspace не бива да оставя права-духове,
+    // които след преизползване на id-то (boila: MAX(id)+1) да важат за
+    // друг. Правата на изтрит ВЪЗЕЛ се трият от кода (tree/acl_model.baga),
+    // защото пътят не е FK.
+    set = migrate_add(
+        set,
+        20260924023,
+        "create_tree_acl",
+        "CREATE TABLE tree_acl (id BIGSERIAL PRIMARY KEY, workspace_id BIGINT NOT NULL REFERENCES idm_workspaces(id) ON DELETE CASCADE, path TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'user', subject_user_id BIGINT NOT NULL DEFAULT 0, subject_role TEXT NOT NULL DEFAULT '', acl_level BIGINT NOT NULL DEFAULT 1, inherit BIGINT NOT NULL DEFAULT 1, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS tree_acl"
+    )
+    set = migrate_add(
+        set,
+        20260924024,
+        "index_tree_acl_ws_path",
+        "CREATE INDEX index_tree_acl_on_ws_path ON tree_acl (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_tree_acl_on_ws_path"
+    )
     return set
 }
 
@@ -351,6 +374,22 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_tree_text_workspace",
         "CREATE INDEX IF NOT EXISTS index_tree_text_on_workspace ON tree_text (workspace_id)",
         "DROP INDEX IF EXISTS index_tree_text_on_workspace ON tree_text"
+    )
+    // Фаза 2 (ACL): изрични права по път. boila: без SERIAL/FK/DEFAULT/
+    // UNIQUE — id-то се дава с MAX(id)+1, subject-ът е в две колони.
+    set = migrate_add(
+        set,
+        20260924023,
+        "create_tree_acl",
+        "CREATE TABLE IF NOT EXISTS tree_acl (id BIGINT, workspace_id BIGINT, path TEXT, kind TEXT, subject_user_id BIGINT, subject_role TEXT, acl_level BIGINT, inherit BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS tree_acl"
+    )
+    set = migrate_add(
+        set,
+        20260924024,
+        "index_tree_acl_ws_path",
+        "CREATE INDEX IF NOT EXISTS index_tree_acl_on_ws_path ON tree_acl (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_tree_acl_on_ws_path ON tree_acl"
     )
     return set
 }

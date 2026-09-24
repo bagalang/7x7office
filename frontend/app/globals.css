@@ -708,12 +708,31 @@ a { color: var(--accent); text-decoration: none; }
   padding: 20px;
 }
 .dialog h2 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
+.dialog.wide { width: min(100%, 560px); }
 .dialog .dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
 }
+
+/* ---------- share / ACL dialog ---------- */
+
+.share-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.share-form .share-kind { display: flex; gap: 12px; font-size: 13px; }
+.share-form .share-kind label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.share-form .share-inherit { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; }
+.share-form .dialog-actions { margin: 0 0 0 auto; }
+.share-form .input,
+.share-form .select { width: auto; min-width: 130px; }
 
 /* ---------- badge ---------- */
 

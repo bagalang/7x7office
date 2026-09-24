@@ -9,6 +9,8 @@
 import "../idm/user_model.baga"
 import "../idm/ws_model.baga"
 import "../idm/ws_roles.baga"
+import "acl_model.baga"
+import "acl_roles.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -24,6 +26,8 @@ struct TreeAuth {
     ws: i64,
     owner: i64,
     level: i64,
+    role: str,
+    is_admin: i64,
     out: FmrOut
 }
 
@@ -54,13 +58,17 @@ fn tree_qws(ctx: FmrCtx) -> i64 {
 }
 
 fn tree_auth_deny(db: OrmDb, out: FmrOut) -> TreeAuth {
-    return TreeAuth { ok: 0, ws: 0, owner: 0, level: 0, out: out }
+    return TreeAuth { ok: 0, ws: 0, owner: 0, level: 0, role: "", is_admin: 0, out: out }
 }
 
 // need: 1 = може да чете, 2 = може да пише (виж ws_roles.baga).
 // Чуждият workspace дава 404, не 403 — иначе по кода се разбира, че
 // съществува (същото правило като в ws_actions.baga).
-fn tree_auth(ctx: FmrCtx, db: OrmDb, need: i64) -> TreeAuth !IO !Net {
+//
+// `path`: ако е зададен, върху базовото ниво от ролята се прилагат и
+// изричните ACL редове за този път (най-специфичният печели). Ако
+// липсва (празен низ), важи само ролята — както досега.
+fn tree_auth(ctx: FmrCtx, db: OrmDb, need: i64, path: str) -> TreeAuth !IO !Net {
     let a = act_require_auth(ctx, db)
     if a.ok == 0 {
         return tree_auth_deny(db, a.out)
@@ -106,15 +114,33 @@ fn tree_auth(ctx: FmrCtx, db: OrmDb, need: i64) -> TreeAuth !IO !Net {
     if acc.ok == 0 {
         return tree_auth_deny(acc.db, act_404(acc.db, "workspace not found"))
     }
-    if ws_level_allows(acc.level, need) == 0 {
-        return tree_auth_deny(acc.db, act_err(acc.db, 403, "insufficient rights"))
+    let mut level = acc.level
+    d = acc.db
+    // Изричните права по път се прилагат върху ролята. owner/admin се
+    // пазят от самозаключване (protect=1 — виж acl_roles.baga).
+    if path != "" {
+        let mut protect: i64 = 0
+        if acc.role == "admin" || acc.role == "owner" {
+            protect = 1
+        }
+        let eff = tree_acl_effective_at(d, ws, uid, acc.role, tree_norm(path), acc.level, protect)?
+        if eff.err != "" {
+            return tree_auth_deny(eff.db, act_err(eff.db, 500, eff.err))
+        }
+        level = eff.level
+        d = eff.db
+    }
+    if ws_level_allows(level, need) == 0 {
+        return tree_auth_deny(d, act_err(d, 403, "insufficient rights"))
     }
     return TreeAuth {
         ok: 1,
         ws: ws,
         owner: uid,
-        level: acc.level,
-        out: fmr_out(http_response(200, ""), acc.db)
+        level: level,
+        role: acc.role,
+        is_admin: is_admin,
+        out: fmr_out(http_response(200, ""), d)
     }
 }
 

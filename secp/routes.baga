@@ -11,6 +11,7 @@ import "tree/actions.baga"
 import "tree/docs.baga"
 import "tree/versions_files.baga"
 import "tree/search_actions.baga"
+import "tree/acl_actions.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -60,6 +61,9 @@ fn RID_WS_MEMBERS() -> i64 { return 48 }
 fn RID_WS_MEMBER_ADD() -> i64 { return 49 }
 fn RID_WS_MEMBER_UPDATE() -> i64 { return 50 }
 fn RID_WS_MEMBER_REMOVE() -> i64 { return 51 }
+fn RID_FS_ACL_LIST() -> i64 { return 52 }
+fn RID_FS_ACL_SET() -> i64 { return 53 }
+fn RID_FS_ACL_DELETE() -> i64 { return 54 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -107,6 +111,9 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/fs/zip/get", RID_FS_ZIP_GET(), "", "fs", 0, "", "bytes", "200", "path,entry")
     app = fmr_route_meta(app, "GET", "/v1/search", RID_SEARCH(), "", "fs", 0, "", "SearchList", "200", "q")
     app = fmr_route_meta(app, "POST", "/v1/search/reindex", RID_SEARCH_REINDEX(), "", "fs", 0, "", "ReindexResult", "200", "")
+    app = fmr_route_meta(app, "GET", "/v1/fs/acl", RID_FS_ACL_LIST(), "", "fs", 0, "", "AclList", "200", "path")
+    app = fmr_route_meta(app, "POST", "/v1/fs/acl", RID_FS_ACL_SET(), "", "fs", 0, "AclSet", "AclRow", "200", "workspace_id")
+    app = fmr_route_meta(app, "DELETE", "/v1/fs/acl", RID_FS_ACL_DELETE(), "", "fs", 0, "", "-", "204", "acl_id")
     return app
 }
 
@@ -166,5 +173,8 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if id == RID_FS_ZIP_GET() { return act_fs_zip_get(ctx, db)? }
     if id == RID_SEARCH() { return act_search(ctx, db)? }
     if id == RID_SEARCH_REINDEX() { return act_search_reindex(ctx, db)? }
+    if id == RID_FS_ACL_LIST() { return act_fs_acl_list(ctx, db)? }
+    if id == RID_FS_ACL_SET() { return act_fs_acl_set(ctx, db)? }
+    if id == RID_FS_ACL_DELETE() { return act_fs_acl_delete(ctx, db)? }
     return fmr_out(fmr_500("unhandled route"), db)
 }

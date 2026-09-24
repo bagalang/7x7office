@@ -3,6 +3,8 @@
 // и поддръжката на текстовия индекс (tree_text), който търсенето ползва.
 
 import "auth.baga"
+import "acl_model.baga"
+import "acl_roles.baga"
 import "model.baga"
 import "search.baga"
 import "text.baga"
@@ -20,7 +22,7 @@ import "std/os/os.baga"
 // ---------- GET /v1/search ----------
 
 fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
-    let t = tree_auth(ctx, db, 1)?
+    let t = tree_auth(ctx, db, 1, "")?
     if t.ok == 0 {
         return t.out
     }
@@ -35,18 +37,36 @@ fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_q(nq) == 0 {
         return act_err(orm_db_q(nq), 500, orm_err_q(nq))
     }
+    let mut d = orm_db_q(nq)
+    // Търсенето чете ИМЕНА и СЪДЪРЖАНИЕ — трябва да уважава изричните права
+    // по път, иначе viewer научава за файлове, които не може да отвори.
+    // Редовете се теглят веднъж и се филтрират в паметта (виж acl_model.baga).
+    let mut protect: i64 = 0
+    if t.role == "admin" || t.role == "owner" {
+        protect = 1
+    }
+    let acl = tree_acl_subject_rows(d, t.ws, t.owner, t.role)?
+    if acl.err != "" {
+        return act_err(acl.db, 500, acl.err)
+    }
+    d = acl.db
     let mut arr = jarr_new()
     let mut i: i64 = 0
+    let mut kept: i64 = 0
     while i < orm_nrows(nq) {
-        arr = jarr_obj(arr, tree_search_json(nq, i))
+        let p = orm_cell_by(nq, i, "path")
+        if acl_effective(acl.paths, acl.levels, acl.inherits, p, t.level, protect) >= acl_level_read() {
+            arr = jarr_obj(arr, tree_search_json(nq, i))
+            kept = kept + 1
+        }
         i = i + 1
     }
     let mut o = jobj_new()
     o = jobj_str(o, "query", q)
     o = jobj_i64(o, "limit", limit)
     o = jobj_raw(o, "items", jarr_encode(arr))
-    o = jobj_i64(o, "count", orm_nrows(nq))
-    return act_ok(orm_db_q(nq), o)
+    o = jobj_i64(o, "count", kept)
+    return act_ok(d, o)
 }
 
 // ---------- POST /v1/search/reindex (админ) ----------

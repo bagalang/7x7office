@@ -4,8 +4,9 @@ import { FormEvent, useEffect, useState } from "react";
 import { AppShell } from "./AppShell";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
-import { useWorkspace, canWrite } from "./WorkspaceProvider";
+import { useWorkspace, canWrite, canShare } from "./WorkspaceProvider";
 import { FilePreview, VersionsDialog } from "./FilePreview";
+import { ShareDialog } from "./ShareDialog";
 import {
   IconChevronRight,
   IconDownload,
@@ -18,6 +19,7 @@ import {
   IconPencil,
   IconPlus,
   IconSearch,
+  IconShare,
   IconTrash,
   IconUpload,
 } from "./icons";
@@ -79,6 +81,7 @@ export function FileBrowser() {
   const { t, lang } = useI18n();
   const { wsId, active } = useWorkspace();
   const writable = canWrite(active);
+  const shareable = canShare(active);
   const [path, setPath] = useState("/");
   const [items, setItems] = useState<FsNode[]>([]);
   const [error, setError] = useState("");
@@ -94,6 +97,7 @@ export function FileBrowser() {
   const [folder, setFolder] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<FsNode | null>(null);
   const [versionsFor, setVersionsFor] = useState<FsNode | null>(null);
+  const [shareFor, setShareFor] = useState<FsNode | null>(null);
 
   useEffect(() => {
     const saved = readStorage("secp.view");
@@ -246,6 +250,16 @@ export function FileBrowser() {
             <IconTrash />
           </button>
         </>
+      ) : null}
+      {shareable ? (
+        <button
+          type="button"
+          className="icon-btn"
+          title={t("ws.share")}
+          onClick={() => setShareFor(node)}
+        >
+          <IconShare />
+        </button>
       ) : null}
     </span>
   );
@@ -442,6 +456,7 @@ export function FileBrowser() {
           onRename={() => startRename(open)}
           onDelete={() => setDeleteTarget(open)}
           onShowVersions={() => setVersionsFor(open)}
+          onShare={() => setShareFor(open)}
           onError={setError}
         />
       ) : null}
@@ -506,6 +521,14 @@ export function FileBrowser() {
             </button>
           </div>
         </Dialog>
+      ) : null}
+
+      {shareFor ? (
+        <ShareDialog
+          workspaceId={wsId}
+          path={shareFor.path}
+          onClose={() => setShareFor(null)}
+        />
       ) : null}
     </AppShell>
   );

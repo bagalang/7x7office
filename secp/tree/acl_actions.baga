@@ -1,0 +1,253 @@
+// tree/acl_actions.baga — REST за изрични права по възел (Фаза 2).
+//
+//   GET    /v1/fs/acl?workspace_id=&path=/dir     → редовете за този път
+//   POST   /v1/fs/acl                             → добави/смени ред
+//   DELETE /v1/fs/acl?workspace_id=&acl_id=       → махни ред
+//
+// Кой може да пипа правата: owner на пространството (или админ). Логиката
+// „какво позволява този ред" е в acl_roles.baga / acl_model.baga — тук е
+// само протоколът и валидацията на входа.
+//
+// Редът може да сочи към потребител (kind=user, по имейл се намира id-то)
+// или към роля в пространството (kind=role: owner/editor/viewer). „Личният
+// workspace не приема чужденци" — за личното пространство rights API-то
+// отказва (там няма с кого да се споделя).
+
+import "auth.baga"
+import "acl_model.baga"
+import "acl_roles.baga"
+import "../idm/user_model.baga"
+import "../idm/user_actions.baga"
+import "../idm/ws_model.baga"
+import "../idm/ws_roles.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+
+// acl_id от заявката: липсващо/нечислово → 0.
+fn acl_qid(ctx: FmrCtx, name: str) -> i64 {
+    let raw = str_trim(fmr_query(ctx, name))
+    if raw == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
+// Споделянето е смисъл само в екипно пространство. Личното е само на
+// собственика — там права не се задават (иначе собственикът може да си
+// „даде" права, които вече има, или да се заключи).
+fn acl_ws_shareable(db: OrmDb, ws: i64) -> OrmQuery !IO !Net {
+    return ws_find(db, ws)?
+}
+
+fn act_fs_acl_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let path = tree_qpath(ctx, "path")
+    let t = tree_auth(ctx, db, 1, "")?
+    if t.ok == 0 {
+        return t.out
+    }
+    // Четенето на правата е за тези, които могат да споделят (owner/admin).
+    if ws_level_allows(t.level, ws_role_level_owner()) == 0 {
+        return act_err(t.out.db, 403, "owner only")
+    }
+    let q = tree_acl_list_path(t.out.db, t.ws, tree_norm(path))?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    let mut d = orm_db_q(q)
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, tree_acl_to_json_named(d, q, i)?)
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "path", tree_norm(path))
+    o = jobj_i64(o, "workspace_id", t.ws)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(d, o)
+}
+
+// Тяло: { path, kind: "user"|"role", email?|role?, level: 1|2|3, inherit: 0|1 }
+// Идемпотентно: ако за същия субект и път има ред, нивото се сменя.
+fn act_fs_acl_set(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db, 2, "")?
+    if t.ok == 0 {
+        return t.out
+    }
+    if ws_level_allows(t.level, ws_role_level_owner()) == 0 {
+        return act_err(t.out.db, 403, "owner only")
+    }
+    let mut d = t.out.db
+    let wq = acl_ws_shareable(d, t.ws)?
+    if orm_ok_q(wq) == 0 || orm_nrows(wq) < 1 {
+        return act_404(d, "workspace not found")
+    }
+    if orm_cell_by_i64(wq, 0, "is_personal") == 1 {
+        return act_err(orm_db_q(wq), 409, "the personal workspace cannot be shared")
+    }
+    d = orm_db_q(wq)
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(d, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(d, 400, b.err)
+    }
+    let path_f = jreq_str(b.doc, b.root, "path")
+    if path_f.ok == 0 {
+        return act_err(d, 400, path_f.err)
+    }
+    let path = tree_norm(str_trim(path_f.val))
+    if path == "" {
+        return act_err(d, 400, "path required")
+    }
+    let kind_f = jreq_str(b.doc, b.root, "kind")
+    if kind_f.ok == 0 {
+        return act_err(d, 400, kind_f.err)
+    }
+    let kind = str_trim(kind_f.val)
+    if acl_kind_valid(kind) == 0 {
+        return act_err(d, 400, "kind must be user or role")
+    }
+    // Ниво и наследяване: jreq_i64 дава num при int; за bool ползваме jopt.
+    let lvl_f = jreq_i64(b.doc, b.root, "level")
+    if lvl_f.ok == 0 {
+        return act_err(d, 400, lvl_f.err)
+    }
+    if acl_level_valid(lvl_f.num) == 0 {
+        return act_err(d, 400, "level must be 0 (none), 1 (read), 2 (write) or 3 (share)")
+    }
+    let inh_f = jreq_i64(b.doc, b.root, "inherit")
+    if inh_f.ok == 0 {
+        return act_err(d, 400, inh_f.err)
+    }
+    let inherit = inh_f.num
+    if inherit != 0 && inherit != 1 {
+        return act_err(d, 400, "inherit must be 0 or 1")
+    }
+    // Субектът: при user се иска имейл (id-тата не са стабилни в boila),
+    // при role — собственият низ (owner/editor/viewer).
+    let mut suid: i64 = 0
+    let mut srole = ""
+    if kind == "user" {
+        let em_f = jreq_str(b.doc, b.root, "email")
+        if em_f.ok == 0 {
+            return act_err(d, 400, em_f.err)
+        }
+        let email = to_lower(str_trim(em_f.val))
+        if idm_email_ok(email) == 0 {
+            return act_err(d, 400, "invalid email")
+        }
+        let uq = idm_user_find_by_email(d, email)?
+        if orm_ok_q(uq) == 0 {
+            return act_err(orm_db_q(uq), 500, orm_err_q(uq))
+        }
+        if orm_nrows(uq) < 1 {
+            return act_err(orm_db_q(uq), 404, "user not found")
+        }
+        suid = orm_cell_by_i64(uq, 0, "id")
+        d = orm_db_q(uq)
+        // На себе си права не се дават: собственикът вече ги има най-високи,
+        // а ред за него само би замъглил UI-а (и защитата го игнорира).
+        if suid == t.owner {
+            return act_err(d, 400, "cannot set rights for yourself")
+        }
+    } else {
+        let r_f = jreq_str(b.doc, b.root, "role")
+        if r_f.ok == 0 {
+            return act_err(d, 400, r_f.err)
+        }
+        srole = str_trim(r_f.val)
+        if acl_role_valid(srole) == 0 {
+            return act_err(d, 400, "role must be owner, editor or viewer")
+        }
+        // Ред за admin няма смисъл — admin минава навсякъде и без него.
+        if srole == "admin" {
+            return act_err(d, 400, "role must be owner, editor or viewer")
+        }
+    }
+    // Пътят трябва да съществува: иначе тихо се създава право за файл,
+    // който утре може да се появи с друго съдържание.
+    let nq = tree_find(d, t.ws, path)?
+    if orm_ok_q(nq) == 0 {
+        return act_err(orm_db_q(nq), 500, orm_err_q(nq))
+    }
+    if orm_nrows(nq) < 1 {
+        return act_404(orm_db_q(nq), "path not found")
+    }
+    d = orm_db_q(nq)
+    // Съществуващ ред за същия (path, kind, subject) → смяна на нивото.
+    let ex = tree_acl_find_subject(d, t.ws, path, kind, suid, srole)?
+    if orm_ok_q(ex) == 0 {
+        return act_err(orm_db_q(ex), 500, orm_err_q(ex))
+    }
+    d = orm_db_q(ex)
+    let mut id: i64 = 0
+    if orm_nrows(ex) > 0 {
+        id = orm_cell_by_i64(ex, 0, "id")
+        let upd = tree_acl_set(d, id, lvl_f.num, inherit)?
+        if orm_ok(upd) == 0 {
+            return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+        }
+        d = orm_db_exec(upd)
+    } else {
+        let ins = tree_acl_insert(d, t.ws, path, kind, suid, srole, lvl_f.num, inherit)?
+        if orm_ok(ins) == 0 {
+            return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+        }
+        d = orm_db_exec(ins)
+        let back = tree_acl_find_subject(d, t.ws, path, kind, suid, srole)?
+        if orm_ok_q(back) == 0 || orm_nrows(back) < 1 {
+            return act_err(d, 500, "acl inserted but not found")
+        }
+        id = orm_cell_by_i64(back, 0, "id")
+        d = orm_db_q(back)
+    }
+    let q = tree_acl_find(d, id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(d, 500, "acl row missing after write")
+    }
+    return act_ok(orm_db_q(q), tree_acl_to_json_named(orm_db_q(q), q, 0)?)
+}
+
+fn act_fs_acl_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db, 2, "")?
+    if t.ok == 0 {
+        return t.out
+    }
+    if ws_level_allows(t.level, ws_role_level_owner()) == 0 {
+        return act_err(t.out.db, 403, "owner only")
+    }
+    let id = acl_qid(ctx, "acl_id")
+    if id < 1 {
+        return act_err(t.out.db, 400, "acl_id required")
+    }
+    let q = tree_acl_find(t.out.db, id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 || orm_cell_by_i64(q, 0, "workspace_id") != t.ws {
+        return act_404(orm_db_q(q), "acl row not found")
+    }
+    let del = tree_acl_delete(orm_db_q(q), id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

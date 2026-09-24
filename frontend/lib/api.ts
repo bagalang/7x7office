@@ -350,3 +350,42 @@ export async function updateMember(workspaceId: number, memberId: number, role: 
 export async function removeMember(workspaceId: number, memberId: number): Promise<void> {
   return request<void>(`/v1/workspaces/members?workspace_id=${workspaceId}&member_id=${memberId}`, "DELETE");
 }
+
+// --- изрични права по възел / ACL (фаза 2) ---
+// Само owner/admin на пространството. `level`: 0=нищо, 1=четене, 2=запис,
+// 3=споделяне. `inherit`: 1=важи и за всичко под пътя, 0=само точния път.
+export const ACL_LEVELS = [0, 1, 2, 3] as const;
+
+export type AclRow = {
+  id: number;
+  path: string;
+  kind: "user" | "role";
+  subject_user_id: number;
+  subject_role: string;
+  subject_email?: string;
+  subject_name?: string;
+  level: number;
+  inherit: number;
+};
+
+export type AclList = { path: string; workspace_id: number; items: AclRow[]; count: number };
+
+export async function listAcl(workspaceId: number, path: string): Promise<AclList> {
+  return request<AclList>(
+    `/v1/fs/acl?workspace_id=${workspaceId}&path=${qpath(path)}`,
+    "GET",
+  );
+}
+
+export async function setAcl(
+  workspaceId: number,
+  input:
+    | { path: string; kind: "user"; email: string; level: number; inherit: number }
+    | { path: string; kind: "role"; role: string; level: number; inherit: number },
+): Promise<AclRow> {
+  return request<AclRow>(`/v1/fs/acl?workspace_id=${workspaceId}`, "POST", input);
+}
+
+export async function deleteAcl(workspaceId: number, aclId: number): Promise<void> {
+  return request<void>(`/v1/fs/acl?workspace_id=${workspaceId}&acl_id=${aclId}`, "DELETE");
+}

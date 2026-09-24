@@ -1,0 +1,304 @@
+// tree/acl_model.baga — изрични права по път (Фаза 2).
+//
+// Чистата логика „кой печели" е в acl_roles.baga (тества се без база).
+// Тук е само достъпът до таблицата + зареждането на редовете и подаването
+// им към acl_effective.
+//
+// Защо редовете се четат за ЦЕЛИЯ workspace, а не с SQL филтър по субект:
+// (1) boilaDB не обича сложен OR с приоритети в WHERE (виж gaps), а
+// филтърът „или мой ред по user, или ред по ролята ми" е точно такъв;
+// (2) редовете на едно пространство са десетки, не милиони — филтърът в
+// кода е по-евтин от рискова заявка, която да не мине на единия backend.
+// Филтърът по субект е изнесен в acl_roles.baga, за да не се разминава
+// между SQL и код.
+
+import "acl_roles.baga"
+import "model.baga"
+import "../idm/user_model.baga"
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn tree_acl_table() -> str {
+    return "tree_acl"
+}
+
+// Резултат от изчисляване на едно ниво (грешката не хвърля — викащият решава
+// дали да заключи, или да продължи с базовото ниво).
+struct AclEff {
+    level: i64,
+    err: str,
+    db: OrmDb
+}
+
+// Приложимите редове за субект, „изпечени" в три успоредни вектора — за да
+// се сметне ниво за много пътища (търсене) без нова заявка на всеки път.
+struct AclRows {
+    paths: Vec<str>,
+    levels: Vec<i64>,
+    inherits: Vec<i64>,
+    err: str,
+    db: OrmDb
+}
+
+fn tree_acl_cols() -> str {
+    return "id, workspace_id, path, kind, subject_user_id, subject_role, acl_level, inherit"
+}
+
+fn tree_acl_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM tree_acl")?
+}
+
+// Всички изрични редове на пространството. Викащият ги филтрира по субект.
+fn tree_acl_ws_rows(db: OrmDb, ws: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", tree_acl_cols()), " FROM tree_acl WHERE workspace_id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// Редовете за точно един път (за UI-а: „какво е зададено тук").
+fn tree_acl_list_path(db: OrmDb, ws: i64, path: str) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", tree_acl_cols()), " FROM tree_acl WHERE workspace_id = $1 AND path = $2 ORDER BY kind, id")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn tree_acl_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", tree_acl_cols()), " FROM tree_acl WHERE id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// Редът за точно този субект на точно този път (за идемпотентна смяна).
+// Празната роля се сравнява изрично: при kind=user subject_role е "".
+fn tree_acl_find_subject(db: OrmDb, ws: i64, path: str, kind: str, suid: i64, srole: str) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", tree_acl_cols()), " FROM tree_acl WHERE workspace_id = $1 AND path = $2 AND kind = $3 AND subject_user_id = $4 AND subject_role = $5")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    vec_push(vals, kind)
+    vec_push(vals, int_to_str(suid))
+    vec_push(vals, srole)
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// Ефективно ниво за `target` за потребител с роля `role` и база `base`.
+// `protect` = 1 за owner/admin. Редовете се зареждат веднъж за
+// пространството; филтърът по субект е acl_subject_matches (чист).
+fn tree_acl_effective_at(db: OrmDb, ws: i64, uid: i64, role: str, target: str, base: i64, protect: i64) -> AclEff !IO !Net {
+    let q = tree_acl_ws_rows(db, ws)?
+    if orm_ok_q(q) == 0 {
+        return AclEff { level: base, err: orm_err_q(q), db: db }
+    }
+    let paths: Vec<str> = vec_new()
+    let levels: Vec<i64> = vec_new()
+    let inherits: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let kind = orm_cell_by(q, i, "kind")
+        let suid = orm_cell_by_i64(q, i, "subject_user_id")
+        let srole = orm_cell_by(q, i, "subject_role")
+        if acl_subject_matches(kind, suid, srole, uid, role) == 1 {
+            vec_push(paths, orm_cell_by(q, i, "path"))
+            vec_push(levels, orm_cell_by_i64(q, i, "acl_level"))
+            vec_push(inherits, orm_cell_by_i64(q, i, "inherit"))
+        }
+        i = i + 1
+    }
+    let lv = acl_effective(paths, levels, inherits, target, base, protect)
+    return AclEff { level: lv, err: "", db: orm_db_q(q) }
+}
+
+// Всички приложими редове за субект (за да се сметне ниво за много пътища
+// без нова заявка на всеки — търсенето го ползва). Редовете са „изпечени".
+fn tree_acl_subject_rows(db: OrmDb, ws: i64, uid: i64, role: str) -> AclRows !IO !Net {
+    let q = tree_acl_ws_rows(db, ws)?
+    if orm_ok_q(q) == 0 {
+        return AclRows { paths: vec_new(), levels: vec_new(), inherits: vec_new(), err: orm_err_q(q), db: db }
+    }
+    let paths: Vec<str> = vec_new()
+    let levels: Vec<i64> = vec_new()
+    let inherits: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let kind = orm_cell_by(q, i, "kind")
+        let suid = orm_cell_by_i64(q, i, "subject_user_id")
+        let srole = orm_cell_by(q, i, "subject_role")
+        if acl_subject_matches(kind, suid, srole, uid, role) == 1 {
+            vec_push(paths, orm_cell_by(q, i, "path"))
+            vec_push(levels, orm_cell_by_i64(q, i, "acl_level"))
+            vec_push(inherits, orm_cell_by_i64(q, i, "inherit"))
+        }
+        i = i + 1
+    }
+    return AclRows { paths: paths, levels: levels, inherits: inherits, err: "", db: orm_db_q(q) }
+}
+
+// ---------- писане ----------
+
+fn tree_acl_insert(db: OrmDb, ws: i64, path: str, kind: str, suid: i64, srole: str, level: i64, inherit: i64) -> OrmExec !IO !Net {
+    if tree_backend_boila()? == 1 {
+        let c = tree_acl_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "workspace_id")
+        vec_push(cols, "path")
+        vec_push(cols, "kind")
+        vec_push(cols, "subject_user_id")
+        vec_push(cols, "subject_role")
+        vec_push(cols, "acl_level")
+        vec_push(cols, "inherit")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(orm_count_n(c) + 1))
+        vec_push(vals, int_to_str(ws))
+        vec_push(vals, path)
+        vec_push(vals, kind)
+        vec_push(vals, int_to_str(suid))
+        vec_push(vals, srole)
+        vec_push(vals, int_to_str(level))
+        vec_push(vals, int_to_str(inherit))
+        return orm_insert_strs(orm_db_c(c), tree_acl_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "workspace_id")
+    vec_push(cols, "path")
+    vec_push(cols, "kind")
+    vec_push(cols, "subject_user_id")
+    vec_push(cols, "subject_role")
+    vec_push(cols, "acl_level")
+    vec_push(cols, "inherit")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    vec_push(vals, kind)
+    vec_push(vals, int_to_str(suid))
+    vec_push(vals, srole)
+    vec_push(vals, int_to_str(level))
+    vec_push(vals, int_to_str(inherit))
+    return orm_insert_strs(db, tree_acl_table(), cols, vals)?
+}
+
+// Смяна на нивото/наследяването на съществуващ ред (subject-ът не се пипа —
+// иначе „промяна" би оставила стария ред да важи).
+fn tree_acl_set(db: OrmDb, id: i64, level: i64, inherit: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "acl_level")
+    vec_push(cols, "inherit")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(level))
+    vec_push(vals, int_to_str(inherit))
+    return orm_update_by_id(db, tree_acl_table(), id, cols, vals)?
+}
+
+fn tree_acl_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    return orm_delete_by_id(db, tree_acl_table(), id)?
+}
+
+// Изтрит възел/поддърво не бива да оставя изрични права „за път, който вече
+// не съществува": ако на същия път се създаде нов файл, старите права щяха
+// тихо да важат. Затова правата следват живота на възела.
+fn tree_acl_drop_subtree(db: OrmDb, ws: i64, path: str) -> i64 !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    vec_push(vals, concat(path, "/%"))
+    let e = orm_exec_params_str(db, "DELETE FROM tree_acl WHERE workspace_id = $1 AND (path = $2 OR path LIKE $3)", vals)?
+    if orm_ok(e) == 0 {
+        return -1
+    }
+    return 0
+}
+
+fn tree_acl_purge_ws(db: OrmDb, ws: i64) -> i64 !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    let e = orm_exec_params_str(db, "DELETE FROM tree_acl WHERE workspace_id = $1", vals)?
+    if orm_ok(e) == 0 {
+        return -1
+    }
+    return 0
+}
+
+// Преместване на ACL редовете заедно с поддървото. Ред по ред, защото
+// boilaDB няма UPDATE…FROM (виж gaps) — пътят не може да се пренапише с
+// една заявка. Връща се при първа грешка; викащият прекъсва.
+struct AclMove {
+    db: OrmDb,
+    n: i64,
+    err: str
+}
+
+fn tree_acl_move_subtree(db: OrmDb, ws: i64, from: str, to: str) -> AclMove !IO !Net {
+    let sql = concat(concat("SELECT ", tree_acl_cols()), " FROM tree_acl WHERE workspace_id = $1 AND (path = $2 OR path LIKE $3)")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, from)
+    vec_push(vals, concat(from, "/%"))
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return AclMove { db: db, n: 0, err: orm_err_q(q) }
+    }
+    let mut d = orm_db_q(q)
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let old = orm_cell_by(q, i, "path")
+        let nid = orm_cell_by_i64(q, i, "id")
+        // старият път се реже до `from`, новият се залепва на `to`:
+        // /from/a → /to/a, /from → /to
+        let newp = concat(to, tree_tail(old, len(from)))
+        let cols = vec_new()
+        vec_push(cols, "path")
+        let vals2 = vec_new()
+        vec_push(vals2, newp)
+        let upd = orm_update_by_id(d, tree_acl_table(), nid, cols, vals2)?
+        if orm_ok(upd) == 0 {
+            return AclMove { db: orm_db_exec(upd), n: i, err: orm_err_exec(upd) }
+        }
+        d = orm_db_exec(upd)
+        i = i + 1
+    }
+    return AclMove { db: d, n: orm_nrows(q), err: "" }
+}
+
+// ---------- JSON ----------
+
+fn tree_acl_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "path", orm_cell_by(q, row, "path"))
+    o = jobj_str(o, "kind", orm_cell_by(q, row, "kind"))
+    o = jobj_i64(o, "subject_user_id", orm_cell_by_i64(q, row, "subject_user_id"))
+    o = jobj_str(o, "subject_role", orm_cell_by(q, row, "subject_role"))
+    o = jobj_i64(o, "level", orm_cell_by_i64(q, row, "acl_level"))
+    o = jobj_i64(o, "inherit", orm_cell_by_i64(q, row, "inherit"))
+    return o
+}
+
+// Лицето зад реда, готово за показване. `subject_user_id` само по себе си
+// не се чете от човек; UI-ът иска имейл/име. Четем ги тук, вместо да караме
+// фронтенда да прави допълнителни заявки за всеки ред.
+fn tree_acl_to_json_named(db: OrmDb, q: OrmQuery, row: i64) -> JObj !IO !Net {
+    let mut o = tree_acl_to_json(q, row)
+    if orm_cell_by(q, row, "kind") == "user" {
+        let uid = orm_cell_by_i64(q, row, "subject_user_id")
+        let uq = idm_user_find(db, uid)?
+        if orm_ok_q(uq) == 1 && orm_nrows(uq) > 0 {
+            o = jobj_str(o, "subject_email", orm_cell_by(uq, 0, "email"))
+            o = jobj_str(o, "subject_name", orm_cell_by(uq, 0, "name"))
+        } else {
+            o = jobj_str(o, "subject_email", "")
+            o = jobj_str(o, "subject_name", "")
+        }
+        return o
+    }
+    o = jobj_str(o, "subject_email", "")
+    o = jobj_str(o, "subject_name", "")
+    return o
+}

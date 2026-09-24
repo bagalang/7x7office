@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
-import { IconClose, IconDownload, IconHistory, IconPencil, IconTrash } from "./icons";
+import { IconClose, IconDownload, IconHistory, IconPencil, IconShare, IconTrash } from "./icons";
 import {
   FsNode,
   FsVersion,
@@ -24,7 +24,7 @@ import {
   restoreVersion,
 } from "../lib/api";
 import { mdToHtml } from "../lib/markdown";
-import { useWorkspace, canWrite } from "./WorkspaceProvider";
+import { useWorkspace, canWrite, canShare } from "./WorkspaceProvider";
 import { formatBytes, formatDate, messageOf } from "./FileBrowser";
 
 export function FilePreview({
@@ -33,6 +33,7 @@ export function FilePreview({
   onRename,
   onDelete,
   onShowVersions,
+  onShare,
   onError,
 }: {
   node: FsNode;
@@ -40,11 +41,13 @@ export function FilePreview({
   onRename: () => void;
   onDelete: () => void;
   onShowVersions: () => void;
+  onShare: () => void;
   onError: (msg: string) => void;
 }) {
   const { t } = useI18n();
   const { active } = useWorkspace();
   const writable = canWrite(active);
+  const shareable = canShare(active);
   const router = useRouter();
   const [kind, setKind] = useState("");
   const [text, setText] = useState("");
@@ -159,6 +162,11 @@ export function FilePreview({
                 <IconTrash width={16} height={16} /> {t("preview.delete")}
               </button>
             </>
+          ) : null}
+          {shareable ? (
+            <button type="button" className="btn ghost" onClick={onShare}>
+              <IconShare width={16} height={16} /> {t("ws.share")}
+            </button>
           ) : null}
         </div>
       </div>

@@ -6,10 +6,12 @@ export function Dialog({
   title,
   onClose,
   children,
+  wide,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  wide?: boolean;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -26,7 +28,7 @@ export function Dialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`dialog${wide ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
         <h2>{title}</h2>
         {children}
       </div>

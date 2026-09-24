@@ -114,3 +114,11 @@ export function canWrite(ws: Workspace | null): boolean {
   if (!ws) return true; // личният — винаги може
   return ws.role === "owner" || ws.role === "editor" || ws.role === "admin";
 }
+
+// Може ли да се пипат правата (ACL)? Само owner/admin — editor пише
+// файлове, но не решава кой друг ги вижда. Сървърът връща 403 иначе; това
+// е за да не показваме бутон „Споделяне", който не работи.
+export function canShare(ws: Workspace | null): boolean {
+  if (!ws) return false; // личното пространство не се споделя
+  return ws.role === "owner" || ws.role === "admin";
+}

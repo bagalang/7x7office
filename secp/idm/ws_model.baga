@@ -113,6 +113,13 @@ struct WsEnsure {
 // Идемпотентно: връща id-то на личния workspace, създава го при нужда
 // (заедно с owner членство). Извиква се от списъка — така всеки, който
 // отвори UI-а, получава своето пространство.
+//
+// ЗАЩО има повторен опит: UI-ът пуска /v1/workspaces и /v1/me паралелно при
+// всяко отваряне; две едновременни заявки виждат „още няма личен", и двете
+// вмъкват — втората удря UNIQUE(slug) и връща 500. Затова при провален
+// insert (slug вече е зает) не хвърляме грешката, а четем отново: печелившата
+// заявка вече е създала реда и ние просто връщаме нейния id. Това е
+// „insert-or-get" без advisory lock, който работи и на двата backend-а.
 fn ws_personal_ensure(db: OrmDb, user_id: i64) -> WsEnsure !IO !Net {
     let q = ws_personal_of(db, user_id)?
     if orm_ok_q(q) == 0 {
@@ -122,19 +129,32 @@ fn ws_personal_ensure(db: OrmDb, user_id: i64) -> WsEnsure !IO !Net {
         return WsEnsure { db: orm_db_q(q), id: orm_cell_by_i64(q, 0, "id"), err: "" }
     }
     let ins = ws_insert(orm_db_q(q), ws_personal_slug(user_id), concat("Лично пространство #", int_to_str(user_id)), "", 1, user_id)?
+    let mut d = orm_db_q(q)
     if orm_ok(ins) == 0 {
-        return WsEnsure { db: orm_db_q(q), id: 0, err: orm_err_exec(ins) }
+        // Друг worker ни изпревари: редът съществува, само го прочитаме.
+        let qr = ws_personal_of(orm_db_q(q), user_id)?
+        if orm_ok_q(qr) == 0 || orm_nrows(qr) < 1 {
+            return WsEnsure { db: orm_db_q(q), id: 0, err: orm_err_exec(ins) }
+        }
+        return WsEnsure { db: orm_db_q(qr), id: orm_cell_by_i64(qr, 0, "id"), err: "" }
     }
-    let mut d = orm_db_exec(ins)
+    d = orm_db_exec(ins)
     let q2 = ws_personal_of(d, user_id)?
     if orm_ok_q(q2) == 0 || orm_nrows(q2) < 1 {
-        return WsEnsure { db: d, id: 0, err: "personal workspace created but not found" }
+        return WsEnsure { db: orm_db_q(q2), id: 0, err: "personal workspace created but not found" }
     }
     d = orm_db_q(q2)
     let ws_id = orm_cell_by_i64(q2, 0, "id")
     let mem = ws_member_add(d, ws_id, user_id, ws_role_owner())?
     if orm_ok(mem) == 0 {
-        return WsEnsure { db: d, id: 0, err: orm_err_exec(mem) }
+        // Членството също може да е добавено от паралелна заявка — тогава
+        // редът вече е там и повторният опит пак ще гръмне, затова приемаме
+        // съществуващо членство като успех.
+        let mr = ws_member_row(orm_db_q(q2), ws_id, user_id)?
+        if orm_ok_q(mr) == 1 && orm_nrows(mr) > 0 {
+            return WsEnsure { db: orm_db_q(mr), id: ws_id, err: "" }
+        }
+        return WsEnsure { db: orm_db_q(q2), id: 0, err: orm_err_exec(mem) }
     }
     return WsEnsure { db: orm_db_exec(mem), id: ws_id, err: "" }
 }

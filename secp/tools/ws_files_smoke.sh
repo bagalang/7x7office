@@ -157,13 +157,116 @@ echo "=== личното на bob не вижда файловете на alice 
 [[ "$(curl -s -H "Authorization: Bearer $BOB" "$B/v1/fs/list?path=/" | jqv "['count']")" == "0" ]] \
   && pass "bob лично е празно" || fail "bob вижда чужди файлове"
 
+echo "=== ACL: изрични права по път (Фаза 2) ==="
+# bob е editor в #$AWS (от горната секция). Правим /secret и /public и
+# показваме, че ACL стеснява editor до нищо на /secret и разширява viewer
+# до write на /public. Това е смисълът на модела „най-специфичният печели".
+curl -s -o /dev/null -X POST -H "Authorization: Bearer $ALICE" \
+  "$B/v1/fs/mkdir?path=/secret&workspace_id=$AWS"
+echo "top-secret" >/tmp/wsf_sec.txt
+curl -s -X PUT -H "Authorization: Bearer $ALICE" --data-binary @/tmp/wsf_sec.txt \
+  "$B/v1/fs/file?path=/secret/data.txt&workspace_id=$AWS" >/dev/null
+echo "public" >/tmp/wsf_pub.txt
+curl -s -X PUT -H "Authorization: Bearer $ALICE" --data-binary @/tmp/wsf_pub.txt \
+  "$B/v1/fs/file?path=/public.txt&workspace_id=$AWS" >/dev/null
+
+# преди ACL: editor чете тайното
+[[ "$(code -H "Authorization: Bearer $BOB" "$B/v1/fs/file?path=/secret/data.txt&workspace_id=$AWS")" == "200" ]] \
+  && pass "преди ACL: editor чете /secret" || fail "editor не чете /secret преди ACL"
+
+# не-owner не пипа правата
+[[ "$(code -X POST -H "Authorization: Bearer $BOB" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/secret\",\"kind\":\"user\",\"email\":\"alice@secp.local\",\"level\":1,\"inherit\":1}" \
+  "$B/v1/fs/acl?workspace_id=$AWS")" == "403" ]] \
+  && pass "не-owner не задава права (403)" || fail "не-owner зададе права"
+
+# owner стеснява bob до нищо на /secret (inherit=1 → и под него)
+ACL_BODY="{\"path\":\"/secret\",\"kind\":\"user\",\"email\":\"bob@secp.local\",\"level\":0,\"inherit\":1}"
+ACL_ID=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "$ACL_BODY" "$B/v1/fs/acl?workspace_id=$AWS" | jqv "['id']")
+[[ -n "$ACL_ID" && "$ACL_ID" != "None" ]] && pass "alice зададе ред #$ACL_ID" || fail "няма acl id"
+
+# UI-ът показва име/имейл, не голо id — сървърът трябва да ги дава
+ACL_EMAIL=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/fs/acl?path=/secret&workspace_id=$AWS" \
+  | jqv "['items'][0]['subject_email']")
+[[ "$ACL_EMAIL" == "bob@secp.local" ]] && pass "редът носи имейла на субекта" \
+  || fail "subject_email='$ACL_EMAIL' (очаквах bob@secp.local)"
+
+[[ "$(code -H "Authorization: Bearer $BOB" "$B/v1/fs/file?path=/secret/data.txt&workspace_id=$AWS")" == "403" ]] \
+  && pass "ACL: editor вече не чете /secret (403)" || fail "ACL не заключи /secret"
+[[ "$(code -H "Authorization: Bearer $BOB" "$B/v1/fs/list?path=/secret&workspace_id=$AWS")" == "403" ]] \
+  && pass "ACL: и списъкът на /secret е заключен" || fail "списъкът на /secret не е заключен"
+# родителският списък също не бива да издава заключеното дете (иначе UI-ът
+# показва папка, която дава 403 при отваряне, и име, което не се чете).
+# Проверяваме ИМЕНАТА, не броя: в корена може да има и други файлове от
+# предишни секции. Искаме /secret да липсва, а четеното /public.txt — да е там.
+BOB_NAMES=$(curl -s -H "Authorization: Bearer $BOB" "$B/v1/fs/list?path=/&workspace_id=$AWS" \
+  | python3 -c "import sys,json;print(','.join(sorted(i['name'] for i in json.load(sys.stdin)['items'])))")
+case ",$BOB_NAMES," in
+  *,secret,*) fail "коренът показа заключената папка (bob вижда: $BOB_NAMES)" ;;
+  *,public.txt,*) pass "ACL: коренът крие /secret, но дава /public.txt" ;;
+  *) fail "коренът за bob е неочакван: '$BOB_NAMES'" ;;
+esac
+ALICE_NAMES=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/fs/list?path=/&workspace_id=$AWS" \
+  | python3 -c "import sys,json;print(','.join(sorted(i['name'] for i in json.load(sys.stdin)['items'])))")
+case ",$ALICE_NAMES," in
+  *,secret,*) pass "ACL: owner пак вижда детето" ;;
+  *) fail "owner не вижда заключената папка (вижда: $ALICE_NAMES)" ;;
+esac
+[[ "$(code -H "Authorization: Bearer $BOB" "$B/v1/fs/file?path=/public.txt&workspace_id=$AWS")" == "200" ]] \
+  && pass "ACL: останалото пак се чете" || fail "ACL заключи цялото пространство"
+# собственикът не се самозаключва
+[[ "$(code -H "Authorization: Bearer $ALICE" "$B/v1/fs/file?path=/secret/data.txt&workspace_id=$AWS")" == "200" ]] \
+  && pass "ACL: owner пак чете (protect)" || fail "owner се заключи"
+
+# търсенето също уважава ACL — иначе изтичат имена на заключени файлове
+SRC=$(curl -s -H "Authorization: Bearer $BOB" "$B/v1/search?q=data&workspace_id=$AWS" | jqv "['count']")
+[[ "$SRC" == "0" ]] && pass "ACL: търсенето не връща заключения файл" || fail "търсенето върна $SRC"
+
+# понижаване на нивото (същият субект и път) не дублира реда
+curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/secret\",\"kind\":\"user\",\"email\":\"bob@secp.local\",\"level\":1,\"inherit\":1}" \
+  "$B/v1/fs/acl?workspace_id=$AWS" >/dev/null
+NROWS=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/fs/acl?path=/secret&workspace_id=$AWS" | jqv "['count']")
+[[ "$NROWS" == "1" ]] && pass "повторно задаване сменя реда, не дублира" || fail "редове=$NROWS (очаквах 1)"
+[[ "$(code -H "Authorization: Bearer $BOB" "$B/v1/fs/file?path=/secret/data.txt&workspace_id=$AWS")" == "200" ]] \
+  && pass "вдигане на нивото отпуши четенето" || fail "вдигането не проработи"
+
+# права към несъществуващ път се отказват
+[[ "$(code -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/няма-такъв\",\"kind\":\"role\",\"role\":\"viewer\",\"level\":2,\"inherit\":1}" \
+  "$B/v1/fs/acl?workspace_id=$AWS")" == "404" ]] \
+  && pass "права към липсващ път → 404" || fail "правата към липсващ път минаха"
+
+# ниво извън 0..3 се отказва (иначе 99 = admin през ACL)
+[[ "$(code -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/secret\",\"kind\":\"role\",\"role\":\"viewer\",\"level\":99,\"inherit\":1}" \
+  "$B/v1/fs/acl?workspace_id=$AWS")" == "400" ]] \
+  && pass "level=99 се отказва" || fail "level=99 мина"
+
+# изтриването на реда връща старото ниво
+[[ "$(code -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/fs/acl?acl_id=$ACL_ID&workspace_id=$AWS")" == "204" ]] \
+  && pass "ACL редът се трие" || fail "ACL редът не се изтри"
+NROWS=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/fs/acl?path=/secret&workspace_id=$AWS" | jqv "['count']")
+[[ "$NROWS" == "0" ]] && pass "след триене няма редове" || fail "останаха $NROWS реда"
+
+# изтриването на ВЪЗЕЛ маха и правата му (иначе нов файл на същия път
+# наследява стари права)
+ACL2=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/secret\",\"kind\":\"user\",\"email\":\"bob@secp.local\",\"level\":0,\"inherit\":1}" \
+  "$B/v1/fs/acl?workspace_id=$AWS" | jqv "['id']")
+curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/fs/file?path=/secret&workspace_id=$AWS"
+LEFTACL=$($PSQL -c "SELECT COUNT(*) FROM tree_acl WHERE workspace_id=$AWS")
+[[ "$LEFTACL" == "0" ]] && pass "изтрит възел маха и правата си" || fail "останали $LEFTACL acl реда"
+
 echo "=== триене на пространство изчиства дървото ==="
 curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/workspaces?workspace_id=$AWS"
+A=$($PSQL -c "SELECT COUNT(*) FROM tree_acl WHERE workspace_id=$AWS")
 N=$($PSQL -c "SELECT COUNT(*) FROM tree_nodes WHERE workspace_id=$AWS")
 V=$($PSQL -c "SELECT COUNT(*) FROM tree_versions WHERE workspace_id=$AWS")
 T=$($PSQL -c "SELECT COUNT(*) FROM tree_text WHERE workspace_id=$AWS")
-[[ "$N$V$T" == "000" ]] && pass "възли/версии/текст = 0" \
-  || fail "остатъци: nodes=$N versions=$V text=$T"
+[[ "$A$N$V$T" == "0000" ]] && pass "acl/възли/версии/текст = 0" \
+  || fail "остатъци: acl=$A nodes=$N versions=$V text=$T"
 
 echo "=== backfill: стари възли (ws=0) → личното на собственика ==="
 stop

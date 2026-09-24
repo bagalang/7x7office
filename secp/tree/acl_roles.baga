@@ -1,0 +1,172 @@
+// tree/acl_roles.baga — логика на правата по възли (Фаза 2). ЧИСТ модул.
+//
+// Защо чист: това решава „кой може какво върху този път" — security
+// граница. Изнесено е от auth.baga, за да се тества без база и мрежа
+// (tests/acl_roles_test.baga), както ws_roles.baga за ролите в пространство.
+//
+// МОДЕЛ (v1): правата са НИВА по ПЪТ, най-специфичният печели.
+//
+//   - Всяко пространство има базово ниво за потребителя — ролята му
+//     (viewer=1, editor=2, owner=3). Това е входът на корена "/".
+//   - ACL ред (subject, path, level, inherit) казва: „този субект има ПОНЕ
+//     level върху path". При inherit=1 редът важи и за всичко под path;
+//     при inherit=0 — само за точно този път.
+//   - Ефективното ниво за път P е нивото на НАЙ-ДЪЛБОКИЯ приложим ред.
+//     При равни дълбочини печели по-високото (детерминирано).
+//
+// Защо така, а не „най-права побеждава" (добавка): при добавка не можеш
+// да СТЕСНИШ. А реалната нужда е обратната: „цялата екипна папка се
+// редактира, но /заплати е само за собственика". Най-специфичният печели
+// дава и разширяване (viewer получава write върху /public), и стесняване
+// (editor пада до read върху /заплати), с едно правило.
+//
+// ЗАЩИТА ОТ САМОЗАКЛЮЧВАНЕ: за owner/admin ефективното ниво НЕ пада под
+// базовото (protect=1). Иначе един ACL ред може да изключи собственика от
+// собствената му папка и никой не може да го върне през API-то. Те могат
+// само да получават повече. Това е съзнателен компромис за v1.
+
+import "std/str/str.baga"
+
+// Нива на правото — съвпадат с ролите в пространството (ws_roles.baga),
+// за да няма превод между две скали, който да се разминава.
+fn acl_level_none() -> i64 { return 0 }  // изрична забрана (дори за четене)
+fn acl_level_read() -> i64 { return 1 }
+fn acl_level_write() -> i64 { return 2 }
+fn acl_level_share() -> i64 { return 3 }
+
+// Предшественик ли е `anc` на `p` (или равен)? Коренът е предшественик на
+// всичко. Сравнението е по сегменти: "/a" НЕ е предшественик на "/ab"
+// (иначе би дало права на съсед).
+fn acl_is_ancestor(anc: str, p: str) -> i64 {
+    if anc == p {
+        return 1
+    }
+    if anc == "/" {
+        return 1
+    }
+    if str_starts_with(p, concat(anc, "/")) == 1 {
+        return 1
+    }
+    return 0
+}
+
+// Брой сегменти: "/" → 0, "/a" → 1, "/a/b" → 2. Ползва се да се сравни
+// „колко специфичен" е един път. Сравняваме с байт 47 ('/') — char_at
+// връща байт (виж gaps G25), не низ.
+fn acl_depth(p: str) -> i64 {
+    if p == "/" || p == "" {
+        return 0
+    }
+    let mut n: i64 = 0
+    let mut slash: i64 = 1
+    let mut i: i64 = 0
+    while i < len(p) {
+        if char_at(p, i) == 47 {
+            if slash == 0 {
+                n = n + 1
+            }
+            slash = 1
+        } else {
+            slash = 0
+        }
+        i = i + 1
+    }
+    if slash == 0 {
+        n = n + 1
+    }
+    return n
+}
+
+// Дали редът е приложим за `target`: или наследява (inherit=1) и е
+// предшественик, или не наследява (inherit=0) и съвпада точно.
+fn acl_applies(path: str, inherit: i64, target: str) -> i64 {
+    if inherit == 1 {
+        return acl_is_ancestor(path, target)
+    }
+    if path == target {
+        return 1
+    }
+    return 0
+}
+
+// Ефективно ниво за `target`. `paths`/`levels`/`inherits` са САМО редовете,
+// които вече важат за този субект (филтърът по user/role е на викащия —
+// тук няма субекти, само пътища). `base` е ролята в пространството,
+// `protect` = 1 за owner/admin (не се стеснява под base).
+fn acl_effective(paths: Vec<str>, levels: Vec<i64>, inherits: Vec<i64>, target: str, base: i64, protect: i64) -> i64 {
+    let mut best = base
+    let mut best_depth: i64 = 0 // базата е входът на корена
+    let mut i: i64 = 0
+    let n = vec_len(paths)
+    while i < n {
+        let p = vec_get(paths, i)
+        if acl_applies(p, vec_get(inherits, i), target) == 1 {
+            // при inherit=0 редът е точен; дълбочината му е дълбочината на target,
+            // т.е. винаги „спечелил" срещу по-плитък наследен ред
+            let mut d = acl_depth(p)
+            if vec_get(inherits, i) == 0 {
+                d = acl_depth(target) + 1
+            }
+            let lv = vec_get(levels, i)
+            if d > best_depth {
+                best = lv
+                best_depth = d
+            } else {
+                if d == best_depth && lv > best {
+                    best = lv
+                }
+            }
+        }
+        i = i + 1
+    }
+    if protect == 1 && best < base {
+        return base
+    }
+    return best
+}
+
+// Дали субектът на реда важи за този потребител. Изнесено тук (чисто), за
+// да не се разминава филтърът в SQL и в кода.
+fn acl_subject_matches(kind: str, subject_user_id: i64, subject_role: str, uid: i64, role: str) -> i64 {
+    if kind == "user" {
+        if subject_user_id == uid {
+            return 1
+        }
+        return 0
+    }
+    if kind == "role" {
+        // Роля в пространството на потребителя, не глобална.
+        if subject_role != "" && subject_role == role {
+            return 1
+        }
+        return 0
+    }
+    return 0
+}
+
+fn acl_kind_valid(kind: str) -> i64 {
+    if kind == "user" || kind == "role" {
+        return 1
+    }
+    return 0
+}
+
+// Нивото трябва да е познато: 0 (изрична забрана), 1, 2 или 3. Пази от
+// „level=99", което иначе би дало admin права през ACL. Нулата е нужна, за
+// да може viewer да бъде изключен от конкретна папка — иначе „стесняване"
+// под ролята му е невъзможно (той и без това има read).
+fn acl_level_valid(level: i64) -> i64 {
+    if level == acl_level_none() || level == acl_level_read() || level == acl_level_write() || level == acl_level_share() {
+        return 1
+    }
+    return 0
+}
+
+fn acl_role_valid(role: str) -> i64 {
+    // owner/editor/viewer — същите като в ws_roles.baga; не теглим модула
+    // само за тройката константи, за да остане този файл без зависимости.
+    if role == "owner" || role == "editor" || role == "viewer" {
+        return 1
+    }
+    return 0
+}

@@ -12,6 +12,7 @@
 // FK на boila — виж gaps), и чак накрая GC-то на blob-овете.
 
 import "model.baga"
+import "acl_model.baga"
 import "versions.baga"
 import "../data/blobs.baga"
 import "ormbaga/orm.baga"
@@ -57,6 +58,11 @@ fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net {
     let n = orm_nrows(hq)
     let vals = vec_new()
     vec_push(vals, int_to_str(ws))
+    // ACL редовете нямат FK на boila — трият се ръчно, преди възлите (за
+    // да не останат права към пътища, които вече ги няма).
+    if tree_acl_purge_ws(d, ws) < 0 {
+        return TreeWsPurge { db: d, nodes: 0, err: "delete acl failed" }
+    }
     // текстът е по node_id, не по workspace_id в DELETE-а за подсигуровка:
     // редовете на вече изтрити възли нямаше как да се хванат иначе.
     let t = orm_exec_params_str(d, "DELETE FROM tree_text WHERE workspace_id = $1", vals)?
