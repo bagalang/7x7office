@@ -389,3 +389,134 @@ export async function setAcl(
 export async function deleteAcl(workspaceId: number, aclId: number): Promise<void> {
   return request<void>(`/v1/fs/acl?workspace_id=${workspaceId}&acl_id=${aclId}`, "DELETE");
 }
+
+// --- публични линкове (фаза 3) ---
+// Линкът дава достъп БЕЗ вход. `level` 1=четене, 2=качване (само папка).
+// `expires_h` е в часове (0 = без срок); `max_downloads` 0 = без таван.
+export type ShareLink = {
+  id: number;
+  workspace_id: number;
+  path: string;
+  level: number;
+  expires_at: number;
+  downloads: number;
+  max_downloads: number;
+  created_at: number;
+  revoked_at: number;
+  has_password: number;
+  // само при създаване: суровият токен и готовият URL (после не се виждат)
+  token?: string;
+  url?: string;
+};
+
+export type ShareList = { path: string; workspace_id: number; items: ShareLink[]; count: number };
+
+export type ShareCreateInput = {
+  path: string;
+  level?: number;
+  expires_h?: number;
+  max_downloads?: number;
+  password?: string;
+};
+
+export async function listShares(workspaceId: number, path: string): Promise<ShareList> {
+  return request<ShareList>(`/v1/fs/share?workspace_id=${workspaceId}&path=${qpath(path)}`, "GET");
+}
+
+export async function createShare(workspaceId: number, input: ShareCreateInput): Promise<ShareLink> {
+  return request<ShareLink>(`/v1/fs/share?workspace_id=${workspaceId}`, "POST", input);
+}
+
+export async function revokeShare(workspaceId: number, shareId: number): Promise<void> {
+  return request<void>(`/v1/fs/share?workspace_id=${workspaceId}&share_id=${shareId}`, "DELETE");
+}
+
+// --- публичната страна на линка (без Bearer) ---
+export type ShareMeta = {
+  path: string;
+  name: string;
+  is_dir: number;
+  size: number;
+  needs_password: number;
+  unlocked: number;
+  level: number;
+  downloads: number;
+  max_downloads: number;
+  expires_at: number;
+};
+
+export type ShareView = {
+  path: string;
+  is_dir: number;
+  level: number;
+  items?: FsNode[];
+  count?: number;
+  name?: string;
+  size?: number;
+  mime?: string;
+  content?: string;
+};
+
+// Публичните заявки НЕ минават през `request` (той слага Bearer и workspace),
+// а директно към API_BASE — иначе линкът „вътрешно" изисква вход.
+export async function shareMeta(token: string): Promise<ShareMeta> {
+  const res = await fetch(`${API_BASE}/s/${token}`, { cache: "no-store" });
+  const data = await readBody(res);
+  if (!res.ok) throw new ApiError(res.status, detailOf(data, res.statusText));
+  return data as ShareMeta;
+}
+
+export async function shareUnlock(token: string, password: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/s/${token}/unlock`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+    cache: "no-store",
+  });
+  const data = await readBody(res);
+  if (!res.ok) throw new ApiError(res.status, detailOf(data, res.statusText));
+  return (data as { pass_token?: string }).pass_token ?? "";
+}
+
+export async function shareView(token: string, path: string, pass: string): Promise<ShareView> {
+  const q = pass ? `&pass=${encodeURIComponent(pass)}` : "";
+  const res = await fetch(`${API_BASE}/s/${token}/view?path=${qpath(path)}${q}`, { cache: "no-store" });
+  const data = await readBody(res);
+  if (!res.ok) throw new ApiError(res.status, detailOf(data, res.statusText));
+  return data as ShareView;
+}
+
+// Сваляне през линка: връща blob URL, за да не минава през Bearer.
+export async function shareDownload(token: string, path: string, pass: string, name: string): Promise<void> {
+  const q = pass ? `&pass=${encodeURIComponent(pass)}` : "";
+  const res = await fetch(`${API_BASE}/s/${token}/download?path=${qpath(path)}${q}`, { cache: "no-store" });
+  if (!res.ok) {
+    const data = await readBody(res);
+    throw new ApiError(res.status, detailOf(data, res.statusText));
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function shareUpload(
+  token: string,
+  path: string,
+  name: string,
+  body: Blob,
+  pass: string,
+): Promise<void> {
+  const q = pass ? `&pass=${encodeURIComponent(pass)}` : "";
+  const res = await fetch(
+    `${API_BASE}/s/${token}/upload?path=${qpath(path)}&name=${encodeURIComponent(name)}${q}`,
+    { method: "PUT", body, cache: "no-store" },
+  );
+  if (!res.ok) {
+    const data = await readBody(res);
+    throw new ApiError(res.status, detailOf(data, res.statusText));
+  }
+}

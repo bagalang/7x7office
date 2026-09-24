@@ -289,6 +289,125 @@ curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/fs/file?
 LEFTACL=$($PSQL -c "SELECT COUNT(*) FROM tree_acl WHERE workspace_id=$AWS")
 [[ "$LEFTACL" == "0" ]] && pass "изтрит възел маха и правата си" || fail "останали $LEFTACL acl реда"
 
+echo "=== споделени линкове (Фаза 3) ==="
+# Линковете дават достъп БЕЗ вход — втората security граница. Проверяваме:
+# пълен цикъл (създаване → публично отваряне → сваляне/качване → отнемане),
+# че линк към папка не пуска до СЪСЕДНА папка, че паролата пази, и че
+# отнет линк умира веднага.
+curl -s -o /dev/null -X POST -H "Authorization: Bearer $ALICE" \
+  "$B/v1/fs/mkdir?path=/drop&workspace_id=$AWS"
+echo "dropme" >/tmp/wsf_drop.txt
+curl -s -X PUT -H "Authorization: Bearer $ALICE" --data-binary @/tmp/wsf_drop.txt \
+  "$B/v1/fs/file?path=/drop/d.txt&workspace_id=$AWS" >/dev/null
+curl -s -o /dev/null -X POST -H "Authorization: Bearer $ALICE" \
+  "$B/v1/fs/mkdir?path=/съседна&workspace_id=$AWS"
+echo "neighbor" >/tmp/wsf_nb.txt
+curl -s -X PUT -H "Authorization: Bearer $ALICE" --data-binary @/tmp/wsf_nb.txt \
+  "$B/v1/fs/file?path=/съседна/n.txt&workspace_id=$AWS" >/dev/null
+
+# не-owner (bob, editor) не пипа линковете
+[[ "$(code -X POST -H "Authorization: Bearer $BOB" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/drop\",\"level\":1}" "$B/v1/fs/share?workspace_id=$AWS")" == "403" ]] \
+  && pass "не-owner не създава линк (403)" || fail "не-owner създаде линк"
+
+# линк към папка с ниво 2 → четене и качване
+SHARE=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/drop\",\"level\":2,\"expires_h\":1,\"max_downloads\":2}" \
+  "$B/v1/fs/share?workspace_id=$AWS")
+STOK=$(echo "$SHARE" | jqv "['token']")
+SURL=$(echo "$SHARE" | jqv "['url']")
+SHID=$(echo "$SHARE" | jqv "['id']")
+[[ "$(echo "$SHARE" | jqv "['level']")" == "2" ]] && pass "създаден линк с ниво 2" || fail "линкът не е ниво 2"
+[[ "$STOK" =~ ^[0-9a-f]{64}$ ]] && pass "токенът е 64 hex знака" || fail "токен: '$STOK'"
+case "$SURL" in */share/*) pass "URL-ът сочи /share/<token>";; *) fail "url='$SURL'";; esac
+
+# паролата на линка не се показва, само фактът
+SP=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/public.txt\",\"level\":1,\"password\":\"tайна123\"}" \
+  "$B/v1/fs/share?workspace_id=$AWS")
+PTOK=$(echo "$SP" | jqv "['token']")
+[[ "$(echo "$SP" | jqv "['has_password']")" == "1" ]] && pass "линкът с парола го отбелязва" \
+  || fail "has_password не е 1"
+[[ -z "$(echo "$SP" | jqv "['pass_hash']")" ]] && pass "хешът на паролата не се връща" \
+  || fail "сървърът върна хеш на паролата"
+
+# публично отваряне БЕЗ Bearer
+[[ "$(code "$B/s/$STOK")" == "200" ]] && pass "публичният meta се отваря без Bearer" \
+  || fail "публичният meta не се отваря"
+
+# meta носи срока и тавана — UI-ът показва „валиден до …/остават N сваляния".
+# Изтекъл линк е мъртъв, затова срокът трябва да е в бъдещето (epoch секунди).
+MEXP=$(curl -s "$B/s/$STOK" | jqv "['expires_at']")
+[[ "$MEXP" -gt "$(date +%s)" ]] && pass "meta носи бъдещ expires_at" \
+  || fail "expires_at=$MEXP не е в бъдещето"
+[[ "$(curl -s "$B/s/$STOK" | jqv "['max_downloads']")" == "2" ]] && pass "meta носи тавана" \
+  || fail "meta не носи max_downloads"
+[[ "$(code "$B/s/невалиден")" == "404" ]] && pass "невалиден токен → 404" || fail "невалиден токен не е 404"
+FAKE=$(python3 -c "print('a'*64)")
+[[ "$(code "$B/s/$FAKE")" == "404" ]] && pass "несъществуващ (но валиден) токен → 404" \
+  || fail "несъществуващ токен не е 404"
+
+# списък/сваляне/качване
+VC=$(curl -s "$B/s/$STOK/view" | jqv "['count']")
+[[ "$VC" == "1" ]] && pass "публичният списък вижда 1 файл" || fail "публичен list=$VC"
+curl -s -o /tmp/wsf_dl.txt -w '' "$B/s/$STOK/download?path=/drop/d.txt"
+grep -q dropme /tmp/wsf_dl.txt && pass "публичното сваляне връща файла" || fail "свалянето не върна файла"
+# ЛИНКЪТ НЕ ПУСКА СЪСЕДНАТА ПАПКА: /съседна е извън поддървото на /drop.
+[[ "$(code "$B/s/$STOK/download?path=/съседна/n.txt")" == "404" ]] \
+  && pass "линк не пуска извън поддървото си (404)" || fail "изтече извън поддървото"
+[[ "$(code "$B/s/$STOK/download?path=/../съседна/n.txt")" == "404" ]] \
+  && pass "и с ../ не се измъква (404)" || fail "../ се измъкна"
+# ниво 2 позволява качване, но не презаписване на СЪЩЕСТВУВАЩ файл (пак качване)
+echo "frompublic" >/tmp/wsf_up.txt
+[[ "$(code -X PUT --data-binary @/tmp/wsf_up.txt "$B/s/$STOK/upload?path=/drop&name=up.txt")" == "200" ]] \
+  && pass "публичното качване работи (ниво 2)" || fail "публичното качване не работи"
+# име с път не бива да пише извън папката на линка
+[[ "$(code -X PUT --data-binary @/tmp/wsf_up.txt "$B/s/$STOK/upload?path=/drop&name=../esc.txt")" == "400" ]] \
+  && pass "име с ../ се отказва (400)" || fail "име с ../ мина"
+
+# линк ниво 1 (само четене) не позволява качване
+RTOK=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/drop\",\"level\":1}" "$B/v1/fs/share?workspace_id=$AWS" | jqv "['token']")
+[[ "$(code -X PUT --data-binary @/tmp/wsf_up.txt "$B/s/$RTOK/upload?path=/drop&name=no.txt")" == "403" ]] \
+  && pass "линк ниво 1 не качва (403)" || fail "линк ниво 1 качи"
+
+# парола: без нея достъп няма, с нея — да
+[[ "$(code "$B/s/$PTOK/view")" == "401" ]] && pass "линк с парола не пуска без парола (401)" \
+  || fail "линк с парола пусна без парола"
+[[ "$(code -X POST -H 'Content-Type: application/json' -d '{"password":"грешна"}' \
+  "$B/s/$PTOK/unlock")" == "401" ]] && pass "грешната парола се отказва (401)" || fail "грешна парола мина"
+PT=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"password":"tайна123"}' \
+  "$B/s/$PTOK/unlock" | jqv "['pass_token']")
+[[ -n "$PT" && "$PT" != "None" ]] && pass "вярната парола дава pass_token" || fail "няма pass_token"
+[[ "$(code "$B/s/$PTOK/view?pass=$PT")" == "200" ]] && pass "с pass_token четенето минава" \
+  || fail "pass_token не пуска"
+# pass_token за един линк с парола не бива да важи за ДРУГ линк с парола —
+# иначе един отключен линк отключва всички (claim-ът `share` пази id-то).
+P2TOK=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/drop\",\"level\":1,\"password\":\"другапарола\"}" \
+  "$B/v1/fs/share?workspace_id=$AWS" | jqv "['token']")
+[[ "$(code "$B/s/$P2TOK/view?pass=$PT")" == "401" ]] && pass "pass_token не важи за друг линк" \
+  || fail "pass_token протече към друг линк"
+
+# таванът на свалянията (max_downloads=2) се уважава: вече свалихме 1
+curl -s -o /dev/null "$B/s/$STOK/download?path=/drop/d.txt"
+[[ "$(code "$B/s/$STOK/download?path=/drop/d.txt")" == "404" ]] \
+  && pass "след тавана линкът спира (404)" || fail "таванът не спря линка"
+
+# отнет линк умира веднага
+[[ "$(code -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/fs/share?share_id=$SHID&workspace_id=$AWS")" == "204" ]] \
+  && pass "линкът се отнема (204)" || fail "отнемането не мина"
+[[ "$(code "$B/s/$STOK")" == "404" ]] && pass "отнетият линк дава 404" || fail "отнетият линк работи"
+# собственическият списък показва линковете (с отнетото, за да е ясно защо не работи)
+SC=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/fs/share?path=/drop&workspace_id=$AWS" | jqv "['count']")
+[[ "$SC" == "3" ]] && pass "списъкът на /drop показва 3 линка (един отнет)" || fail "spisъk=$SC (очаквах 3)"
+
+# изтриване на ВЪЗЕЛ отнема линковете към него
+DTOK=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d "{\"path\":\"/public.txt\",\"level\":1}" "$B/v1/fs/share?workspace_id=$AWS" | jqv "['token']")
+curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/fs/file?path=/public.txt&workspace_id=$AWS"
+[[ "$(code "$B/s/$DTOK")" == "404" ]] && pass "изтрит възел убива линка" || fail "линкът към изтрит възел работи"
+
 echo "=== триене на пространство изчиства дървото ==="
 curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/workspaces?workspace_id=$AWS"
 A=$($PSQL -c "SELECT COUNT(*) FROM tree_acl WHERE workspace_id=$AWS")

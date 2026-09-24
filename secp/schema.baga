@@ -211,6 +211,33 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_tree_acl_on_ws_path ON tree_acl (workspace_id, path)",
         "DROP INDEX IF EXISTS index_tree_acl_on_ws_path"
     )
+    // Фаза 3 (share): публичен линк към възел. Пазим САМО хеша на токена
+    // (като idm_resets — изтекъл dump не бива да дава достъп). `level`:
+    // 1 = само четене/сваляне, 2 = качване/замяна в папката. Папката се
+    // идентифицира по (workspace_id, path), а не по node_id, за да не
+    // зависи линкът от преместване на възела; path-ът се проверява при
+    // отваряне (изтрит възел → 404).
+    set = migrate_add(
+        set,
+        20260924025,
+        "create_share_links",
+        "CREATE TABLE share_links (id BIGSERIAL PRIMARY KEY, token_hash TEXT NOT NULL, workspace_id BIGINT NOT NULL REFERENCES idm_workspaces(id) ON DELETE CASCADE, path TEXT NOT NULL, level BIGINT NOT NULL DEFAULT 1, expires_at BIGINT NOT NULL DEFAULT 0, pass_hash TEXT NOT NULL DEFAULT '', pass_salt TEXT NOT NULL DEFAULT '', pass_iters BIGINT NOT NULL DEFAULT 0, downloads BIGINT NOT NULL DEFAULT 0, max_downloads BIGINT NOT NULL DEFAULT 0, created_by BIGINT NOT NULL DEFAULT 0, revoked_at BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS share_links"
+    )
+    set = migrate_add(
+        set,
+        20260924026,
+        "index_share_links_token",
+        "CREATE UNIQUE INDEX index_share_links_on_token ON share_links (token_hash)",
+        "DROP INDEX IF EXISTS index_share_links_on_token"
+    )
+    set = migrate_add(
+        set,
+        20260924027,
+        "index_share_links_ws_path",
+        "CREATE INDEX index_share_links_on_ws_path ON share_links (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_share_links_on_ws_path"
+    )
     return set
 }
 
@@ -390,6 +417,29 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_tree_acl_ws_path",
         "CREATE INDEX IF NOT EXISTS index_tree_acl_on_ws_path ON tree_acl (workspace_id, path)",
         "DROP INDEX IF EXISTS index_tree_acl_on_ws_path ON tree_acl"
+    )
+    // Фаза 3 (share): публичен линк към възел (boila вариант — без
+    // SERIAL/DEFAULT/NOT NULL/REFERENCES; id-то се дава с MAX(id)+1).
+    set = migrate_add(
+        set,
+        20260924025,
+        "create_share_links",
+        "CREATE TABLE IF NOT EXISTS share_links (id BIGINT, token_hash TEXT, workspace_id BIGINT, path TEXT, level BIGINT, expires_at TIMESTAMPTZ, pass_hash TEXT, pass_salt TEXT, pass_iters BIGINT, downloads BIGINT, max_downloads BIGINT, created_by BIGINT, revoked_at TIMESTAMPTZ, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS share_links"
+    )
+    set = migrate_add(
+        set,
+        20260924026,
+        "index_share_links_token",
+        "CREATE INDEX IF NOT EXISTS index_share_links_on_token ON share_links (token_hash)",
+        "DROP INDEX IF EXISTS index_share_links_on_token"
+    )
+    set = migrate_add(
+        set,
+        20260924027,
+        "index_share_links_ws_path",
+        "CREATE INDEX IF NOT EXISTS index_share_links_on_ws_path ON share_links (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_share_links_on_ws_path"
     )
     return set
 }

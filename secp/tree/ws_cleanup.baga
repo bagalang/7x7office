@@ -13,6 +13,7 @@
 
 import "model.baga"
 import "acl_model.baga"
+import "share_model.baga"
 import "versions.baga"
 import "../data/blobs.baga"
 import "ormbaga/orm.baga"
@@ -46,7 +47,7 @@ fn tree_ws_purge_hashes(db: OrmDb, ws: i64) -> OrmQuery !IO !Net {
 // Пълен цикъл: hash-ове → версии → текст → възли → GC.
 // best-effort за blob-овете: ако един GC се провали, останалите пак се
 // чистят (иначе един заседнал blob би спрял цялото триене).
-fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net {
+fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net !Time {
     if ws < 1 {
         return TreeWsPurge { db: db, nodes: 0, err: "bad workspace id" }
     }
@@ -63,6 +64,12 @@ fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net {
     if tree_acl_purge_ws(d, ws) < 0 {
         return TreeWsPurge { db: d, nodes: 0, err: "delete acl failed" }
     }
+    // Публичните линкове на пространството се отнемат (няма FK на boila).
+    let sl = share_revoke_ws(d, ws, share_now_s())?
+    if sl.err != "" {
+        return TreeWsPurge { db: sl.db, nodes: 0, err: sl.err }
+    }
+    d = sl.db
     // текстът е по node_id, не по workspace_id в DELETE-а за подсигуровка:
     // редовете на вече изтрити възли нямаше как да се хванат иначе.
     let t = orm_exec_params_str(d, "DELETE FROM tree_text WHERE workspace_id = $1", vals)?

@@ -227,7 +227,7 @@ fn act_ws_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), ws_to_json_role(q, 0, g.role))
 }
 
-fn act_ws_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_ws_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let ws_id = ws_qid(ctx, "workspace_id")
     let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
     if g.ok == 0 {

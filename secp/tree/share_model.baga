@@ -1,0 +1,315 @@
+// tree/share_model.baga — достъп до таблицата share_links (Фаза 3).
+//
+// Логиката (срок, таван, нива, път) е в share_roles.baga — ЧИСТ модул.
+// Тук е само базата: създаване, търсене по хеш на токен, списък за възел,
+// отнемане, броене на сваляния и чистене.
+//
+// Защо токенът се хешира и сравнява по хеш, не се пази суров: изтекъл dump
+// на базата не бива да дава достъп до файловете (същият аргумент като при
+// idm_resets). Затова няма „SELECT по token", а „SELECT по токен_hash".
+//
+// `expires_at`/`created_at`/`revoked_at` са epoch СЕКУНДИ (BIGINT), не
+// TIMESTAMPTZ: boilaDB няма NOW() в заявка, а сравнението трябва да е
+// еднакво на двата backend-а (виж gaps). Часовникът идва от handler-а.
+
+import "share_roles.baga"
+import "model.baga"
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+
+fn share_table() -> str {
+    return "share_links"
+}
+
+// Само колоните, които отдаваме навън. token_hash/pass_* НЕ се показват —
+// хешът не е тайна, но няма причина да се раздава, а паролата се проверява
+// от модела, не от клиента.
+fn share_cols() -> str {
+    return "id, workspace_id, path, level, expires_at, pass_iters, downloads, max_downloads, created_by, revoked_at, created_at"
+}
+
+fn share_backend_boila() -> i64 !IO {
+    return tree_backend_boila()?
+}
+
+fn share_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM share_links")?
+}
+
+// Текущото време в epoch секунди (std/time дава милисекунди).
+fn share_now_s() -> i64 !Time {
+    return time_now_ms() / 1000
+}
+
+// Редът като JSON за API-то. `has_password` е производно — UI-ът не бива
+// да получава хеша/солта, само факта „иска парола".
+fn share_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "workspace_id", orm_cell_by_i64(q, row, "workspace_id"))
+    o = jobj_str(o, "path", orm_cell_by(q, row, "path"))
+    o = jobj_i64(o, "level", orm_cell_by_i64(q, row, "level"))
+    o = jobj_i64(o, "expires_at", orm_cell_by_i64(q, row, "expires_at"))
+    o = jobj_i64(o, "downloads", orm_cell_by_i64(q, row, "downloads"))
+    o = jobj_i64(o, "max_downloads", orm_cell_by_i64(q, row, "max_downloads"))
+    o = jobj_i64(o, "created_at", orm_cell_by_i64(q, row, "created_at"))
+    o = jobj_i64(o, "revoked_at", orm_cell_by_i64(q, row, "revoked_at"))
+    o = jobj_i64(o, "has_password", share_has_password(orm_cell_by_i64(q, row, "pass_iters")))
+    return o
+}
+
+// ---------- писане ----------
+
+// Новият линк. `token` е СУРОВИЯТ токен — в базата влиза само хешът му.
+// `pass_hash`/`pass_salt` са "" при линк без парола; iters=0 маркира това.
+fn share_insert(db: OrmDb, token: str, ws: i64, path: str, level: i64, expires_at: i64,
+        pass_hash: str, pass_salt: str, pass_iters: i64, max_downloads: i64, created_by: i64, now_s: i64) -> OrmExec !IO !Net {
+    let th = share_token_hash(token)
+    let cols = vec_new()
+    vec_push(cols, "token_hash")
+    vec_push(cols, "workspace_id")
+    vec_push(cols, "path")
+    vec_push(cols, "level")
+    vec_push(cols, "expires_at")
+    vec_push(cols, "pass_hash")
+    vec_push(cols, "pass_salt")
+    vec_push(cols, "pass_iters")
+    vec_push(cols, "downloads")
+    vec_push(cols, "max_downloads")
+    vec_push(cols, "created_by")
+    vec_push(cols, "revoked_at")
+    vec_push(cols, "created_at")
+    let vals = vec_new()
+    vec_push(vals, th)
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    vec_push(vals, int_to_str(level))
+    vec_push(vals, int_to_str(expires_at))
+    vec_push(vals, pass_hash)
+    vec_push(vals, pass_salt)
+    vec_push(vals, int_to_str(pass_iters))
+    vec_push(vals, "0")
+    vec_push(vals, int_to_str(max_downloads))
+    vec_push(vals, int_to_str(created_by))
+    vec_push(vals, "0")
+    vec_push(vals, int_to_str(now_s))
+    if share_backend_boila()? == 1 {
+        // boila няма SERIAL: id-то се дава с MAX(id)+1.
+        let c = share_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let mut cols2 = vec_new()
+        vec_push(cols2, "id")
+        let mut vals2 = vec_new()
+        vec_push(vals2, int_to_str(orm_count_n(c) + 1))
+        let mut i: i64 = 0
+        while i < vec_len(cols) {
+            vec_push(cols2, vec_get(cols, i))
+            vec_push(vals2, vec_get(vals, i))
+            i = i + 1
+        }
+        return orm_insert_strs(orm_db_c(c), share_table(), cols2, vals2)?
+    }
+    return orm_insert_strs(db, share_table(), cols, vals)?
+}
+
+// Маркира линк като отнет (не го трие — историята остава за одита).
+fn share_revoke(db: OrmDb, id: i64, now_s: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "revoked_at")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(now_s))
+    return orm_update_by_id(db, share_table(), id, cols, vals)?
+}
+
+// Увеличава брояча на свалянията с 1 (извиква се при успешно сваляне).
+fn share_bump_downloads(db: OrmDb, id: i64, downloads: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "downloads")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(downloads + 1))
+    return orm_update_by_id(db, share_table(), id, cols, vals)?
+}
+
+// ---------- четене ----------
+
+// Търси линк по ХЕША на подадения токен. Връща и колоните за проверка
+// (срок/отнет/таван/парола). Не филтрира по статус: handler-ът решава какъв
+// отговор да даде, а моделът трябва да може да различи „няма такъв линк"
+// от „има, но е изтекъл" (за лог/диагностика; към клиента и двете са 404).
+struct ShareFind {
+    ok: i64,
+    id: i64,
+    ws: i64,
+    path: str,
+    level: i64,
+    expires_at: i64,
+    pass_hash: str,
+    pass_salt: str,
+    pass_iters: i64,
+    downloads: i64,
+    max_downloads: i64,
+    created_by: i64,
+    revoked_at: i64,
+    db: OrmDb,
+    err: str
+}
+
+fn share_find_bad(db: OrmDb, err: str) -> ShareFind {
+    return ShareFind {
+        ok: 0, id: 0, ws: 0, path: "", level: 0, expires_at: 0,
+        pass_hash: "", pass_salt: "", pass_iters: 0, downloads: 0,
+        max_downloads: 0, created_by: 0, revoked_at: 0, db: db, err: err
+    }
+}
+
+fn share_find(db: OrmDb, token: str) -> ShareFind !IO !Net {
+    if share_token_ok(token) == 0 {
+        return share_find_bad(db, "invalid token")
+    }
+    let vals = vec_new()
+    vec_push(vals, share_token_hash(token))
+    let sql = concat(concat("SELECT ", share_cols()), ", pass_hash, pass_salt FROM share_links WHERE token_hash = $1")
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return share_find_bad(db, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return share_find_bad(orm_db_q(q), "share link not found")
+    }
+    return ShareFind {
+        ok: 1,
+        id: orm_cell_by_i64(q, 0, "id"),
+        ws: orm_cell_by_i64(q, 0, "workspace_id"),
+        path: orm_cell_by(q, 0, "path"),
+        level: orm_cell_by_i64(q, 0, "level"),
+        expires_at: orm_cell_by_i64(q, 0, "expires_at"),
+        pass_hash: orm_cell_by(q, 0, "pass_hash"),
+        pass_salt: orm_cell_by(q, 0, "pass_salt"),
+        pass_iters: orm_cell_by_i64(q, 0, "pass_iters"),
+        downloads: orm_cell_by_i64(q, 0, "downloads"),
+        max_downloads: orm_cell_by_i64(q, 0, "max_downloads"),
+        created_by: orm_cell_by_i64(q, 0, "created_by"),
+        revoked_at: orm_cell_by_i64(q, 0, "revoked_at"),
+        db: orm_db_q(q),
+        err: ""
+    }
+}
+
+fn share_find_id(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", share_cols()), " FROM share_links WHERE id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// Живите линкове за точно един път (за UI-а: „какво е споделено тук").
+// Показваме и отнетите/изтеклите — иначе потребителят не разбира защо
+// старият линк не работи. Редът е по id (стабилен).
+fn share_list_path(db: OrmDb, ws: i64, path: str) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", share_cols()), " FROM share_links WHERE workspace_id = $1 AND path = $2 ORDER BY id")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// Всички линкове на пространството (за чистене при изтриване и за отчет).
+fn share_list_ws(db: OrmDb, ws: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", share_cols()), " FROM share_links WHERE workspace_id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// Линковете, сочещи към подадения път ИЛИ към негово поддърво. Ползва се при
+// изтриване на възел: линк към изтрита папка не бива да остава „жив" и да
+// възкръсне, ако на същия път се появи нов файл.
+fn share_list_subtree(db: OrmDb, ws: i64, path: str) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", share_cols()), " FROM share_links WHERE workspace_id = $1 AND (path = $2 OR path LIKE $3)")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    vec_push(vals, concat(path, "/%"))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// ---------- чистене ----------
+
+// Отнема всички линкове към поддърво (при изтриване/преместване на възел).
+// Ред по ред, защото boilaDB няма UPDATE…FROM (виж gaps).
+struct ShareRevoke {
+    db: OrmDb,
+    n: i64,
+    err: str
+}
+
+fn share_revoke_subtree(db: OrmDb, ws: i64, path: str, now_s: i64) -> ShareRevoke !IO !Net {
+    let q = share_list_subtree(db, ws, path)?
+    if orm_ok_q(q) == 0 {
+        return ShareRevoke { db: db, n: 0, err: orm_err_q(q) }
+    }
+    let mut d = orm_db_q(q)
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "revoked_at") == 0 {
+            let e = share_revoke(d, orm_cell_by_i64(q, i, "id"), now_s)?
+            if orm_ok(e) == 0 {
+                return ShareRevoke { db: orm_db_exec(e), n: i, err: orm_err_exec(e) }
+            }
+            d = orm_db_exec(e)
+        }
+        i = i + 1
+    }
+    return ShareRevoke { db: d, n: orm_nrows(q), err: "" }
+}
+
+// Отнема всичко на пространството (при изтриване на пространството).
+fn share_revoke_ws(db: OrmDb, ws: i64, now_s: i64) -> ShareRevoke !IO !Net {    let q = share_list_ws(db, ws)?
+    if orm_ok_q(q) == 0 {
+        return ShareRevoke { db: db, n: 0, err: orm_err_q(q) }
+    }
+    let mut d = orm_db_q(q)
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "revoked_at") == 0 {
+            let e = share_revoke(d, orm_cell_by_i64(q, i, "id"), now_s)?
+            if orm_ok(e) == 0 {
+                return ShareRevoke { db: orm_db_exec(e), n: i, err: orm_err_exec(e) }
+            }
+            d = orm_db_exec(e)
+        }
+        i = i + 1
+    }
+    return ShareRevoke { db: d, n: orm_nrows(q), err: "" }
+}
+
+// Пренася линковете при ПРЕМЕСТВАНЕ на поддърво (иначе линк към /a/x сочи
+// към път, който вече не съществува и дава 404 завинаги). Ред по ред.
+fn share_move_subtree(db: OrmDb, ws: i64, from: str, to: str) -> ShareRevoke !IO !Net {
+    let q = share_list_subtree(db, ws, from)?
+    if orm_ok_q(q) == 0 {
+        return ShareRevoke { db: db, n: 0, err: orm_err_q(q) }
+    }
+    let mut d = orm_db_q(q)
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let old = orm_cell_by(q, i, "path")
+        let tail = tree_tail(old, len(from))
+        let np = concat(to, tail)
+        let cols = vec_new()
+        vec_push(cols, "path")
+        let vals = vec_new()
+        vec_push(vals, np)
+        let e = orm_update_by_id(d, share_table(), orm_cell_by_i64(q, i, "id"), cols, vals)?
+        if orm_ok(e) == 0 {
+            return ShareRevoke { db: orm_db_exec(e), n: i, err: orm_err_exec(e) }
+        }
+        d = orm_db_exec(e)
+        i = i + 1
+    }
+    return ShareRevoke { db: d, n: orm_nrows(q), err: "" }
+}

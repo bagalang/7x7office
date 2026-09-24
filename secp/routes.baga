@@ -12,6 +12,8 @@ import "tree/docs.baga"
 import "tree/versions_files.baga"
 import "tree/search_actions.baga"
 import "tree/acl_actions.baga"
+import "tree/share_actions.baga"
+import "tree/share_open.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -64,6 +66,14 @@ fn RID_WS_MEMBER_REMOVE() -> i64 { return 51 }
 fn RID_FS_ACL_LIST() -> i64 { return 52 }
 fn RID_FS_ACL_SET() -> i64 { return 53 }
 fn RID_FS_ACL_DELETE() -> i64 { return 54 }
+fn RID_FS_SHARE_LIST() -> i64 { return 55 }
+fn RID_FS_SHARE_CREATE() -> i64 { return 56 }
+fn RID_FS_SHARE_REVOKE() -> i64 { return 57 }
+fn RID_SHARE_META() -> i64 { return 58 }
+fn RID_SHARE_UNLOCK() -> i64 { return 59 }
+fn RID_SHARE_VIEW() -> i64 { return 60 }
+fn RID_SHARE_DOWNLOAD() -> i64 { return 61 }
+fn RID_SHARE_UPLOAD() -> i64 { return 62 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -114,6 +124,15 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/fs/acl", RID_FS_ACL_LIST(), "", "fs", 0, "", "AclList", "200", "path")
     app = fmr_route_meta(app, "POST", "/v1/fs/acl", RID_FS_ACL_SET(), "", "fs", 0, "AclSet", "AclRow", "200", "workspace_id")
     app = fmr_route_meta(app, "DELETE", "/v1/fs/acl", RID_FS_ACL_DELETE(), "", "fs", 0, "", "-", "204", "acl_id")
+    // Фаза 3: собственик управлява линковете; публичните /s/* са без Bearer.
+    app = fmr_route_meta(app, "GET", "/v1/fs/share", RID_FS_SHARE_LIST(), "", "fs", 0, "", "ShareList", "200", "path")
+    app = fmr_route_meta(app, "POST", "/v1/fs/share", RID_FS_SHARE_CREATE(), "", "fs", 0, "ShareCreate", "ShareLink", "201", "workspace_id")
+    app = fmr_route_meta(app, "DELETE", "/v1/fs/share", RID_FS_SHARE_REVOKE(), "", "fs", 0, "", "-", "204", "share_id")
+    app = fmr_route_meta(app, "GET", "/s/{token}", RID_SHARE_META(), "", "share", 1, "", "ShareMeta", "200", "")
+    app = fmr_route_meta(app, "POST", "/s/{token}/unlock", RID_SHARE_UNLOCK(), "", "share", 1, "ShareUnlock", "SharePass", "200", "")
+    app = fmr_route_meta(app, "GET", "/s/{token}/view", RID_SHARE_VIEW(), "", "share", 1, "", "ShareView", "200", "path")
+    app = fmr_route_meta(app, "GET", "/s/{token}/download", RID_SHARE_DOWNLOAD(), "", "share", 1, "", "bytes", "200", "path")
+    app = fmr_route_meta(app, "PUT", "/s/{token}/upload", RID_SHARE_UPLOAD(), "", "share", 1, "bytes", "Node", "200", "path,name")
     return app
 }
 
@@ -122,7 +141,7 @@ fn fmr_before(ctx: FmrCtx) -> DepResult {
 }
 
 // secp has no gRPC surface yet — dual hook returns empty unimplemented.
-fn fmr_grpc_handle(path: str, body: bytes, db: OrmDb) -> FmrOut !IO !Net {
+fn fmr_grpc_handle(path: str, body: bytes, db: OrmDb) -> FmrOut !IO !Net !Time {
     let mut r = http_response_bytes(200, bytes_new(0))
     r = http_set_header(r, "Content-Type", "application/grpc")
     r = http_set_header(r, "grpc-status", "12")
@@ -130,7 +149,7 @@ fn fmr_grpc_handle(path: str, body: bytes, db: OrmDb) -> FmrOut !IO !Net {
     return fmr_out(r, db)
 }
 
-fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let id = ctx.route_id
     if id == RID_HEALTH() { return act_health(ctx, db) }
     if id == RID_READY() { return act_ready(ctx, db)? }
@@ -176,5 +195,13 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if id == RID_FS_ACL_LIST() { return act_fs_acl_list(ctx, db)? }
     if id == RID_FS_ACL_SET() { return act_fs_acl_set(ctx, db)? }
     if id == RID_FS_ACL_DELETE() { return act_fs_acl_delete(ctx, db)? }
+    if id == RID_FS_SHARE_LIST() { return act_fs_share_list(ctx, db)? }
+    if id == RID_FS_SHARE_CREATE() { return act_fs_share_create(ctx, db)? }
+    if id == RID_FS_SHARE_REVOKE() { return act_fs_share_revoke(ctx, db)? }
+    if id == RID_SHARE_META() { return act_share_meta(ctx, db)? }
+    if id == RID_SHARE_UNLOCK() { return act_share_unlock(ctx, db)? }
+    if id == RID_SHARE_VIEW() { return act_share_view(ctx, db)? }
+    if id == RID_SHARE_DOWNLOAD() { return act_share_download(ctx, db)? }
+    if id == RID_SHARE_UPLOAD() { return act_share_upload(ctx, db)? }
     return fmr_out(fmr_500("unhandled route"), db)
 }

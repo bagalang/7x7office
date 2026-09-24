@@ -1,0 +1,395 @@
+// tree/share_open.baga — публична страна на линковете (Фаза 3).
+//
+//   GET  /s/{token}              → JSON за линка (път, ниво, нужна парола)
+//   GET  /s/{token}/view?path=   → списък (за папка) или съдържание (за файл)
+//   GET  /s/{token}/download?path= → файлът като attachment (брои сваляне)
+//   PUT  /s/{token}/upload?path= → качване в папка (само ниво 2)
+//
+// Тук НЯМА bearer автентикация — маршрутите са публични (public=1). Затова:
+//   - токенът идва в ПЪТЯ (/s/<token>/...), не в заявка или хедър, за да
+//     остане обикновен линк, който може да се отвори в браузър
+//   - паролата на линка се носи в краткотраен JWT (claim `share`) със срок
+//     до изтичането на самия линк; иначе всеки рутер/лог по пътя вижда
+//     паролата при всяка заявка (виж gaps G37)
+//   - `path` винаги се проверява да е ВЪТРЕ в поддървото на линка
+//     (share_path_inside) — това е проверката, която не бива да се разминава
+//   - токенът се сравнява по хеш; „няма такъв", „изтекъл" и „отнет" дават
+//     един и същ 404, за да не се проверява по кода кой токен съществува
+
+import "share_model.baga"
+import "share_roles.baga"
+import "model.baga"
+import "store.baga"
+import "../data/blobs.baga"
+import "../idm/mail.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "jwtbaga/jwt.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "pathbaga/path.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+// Токенът от пътя. Пазим само hex знаци („.."/% се отрязват от валидацията
+// по-късно). Празен низ, ако липсва сегмент.
+fn share_path_token(ctx: FmrCtx) -> str {
+    return fmr_param(ctx, "token")
+}
+
+// Паролата на линка се носи в JWT с claim `share` = id на линка. Проверяваме
+// и че срокът не е минал (jwt_time_ok чете `exp`). Секретът е същият като на
+// сесийните токени (ctx.jwt_secret).
+fn share_pass_token(ctx: FmrCtx, id: i64) -> str !IO !Time {
+    let mut extra = "\"share\":"
+    extra = concat(extra, int_to_str(id))
+    let exp = share_now_s() + 86400
+    extra = concat(extra, concat(",\"exp\":", int_to_str(exp)))
+    return fmr_issue_token(ctx.jwt_secret, "share", extra)
+}
+
+// Токенът за паролата важи ли за ТОЗИ линк. Използвайки query параметър, а не
+// отделен header, за да работи и при отваряне на линк в нов таб (без JS).
+fn share_pass_ok(ctx: FmrCtx, id: i64) -> i64 !IO !Time {
+    let raw = query_decode_val(fmr_query(ctx, "pass"))
+    if raw == "" {
+        return 0
+    }
+    if jwt_verify_hs256(ctx.jwt_secret, raw) == 0 {
+        return 0
+    }
+    if jwt_time_ok(raw, share_now_s()) == 0 {
+        return 0
+    }
+    if jwt_claim_int(raw, "share") != id {
+        return 0
+    }
+    return 1
+}
+
+// Зареден и валиден линк. ok=0 → out е готовата грешка (404 за всичко, за да
+// не се различават „няма", „изтекъл" и „отнет").
+struct ShareOpen {
+    ok: i64,
+    id: i64,
+    ws: i64,
+    path: str,
+    level: i64,
+    needs_password: i64,
+    unlocked: i64,
+    downloads: i64,
+    max_downloads: i64,
+    expires_at: i64,
+    created_by: i64,
+    db: OrmDb,
+    out: FmrOut
+}
+
+fn share_open_bad(db: OrmDb, out: FmrOut) -> ShareOpen {
+    return ShareOpen { ok: 0, id: 0, ws: 0, path: "", level: 0, needs_password: 0, unlocked: 0, downloads: 0, max_downloads: 0, expires_at: 0, created_by: 0, db: db, out: out }
+}
+
+// Разрешено ли е отваряне. Отделено от share_open_req, за да може
+// /s/{token} да върне „иска парола" вместо 403.
+fn share_open_resolve(ctx: FmrCtx, db: OrmDb, token: str) -> ShareOpen !IO !Net !Time {
+    if share_token_ok(token) == 0 {
+        return share_open_bad(db, act_404(db, "link not found"))
+    }
+    let f = share_find(db, token)?
+    if f.ok == 0 {
+        // „не намерен" и „грешка в базата" са различни: при грешка не бива
+        // да казваме „няма линк" (крие реален проблем).
+        if f.err == "share link not found" {
+            return share_open_bad(f.db, act_404(f.db, "link not found"))
+        }
+        return share_open_bad(f.db, act_err(f.db, 500, f.err))
+    }
+    if f.revoked_at > 0 {
+        return share_open_bad(f.db, act_404(f.db, "link not found"))
+    }
+    if share_expired(f.expires_at, share_now_s()) == 1 {
+        return share_open_bad(f.db, act_404(f.db, "link not found"))
+    }
+    if share_uses_exceeded(f.downloads, f.max_downloads) == 1 {
+        return share_open_bad(f.db, act_404(f.db, "link not found"))
+    }
+    // Линк към изтрит възел е мъртъв — проверката е тук, а не при създаване,
+    // защото пътят може да изчезне междувременно.
+    let nq = tree_find(f.db, f.ws, f.path)?
+    if orm_ok_q(nq) == 0 {
+        return share_open_bad(orm_db_q(nq), act_err(orm_db_q(nq), 500, orm_err_q(nq)))
+    }
+    if orm_nrows(nq) < 1 {
+        return share_open_bad(orm_db_q(nq), act_404(orm_db_q(nq), "link not found"))
+    }
+    let needs = share_has_password(f.pass_iters)
+    let unlocked = share_pass_ok(ctx, f.id)
+    return ShareOpen {
+        ok: 1, id: f.id, ws: f.ws, path: f.path, level: f.level,
+        needs_password: needs, unlocked: unlocked,
+        downloads: f.downloads, max_downloads: f.max_downloads,
+        expires_at: f.expires_at,
+        created_by: f.created_by,
+        db: orm_db_q(nq), out: fmr_out(http_response(200, ""), orm_db_q(nq))
+    }
+}
+
+// Телесният път вътре в линка: ?path= (за подфайл) или самият линк, ако
+// липсва. Ако е подаден път, той ТРЯБВА да е в поддървото на линка.
+struct ShareTarget {
+    ok: i64,
+    path: str,
+    db: OrmDb,
+    out: FmrOut
+}
+
+fn share_target(ctx: FmrCtx, o: ShareOpen) -> ShareTarget !IO !Net {
+    let raw = query_decode_val(fmr_query(ctx, "path"))
+    let mut p = o.path
+    if raw != "" {
+        p = tree_norm(raw)
+        if share_path_inside(o.path, p) == 0 {
+            return ShareTarget { ok: 0, path: p, db: o.db, out: act_404(o.db, "path not found") }
+        }
+    }
+    let q = tree_find(o.db, o.ws, p)?
+    if orm_ok_q(q) == 0 {
+        return ShareTarget { ok: 0, path: p, db: orm_db_q(q), out: act_err(orm_db_q(q), 500, orm_err_q(q)) }
+    }
+    if orm_nrows(q) < 1 {
+        return ShareTarget { ok: 0, path: p, db: orm_db_q(q), out: act_404(orm_db_q(q), "path not found") }
+    }
+    return ShareTarget { ok: 1, path: p, db: orm_db_q(q), out: fmr_out(http_response(200, ""), orm_db_q(q)) }
+}
+
+// GET /s/{token} — метаданни. НЕ иска парола (тя се проверява при достъп),
+// за да може UI-ът да покаже „този линк иска парола".
+fn act_share_meta(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let o = share_open_resolve(ctx, db, share_path_token(ctx))?
+    if o.ok == 0 {
+        return o.out
+    }
+    let q = tree_find(o.db, o.ws, o.path)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut meta = jobj_new()
+    meta = jobj_str(meta, "path", o.path)
+    meta = jobj_str(meta, "name", tree_name_of(o.path))
+    meta = jobj_i64(meta, "is_dir", orm_cell_by_i64(q, 0, "is_dir"))
+    meta = jobj_i64(meta, "size", orm_cell_by_i64(q, 0, "size"))
+    meta = jobj_i64(meta, "needs_password", o.needs_password)
+    meta = jobj_i64(meta, "unlocked", o.unlocked)
+    meta = jobj_i64(meta, "level", share_grant_level(o.level, orm_cell_by_i64(q, 0, "is_dir")))
+    meta = jobj_i64(meta, "downloads", o.downloads)
+    meta = jobj_i64(meta, "max_downloads", o.max_downloads)
+    meta = jobj_i64(meta, "expires_at", o.expires_at)
+    return act_ok(orm_db_q(q), meta)
+}
+
+// POST /s/{token}/unlock — паролата в тялото → краткотраен токен за линка.
+fn act_share_unlock(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let pw_f = jreq_str(b.doc, b.root, "password")
+    if pw_f.ok == 0 {
+        return act_err(db, 400, pw_f.err)
+    }
+    let token = share_path_token(ctx)
+    if share_token_ok(token) == 0 {
+        return act_404(db, "link not found")
+    }
+    let f = share_find(db, token)?
+    if f.ok == 0 {
+        if f.err == "share link not found" {
+            return act_404(f.db, "link not found")
+        }
+        return act_err(f.db, 500, f.err)
+    }
+    if f.revoked_at > 0 {
+        return act_404(f.db, "link not found")
+    }
+    if share_expired(f.expires_at, share_now_s()) == 1 {
+        return act_404(f.db, "link not found")
+    }
+    if share_has_password(f.pass_iters) == 0 {
+        // Линк без парола: няма какво да отключваме. 400, не „ok", за да не
+        // изглежда, че паролата е била вярна.
+        return act_err(f.db, 400, "this link has no password")
+    }
+    if share_pass_verify(pw_f.val, f.pass_salt, f.pass_iters, f.pass_hash) == 0 {
+        // Еднакво съобщение при грешна парола (без подробности).
+        return act_err(f.db, 401, "wrong password")
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "pass_token", share_pass_token(ctx, f.id))
+    return act_ok(f.db, o)
+}
+
+// GET /s/{token}/view?path= — списък за папка, съдържание за файл.
+fn act_share_view(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let o = share_open_resolve(ctx, db, share_path_token(ctx))?
+    if o.ok == 0 {
+        return o.out
+    }
+    if o.needs_password == 1 && o.unlocked == 0 {
+        return act_err(o.db, 401, "password required")
+    }
+    let t = share_target(ctx, o)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let q = tree_find(t.db, o.ws, t.path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(t.db, "path not found")
+    }
+    let mut d = orm_db_q(q)
+    let is_dir = orm_cell_by_i64(q, 0, "is_dir")
+    if is_dir == 1 {
+        // Списък: само имена/размери. Пътищата са ВИНАГИ вътре в линка
+        // (деца на разрешен път), затова филтър като ACL не е нужен.
+        let ch = tree_children(d, o.ws, t.path)?
+        if orm_ok_q(ch) == 0 {
+            return act_err(orm_db_q(ch), 500, orm_err_q(ch))
+        }
+        let mut arr = jarr_new()
+        let mut i: i64 = 0
+        while i < orm_nrows(ch) {
+            arr = jarr_obj(arr, tree_node_json(ch, i))
+            i = i + 1
+        }
+        d = orm_db_q(ch)
+        let mut out = jobj_new()
+        out = jobj_str(out, "path", t.path)
+        out = jobj_i64(out, "is_dir", 1)
+        out = jobj_i64(out, "level", share_grant_level(o.level, 1))
+        out = jobj_raw(out, "items", jarr_encode(arr))
+        out = jobj_i64(out, "count", orm_nrows(ch))
+        return act_ok(d, out)
+    }
+    // Файл: връщаме съдържанието (текст/снимка) или метаданни за двоично.
+    let hash = orm_cell_by(q, 0, "hash")
+    let size = orm_cell_by_i64(q, 0, "size")
+    let mime = tree_mime(t.path)
+    let mut out = tree_node_json(q, 0)
+    out = jobj_i64(out, "is_dir", 0)
+    out = jobj_str(out, "mime", mime)
+    out = jobj_i64(out, "level", share_grant_level(o.level, 0))
+    if bytes_len(http_body_bytes(ctx.req)) == 0 {
+        // нищо — само метаданни (викащият решава дали да дръпне /download)
+    }
+    if size <= 1048576 && (str_starts_with(mime, "text/") == 1 || mime == "application/json") {
+        let body = data_blob_get(hash)?
+        out = jobj_str(out, "content", str_of_bytes(body))
+    }
+    return act_ok(d, out)
+}
+
+// GET /s/{token}/download?path= — файлът като attachment. Тук се брои
+// сваляне (виж max_downloads).
+fn act_share_download(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let o = share_open_resolve(ctx, db, share_path_token(ctx))?
+    if o.ok == 0 {
+        return o.out
+    }
+    if o.needs_password == 1 && o.unlocked == 0 {
+        return act_err(o.db, 401, "password required")
+    }
+    let t = share_target(ctx, o)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let q = tree_find(t.db, o.ws, t.path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(t.db, "path not found")
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        return act_err(orm_db_q(q), 400, "is a directory")
+    }
+    let hash = orm_cell_by(q, 0, "hash")
+    let size = orm_cell_by_i64(q, 0, "size")
+    let name = orm_cell_by(q, 0, "name")
+    let body = data_blob_get(hash)?
+    if bytes_len(body) == 0 && size > 0 {
+        return act_err(orm_db_q(q), 500, "blob missing")
+    }
+    // Броячът се вдига ПРЕДИ отговора: ако записът се провали, по-добре да
+    // не сме дали файла, отколкото да сме го дали и броячът да е сбъркан.
+    let bump = share_bump_downloads(orm_db_q(q), o.id, o.downloads)?
+    if orm_ok(bump) == 0 {
+        return act_err(orm_db_exec(bump), 500, orm_err_exec(bump))
+    }
+    let mut resp = http_response_bytes(200, body)
+    resp = http_set_header(resp, "Content-Type", tree_mime(t.path))
+    resp = http_set_header(resp, "ETag", hash)
+    resp = http_set_header(resp, "Content-Disposition", concat("attachment; filename=\"", concat(name, "\"")))
+    return fmr_out(resp, orm_db_exec(bump))
+}
+
+// PUT /s/{token}/upload?path= → качване в папка (само ниво 2).
+fn act_share_upload(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let o = share_open_resolve(ctx, db, share_path_token(ctx))?
+    if o.ok == 0 {
+        return o.out
+    }
+    if o.needs_password == 1 && o.unlocked == 0 {
+        return act_err(o.db, 401, "password required")
+    }
+    // Папката на линка трябва да позволява запис.
+    let root_q = tree_find(o.db, o.ws, o.path)?
+    if orm_ok_q(root_q) == 0 || orm_nrows(root_q) < 1 {
+        return act_404(o.db, "path not found")
+    }
+    if share_allows(o.level, 1, share_level_edit()) == 0 {
+        return act_err(orm_db_q(root_q), 403, "this link is read-only")
+    }
+    let t = share_target(ctx, o)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let tq = tree_find(t.db, o.ws, t.path)?
+    if orm_ok_q(tq) == 0 || orm_nrows(tq) < 1 {
+        return act_404(t.db, "path not found")
+    }
+    if orm_cell_by_i64(tq, 0, "is_dir") == 0 {
+        return act_err(orm_db_q(tq), 400, "target is a file")
+    }
+    let body = http_body_bytes(ctx.req)
+    let size = bytes_len(body)
+    if size < 1 {
+        return act_err(orm_db_q(tq), 400, "empty body")
+    }
+    // Име: ?name= (задължително — няма как да познаем името от тялото).
+    let name = query_decode_val(fmr_query(ctx, "name"))
+    if name == "" {
+        return act_err(orm_db_q(tq), 400, "name required")
+    }
+    // Без наклонени черти и без ".." в името: иначе качващият пише извън
+    // папката на линка. Проверяваме СУРОВОТО име (преди norm), защото
+    // path_clean("..") би го „оправил" и проверката би пропуснала опита.
+    if str_find(name, "/") >= 0 || str_find(name, "..") >= 0 {
+        return act_err(orm_db_q(tq), 400, "invalid name")
+    }
+    if name == "." {
+        return act_err(orm_db_q(tq), 400, "invalid name")
+    }
+    let dest = concat(t.path, concat("/", name))
+    if share_path_inside(o.path, dest) == 0 {
+        return act_err(orm_db_q(tq), 400, "invalid name")
+    }
+    let maxf = tree_max_file_bytes()?
+    if size > maxf {
+        return act_err(orm_db_q(tq), 413, "file too large")
+    }
+    // owner за одита: създателят на линка (анонимният няма id).
+    return tree_store_file(orm_db_q(tq), o.ws, o.created_by, dest, body, 1)?
+}

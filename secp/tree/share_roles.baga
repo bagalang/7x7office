@@ -1,0 +1,213 @@
+// tree/share_roles.baga — логика на публичните линкове (Фаза 3). ЧИСТ модул.
+//
+// Защо чист: това е ВТОРАТА security граница след ACL. Линкът дава достъп
+// БЕЗ вход — ако логиката сбърка (напр. линк към /a стигне до /ab, или
+// изтекъл линк още работи), това е дупка, която не се хваща от интеграционен
+// тест на UI-а. Затова е отделно от базата и се тества в
+// tests/share_roles_test.baga без мрежа.
+//
+// МОДЕЛ:
+//   - Линкът сочи към ПЪТ в едно пространство. Нивото му е 1 (четене) или
+//     2 (запис). Файл винаги е 1 — „качване върху файл" не е смисъл.
+//   - Правата важат и за поддървото на пътя (иначе линк към папка не
+//     показва нищо). Достъп извън поддървото се отказва винаги — това е
+//     проверката, която не бива да се разминава с нищо друго.
+//   - В базата отива само SHA-256 на токена (като idm_resets): изтекъл dump
+//     не бива да дава достъп. Суровият токен се вижда веднъж, при създаване.
+//   - Срокът и броят сваляния са ОПЦИОНАЛНИ (0 = без ограничение). Пазим ги
+//     като epoch секунди, а не като TIMESTAMPTZ: така сравнението е еднакво
+//     на Postgres и на BoilaDB (последният няма NOW() в заявка — виж gaps).
+//
+// Паролата на линка е PBKDF2-HMAC-SHA256 през lib/pass.baga — същият KDF
+// като паролите на потребителите, за да няма два различни модела.
+
+import "../lib/pass.baga"
+import "std/crypto/sha256.baga"
+import "std/bytes/bytes.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+// ---------- нива ----------
+
+// Публичният линк няма трето ниво: „споделяне" (ACL) е за потребители в
+// пространството, не за анонимен линк. Затова 1..2, не 0..3 като ACL.
+fn share_level_view() -> i64 { return 1 }
+fn share_level_edit() -> i64 { return 2 }
+
+fn share_level_valid(level: i64) -> i64 {
+    if level == share_level_view() || level == share_level_edit() {
+        return 1
+    }
+    return 0
+}
+
+// ---------- път ----------
+
+// `target` вътре в поддървото на `base` ли е (или е самият base)?
+// Сравнението е по СЕГМЕНТИ: "/a" не съдържа "/ab" — класическата дупка,
+// при която линк за една папка дава достъп до съседна с общ префикс.
+fn share_path_inside(base: str, target: str) -> i64 {
+    if base == target {
+        return 1
+    }
+    if base == "/" {
+        return 1
+    }
+    if str_starts_with(target, concat(base, "/")) == 1 {
+        return 1
+    }
+    return 0
+}
+
+// ---------- срок / брой сваляния ----------
+
+// Часове по подразбиране, ако заявката не поиска срок. 0 = без срок.
+fn share_ttl_h_default() -> i64 {
+    return 168  // 7 дни
+}
+
+// Часове от средата (SECP_SHARE_TTL_H), за да не се пипа код за промяна на
+// политиката. Невалидно/липсващо → подразбираното; отрицателно → 0 (без срок).
+fn share_ttl_h_cfg() -> i64 !IO {
+    let raw = env("SECP_SHARE_TTL_H")?
+    if raw == "" {
+        return share_ttl_h_default()
+    }
+    let n = parse_int(raw)
+    if n < 0 {
+        return 0
+    }
+    return n
+}
+
+// Часове → секунди. 0 остава 0 (без срок), за да е ясно, че „без срок" не е
+// „изтича веднага".
+fn share_ttl_secs(hours: i64) -> i64 {
+    if hours <= 0 {
+        return 0
+    }
+    return hours * 3600
+}
+
+// Моментът на изтичане: 0 = никога. Часовникът се подава отвън (чисто).
+fn share_expires_at(now_s: i64, ttl_secs: i64) -> i64 {
+    if ttl_secs <= 0 {
+        return 0
+    }
+    return now_s + ttl_secs
+}
+
+// Изтекъл ли е линкът. При точно равенство вече е изтекъл (не дава още
+// един „последен" достъп).
+fn share_expired(expires_at: i64, now_s: i64) -> i64 {
+    if expires_at <= 0 {
+        return 0
+    }
+    if now_s >= expires_at {
+        return 1
+    }
+    return 0
+}
+
+// Достигнат ли е таванът на свалянията. 0 = без таван.
+fn share_uses_exceeded(downloads: i64, max_downloads: i64) -> i64 {
+    if max_downloads <= 0 {
+        return 0
+    }
+    if downloads >= max_downloads {
+        return 1
+    }
+    return 0
+}
+
+// ---------- токен ----------
+
+// 32 случайни байта → 64 hex. В базата отива само хешът (виж модела).
+fn share_token_new() -> str !Random {
+    return bytes_to_hex(random_bytes(32))
+}
+
+fn share_token_hash(token: str) -> str {
+    return sha256_hex(token)
+}
+
+fn share_hex_digit(c: i64) -> i64 {
+    if c >= 48 && c <= 57 {
+        return 1  // 0-9
+    }
+    if c >= 97 && c <= 102 {
+        return 1  // a-f
+    }
+    if c >= 65 && c <= 70 {
+        return 1  // A-F
+    }
+    return 0
+}
+
+// Токенът е 64 hex знака. Проверяваме формата, преди да търсим в базата:
+// иначе всеки случаен низ прави заявка, а и е ясно, че не е наш токен.
+fn share_token_ok(token: str) -> i64 {
+    if len(token) != 64 {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < 64 {
+        if share_hex_digit(char_at(token, i)) == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// ---------- парола на линка ----------
+
+// Брой итерации за PBKDF2 на линка. Същият env като паролите на
+// потребителите (SECP_PASS_ITERS), за да не се поддържат два режима.
+fn share_pass_iters() -> i64 !IO {
+    return pass_iters_cfg()?
+}
+
+fn share_pass_make(password: str, salt_hex: str, iters: i64) -> str {
+    return pass_make(password, salt_hex, iters)
+}
+
+fn share_pass_verify(password: str, salt_hex: str, iters: i64, expected_hex: str) -> i64 {
+    if expected_hex == "" {
+        return 0
+    }
+    return pass_verify(password, salt_hex, iters, expected_hex)
+}
+
+// Има ли линкът парола (итерациите са маркерът: 0 = без парола).
+fn share_has_password(pass_iters: i64) -> i64 {
+    if pass_iters > 0 {
+        return 1
+    }
+    return 0
+}
+
+// ---------- какво позволява линкът ----------
+
+// Файл никога не е „за запис" — линк с ниво 2 към файл пак е само четене.
+// Така забравено ниво 2 върху файл не дава качване „върху" него.
+fn share_grant_level(link_level: i64, is_dir: i64) -> i64 {
+    if is_dir == 0 {
+        return share_level_view()
+    }
+    if share_level_valid(link_level) == 0 {
+        // Невалидно ниво в базата (ръчна намеса) не бива да дава запис:
+        // падаме до най-ниското право, не до най-високото.
+        return share_level_view()
+    }
+    return link_level
+}
+
+// Разрешено ли е действие с ниво `need` върху този възел.
+fn share_allows(link_level: i64, is_dir: i64, need: i64) -> i64 {
+    if share_grant_level(link_level, is_dir) >= need {
+        return 1
+    }
+    return 0
+}

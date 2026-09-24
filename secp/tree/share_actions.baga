@@ -1,0 +1,245 @@
+// tree/share_actions.baga — REST за публични линкове (Фаза 3), собственик.
+//
+//   GET    /v1/fs/share?path=/dir          → линковете към този път
+//   POST   /v1/fs/share                     → нов линк
+//   DELETE /v1/fs/share?share_id=          → отнемане на линк
+//
+// Кой може: този с ниво „споделяне" (3) върху пътя — по подразбиране owner
+// на пространството, но ACL ред може да даде ниво 3 и на друг. Затова
+// проверката минава през tree_auth(ctx, db, 3, path), а не през роля.
+//
+// Линк към ЛИЧНО пространство е разрешен (това е основният случай: „прати
+// този файл на човек без акаунт"), за разлика от ACL, който е само за
+// екипни пространства.
+//
+// Отговорът при създаване съдържа СУРОВИЯ токен/линк — единственото място,
+// където се виждат. В базата остава само хешът (share_model.baga).
+
+import "auth.baga"
+import "share_model.baga"
+import "share_roles.baga"
+import "../lib/pass.baga"
+import "../idm/mail.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+import "std/random/random.baga"
+
+// share_id от заявката: липсващо/нечислово → 0.
+fn share_qid(ctx: FmrCtx, name: str) -> i64 {
+    let raw = str_trim(fmr_query(ctx, name))
+    if raw == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
+// Пълният публичен URL на линка. Токенът е hex — без нужда от percent-encoding.
+fn share_public_link(token: str) -> str !IO {
+    return concat(concat(mail_public_url()?, "/share/"), token)
+}
+
+fn act_fs_share_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let path = tree_qpath(ctx, "path")
+    let t = tree_auth(ctx, db, 1, "")?
+    if t.ok == 0 {
+        return t.out
+    }
+    // Списъкът на линковете е „управление на споделянето" → ниво 3.
+    if t.level < 3 {
+        return act_err(t.out.db, 403, "share rights required")
+    }
+    let q = share_list_path(t.out.db, t.ws, tree_norm(path))?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, share_to_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "path", tree_norm(path))
+    o = jobj_i64(o, "workspace_id", t.ws)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(orm_db_q(q), o)
+}
+
+// Тяло: { path, level?: 1|2, expires_h?: int, max_downloads?: int, password?: str }
+// Липсващо `expires_h` → SECP_SHARE_TTL_H (деф. 168 ч); 0 → без срок.
+fn act_fs_share_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let path_f = jreq_str(b.doc, b.root, "path")
+    if path_f.ok == 0 {
+        return act_err(db, 400, path_f.err)
+    }
+    let path = tree_norm(str_trim(path_f.val))
+    if path == "" {
+        return act_err(db, 400, "path required")
+    }
+    let t = tree_auth(ctx, db, 1, path)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let mut d = t.out.db
+    // Управлението на линкове иска ниво „споделяне" (3) върху конкретния път.
+    if t.level < 3 {
+        return act_err(d, 403, "share rights required")
+    }
+    // Възелът трябва да съществува — иначе линк към бъдещ файл на същия път
+    // би дал достъп до съдържание, което създателят не е виждал.
+    let nq = tree_find(d, t.ws, path)?
+    if orm_ok_q(nq) == 0 {
+        return act_err(orm_db_q(nq), 500, orm_err_q(nq))
+    }
+    if orm_nrows(nq) < 1 {
+        return act_404(orm_db_q(nq), "path not found")
+    }
+    let is_dir = orm_cell_by_i64(nq, 0, "is_dir")
+    d = orm_db_q(nq)
+
+    // ниво: по подразбиране 1 (четене). Файл не може да е ниво 2.
+    let mut level = share_level_view()
+    if jhas(b.doc, b.root, "level") == 1 {
+        let lf = jreq_i64(b.doc, b.root, "level")
+        if lf.ok == 0 {
+            return act_err(d, 400, lf.err)
+        }
+        if share_level_valid(lf.num) == 0 {
+            return act_err(d, 400, "level must be 1 (view) or 2 (edit)")
+        }
+        level = lf.num
+    }
+    if level == share_level_edit() {
+        if is_dir == 0 {
+            return act_err(d, 400, "a file link is always read-only")
+        }
+    }
+
+    // срок: липсващ → от конфигурацията; 0 → без срок
+    let mut expires_h = share_ttl_h_cfg()?
+    if jhas(b.doc, b.root, "expires_h") == 1 {
+        let ef = jreq_i64(b.doc, b.root, "expires_h")
+        if ef.ok == 0 {
+            return act_err(d, 400, ef.err)
+        }
+        if ef.num < 0 {
+            return act_err(d, 400, "expires_h must be >= 0")
+        }
+        expires_h = ef.num
+    }
+
+    let mut max_downloads: i64 = 0
+    if jhas(b.doc, b.root, "max_downloads") == 1 {
+        let mf = jreq_i64(b.doc, b.root, "max_downloads")
+        if mf.ok == 0 {
+            return act_err(d, 400, mf.err)
+        }
+        if mf.num < 0 {
+            return act_err(d, 400, "max_downloads must be >= 0")
+        }
+        max_downloads = mf.num
+    }
+
+    // парола: по избор. Минимум 6 знака — линкът се праща по поща/чат, а
+    // паролата е „втората половина на тайната". Кратка парола тук е
+    // покана за подбор (няма сървърна сесия за ограничаване на опитите).
+    let mut pass_hash = ""
+    let mut pass_salt = ""
+    let mut pass_iters: i64 = 0
+    let pw_f = jopt_str(b.doc, b.root, "password", "")
+    if pw_f.ok == 0 {
+        return act_err(d, 400, pw_f.err)
+    }
+    if pw_f.present == 1 && pw_f.val != "" {
+        if len(pw_f.val) < 6 {
+            return act_err(d, 400, "password must be at least 6 characters")
+        }
+        let iters = pass_iters_cfg()?
+        let salt = pass_new_salt()?
+        pass_hash = share_pass_make(pw_f.val, salt, iters)
+        pass_salt = salt
+        pass_iters = iters
+    }
+
+    let now_s = share_now_s()
+    let expires_at = share_expires_at(now_s, share_ttl_secs(expires_h))
+    let token = share_token_new()?
+    let ins = share_insert(d, token, t.ws, path, level, expires_at, pass_hash, pass_salt,
+        pass_iters, max_downloads, t.owner, now_s)?
+    if orm_ok(ins) == 0 {
+        return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+    }
+    d = orm_db_exec(ins)
+    // Редът се чете обратно по хеша, за да върнем id-то (boila не дава RETURNING).
+    let back = share_find(d, token)?
+    if back.ok == 0 {
+        return act_err(back.db, 500, back.err)
+    }
+    d = back.db
+    let q = share_find_id(d, back.id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(d, 500, "share link missing after insert")
+    }
+    let mut o = share_to_json(q, 0)
+    o = jobj_str(o, "token", token)
+    o = jobj_str(o, "url", share_public_link(token)?)
+    return act_created(orm_db_q(q), o)
+}
+
+fn act_fs_share_revoke(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let id = share_qid(ctx, "share_id")
+    if id < 1 {
+        return act_err(db, 400, "share_id required")
+    }
+    let row = share_find_id(db, id)?
+    if orm_ok_q(row) == 0 {
+        return act_err(orm_db_q(row), 500, orm_err_q(row))
+    }
+    if orm_nrows(row) < 1 {
+        return act_404(orm_db_q(row), "share link not found")
+    }
+    // Правото се проверява върху ПЪТЯ на линка, не върху корена.
+    let path = orm_cell_by(row, 0, "path")
+    let t = tree_auth(ctx, db, 1, path)?
+    if t.ok == 0 {
+        return t.out
+    }
+    if t.level < 3 {
+        return act_err(t.out.db, 403, "share rights required")
+    }
+    if orm_cell_by_i64(row, 0, "workspace_id") != t.ws {
+        return act_404(orm_db_q(row), "share link not found")
+    }
+    if orm_cell_by_i64(row, 0, "revoked_at") != 0 {
+        // вече отнет — идемпотентно
+        return act_no_content(orm_db_q(row))
+    }
+    let e = share_revoke(orm_db_q(row), id, share_now_s())?
+    if orm_ok(e) == 0 {
+        return act_err(orm_db_exec(e), 500, orm_err_exec(e))
+    }
+    return act_no_content(orm_db_exec(e))
+}

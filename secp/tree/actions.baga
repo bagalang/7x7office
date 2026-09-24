@@ -8,6 +8,8 @@
 
 import "auth.baga"
 import "acl_model.baga"
+import "share_model.baga"
+import "share_roles.baga"
 import "store.baga"
 import "model.baga"
 import "versions.baga"
@@ -296,7 +298,7 @@ fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return fmr_out(r, orm_db_q(q))
 }
 
-fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 2, path)?
     if t.ok == 0 {
@@ -357,6 +359,14 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if tree_acl_drop_subtree(d, t.ws, path) < 0 {
         return act_err(d, 500, "delete acl failed")
     }
+    // Публичните линкове към изтритото поддърво се отнемат: иначе линк към
+    // изтрита папка остава „жив" и възкръсва, ако на същия път се появи нов
+    // файл (същата причина като ACL редовете).
+    let sr = share_revoke_subtree(d, t.ws, path, share_now_s())?
+    if sr.err != "" {
+        return act_err(sr.db, 500, sr.err)
+    }
+    d = sr.db
     i = 0
     while i < vec_len(hashes) {
         tree_ver_gc(d, vec_get(hashes, i))?
@@ -431,6 +441,13 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(am.db, 500, am.err)
     }
     d = am.db
+    // Публичните линкове също пътуват: иначе линк към /a/x сочи към път,
+    // който вече не съществува и дава 404 завинаги.
+    let sm = share_move_subtree(d, t.ws, from, to)?
+    if sm.err != "" {
+        return act_err(sm.db, 500, sm.err)
+    }
+    d = sm.db
     let q = tree_find(d, t.ws, to)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(db, 500, "move ok but node missing")

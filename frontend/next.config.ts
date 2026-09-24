@@ -8,6 +8,9 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       { source: "/v1/:path*", destination: `${BACKEND}/v1/:path*` },
+      // Публичните линкове (Фаза 3) живеят под /s/ на API-то; страницата им е
+      // /share/<token> (различна пътека, за да не се бият).
+      { source: "/s/:path*", destination: `${BACKEND}/s/:path*` },
       { source: "/health", destination: `${BACKEND}/health` },
       { source: "/ready", destination: `${BACKEND}/ready` },
     ];

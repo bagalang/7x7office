@@ -527,6 +527,7 @@ export function FileBrowser() {
         <ShareDialog
           workspaceId={wsId}
           path={shareFor.path}
+          isDir={shareFor.is_dir}
           onClose={() => setShareFor(null)}
         />
       ) : null}
