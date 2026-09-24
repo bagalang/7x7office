@@ -194,6 +194,28 @@ wait "$IPID" 2>/dev/null
 grep -q '^event node.created$' "$ISOOUT" && pass "събитието в неговото пространство дойде" \
   || fail "събитие в #$WS2 не дойде"
 
+echo "=== чат: репликата стига по канала на същото пространство ==="
+CHATOUT=/tmp/ws_events_chat.txt
+rm -f "$CHATOUT"
+python3 "$PY" --host 127.0.0.1 --port "$WSPORT" --case listen --token "$ADM" \
+  --live 8 --out "$CHATOUT" >/dev/null 2>&1 &
+CPID=$!
+for _ in $(seq 1 80); do
+  [[ -f "$CHATOUT" ]] && grep -q '^ready' "$CHATOUT" && break
+  sleep 0.2
+done
+grep -q '^ready' "$CHATOUT" || fail "абонатът за чата не се вдигна"
+curl -s -o /dev/null -w '%{http_code}' -X POST "$B/v1/chat" -H "$AUTH" \
+  -H 'Content-Type: application/json' -d '{"text":"   "}' | grep -q 400 \
+  && pass "празна реплика → 400" || fail "празната реплика не е отказана"
+curl -s -X POST "$B/v1/chat" -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"text":"здравей"}' >/dev/null
+wait "$CPID" 2>/dev/null
+grep -q '^event chat.message$' "$CHATOUT" && pass "репликата дойде като chat.message" \
+  || fail "чат събитие: $(grep '^event ' "$CHATOUT" | tr '\n' ' ')"
+grep -q '^text здравей$' "$CHATOUT" && pass "текстът на репликата е същият" \
+  || fail "текст: $(grep '^text ' "$CHATOUT")"
+
 echo "=== дължината е в байтове, таванът е реален ==="
 # Кирилицата е 2 байта/знак, емоджито 4. Ако сървърът броеше знаци, кадърът
 # щеше да е с грешен размер, а таванът да пропуска двойно повече.

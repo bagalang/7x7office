@@ -213,3 +213,9 @@ export const IconActivity = (p: P) => (
     <path d="M3 12h4l2.5-6 4 12L16 12h5" />
   </svg>
 );
+
+export const IconChat = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M5 6h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
+  </svg>
+);

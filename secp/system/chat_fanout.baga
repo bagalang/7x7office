@@ -1,0 +1,61 @@
+// system/chat_fanout.baga — новите реплики към абонатите на стаята.
+//
+// Същата нишка, която държи сокетите. HTTP-ът само е записал реда.
+
+import "chat_model.baga"
+import "chatbaga/chat_room.baga"
+import "ws_gateway.baga"
+import "ws_events.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct WsgFan {
+    hub: WsgHub,
+    db: OrmDb
+}
+
+fn wsg_fanout_one(db: OrmDb, h: WsgHub, c: WsgConn) -> WsgFan !IO !Net {
+    let q = chat_tail(db, c.ws, c.chat_cursor, chat_history_max())?
+    let d = orm_db_q(q)
+    if orm_ok_q(q) == 0 {
+        return WsgFan { hub: h, db: d }
+    }
+    let mut hub = h
+    let mut cur = c
+    let total = orm_nrows(q)
+    let mut i: i64 = 0
+    while i < total {
+        let id = orm_cell_by_i64(q, i, "id")
+        let item = jobj_encode(chat_to_json(q, i))
+        let msg = ws_msg_event(c.ws, ws_ev_chat(), item)
+        let w = wsg_send_text(c.fd, msg)?
+        if w != 0 {
+            return WsgFan { hub: wsg_conn_drop(hub, c.fd)?, db: d }
+        }
+        cur.chat_cursor = id
+        i = i + 1
+    }
+    hub = wsg_conn_put(hub, cur)
+    return WsgFan { hub: hub, db: d }
+}
+
+fn wsg_fanout_chat(db: OrmDb, h: WsgHub) -> WsgFan !IO !Net {
+    let mut hub = h
+    let mut d = db
+    let fds = wsg_fds_copy(hub)
+    let mut i: i64 = 0
+    while i < vec_len(fds) {
+        let fd = vec_get(fds, i)
+        if map_has(hub.conns, fd) == 1 {
+            let c = wsg_conn_get(hub, fd)
+            if c.ws > 0 && c.closing == 0 {
+                let r = wsg_fanout_one(d, hub, c)?
+                hub = r.hub
+                d = r.db
+            }
+        }
+        i = i + 1
+    }
+    return WsgFan { hub: hub, db: d }
+}

@@ -1,0 +1,133 @@
+// system/chat_model.baga — история на чата по пространство (Фаза 3).
+//
+// Стаята е самото пространство: една клетка, една стая. Няма втора таблица
+// „cell" — членовете и ролите вече са в idm_workspaces (Фаза 2).
+//
+// ts е epoch секунди, както activity: еднакъв ред на Postgres и boilaDB.
+
+import "chatbaga/chat_room.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+
+fn chat_table() -> str {
+    return "chat_messages"
+}
+
+fn chat_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn chat_now_s() -> i64 !Time {
+    return time_now_ms() / 1000
+}
+
+fn chat_select() -> str {
+    return "SELECT a.id AS id, a.workspace_id AS workspace_id, a.author_id AS author_id, a.body AS body, a.ts AS ts, u.email AS author_email, u.name AS author_name"
+}
+
+fn chat_from() -> str {
+    return " FROM chat_messages a LEFT JOIN idm_users u ON u.id = a.author_id "
+}
+
+fn chat_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM chat_messages")?
+}
+
+fn chat_max_id(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
+    let sql = concat("SELECT MAX(id) AS count FROM chat_messages WHERE workspace_id = ", int_to_str(ws))
+    return orm_count_sql(db, sql)?
+}
+
+// Най-новите първи. Викащият ги обръща, за да ги покаже от стари към нови.
+fn chat_list(db: OrmDb, ws: i64, limit: i64) -> OrmQuery !IO !Net {
+    let n = int_to_str(chat_history_clamp(limit))
+    let sql = concat(concat(concat(chat_select(), chat_from()), "WHERE a.workspace_id = $1 ORDER BY a.id DESC LIMIT "), n)
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn chat_tail(db: OrmDb, ws: i64, after: i64, limit: i64) -> OrmQuery !IO !Net {
+    let n = int_to_str(chat_history_clamp(limit))
+    let sql = concat(concat(concat(chat_select(), chat_from()), "WHERE a.workspace_id = $1 AND a.id > $2 ORDER BY a.id ASC LIMIT "), n)
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, int_to_str(after))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn chat_by_id(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat(chat_select(), chat_from()), "WHERE a.id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn chat_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    let ws = orm_cell_by_i64(q, row, "workspace_id")
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "workspace_id", ws)
+    o = jobj_str(o, "room", chat_room_key(ws))
+    o = jobj_i64(o, "author_id", orm_cell_by_i64(q, row, "author_id"))
+    o = jobj_str(o, "author_email", orm_cell_by(q, row, "author_email"))
+    o = jobj_str(o, "author_name", orm_cell_by(q, row, "author_name"))
+    o = jobj_str(o, "text", orm_cell_by(q, row, "body"))
+    o = jobj_i64(o, "ts", orm_cell_by_i64(q, row, "ts"))
+    return o
+}
+
+// Хронологично: заявката е DESC, масивът тръгва от най-стария в страницата.
+fn chat_rows_chrono(q: OrmQuery) -> str {
+    let mut arr = jarr_new()
+    let mut i = orm_nrows(q) - 1
+    while i >= 0 {
+        arr = jarr_obj(arr, chat_to_json(q, i))
+        i = i - 1
+    }
+    return jarr_encode(arr)
+}
+
+fn chat_insert(db: OrmDb, ws: i64, author: i64, body: str, ts: i64) -> OrmQuery !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "workspace_id")
+    vec_push(cols, "author_id")
+    vec_push(cols, "body")
+    vec_push(cols, "ts")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, int_to_str(author))
+    vec_push(vals, body)
+    vec_push(vals, int_to_str(ts))
+    if chat_backend_boila()? == 1 {
+        let c = chat_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmQErr(OrmQueryFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let cols2 = vec_new()
+        vec_push(cols2, "id")
+        let mut vals2 = vec_new()
+        vec_push(vals2, int_to_str(orm_count_n(c) + 1))
+        let mut i: i64 = 0
+        while i < vec_len(cols) {
+            vec_push(cols2, vec_get(cols, i))
+            vec_push(vals2, vec_get(vals, i))
+            i = i + 1
+        }
+        return orm_insert_returning_strs(orm_db_c(c), chat_table(), cols2, vals2)?
+    }
+    return orm_insert_returning_strs(db, chat_table(), cols, vals)?
+}
+
+fn chat_purge_ws(db: OrmDb, ws: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_exec_params_str(db, "DELETE FROM chat_messages WHERE workspace_id = $1", vals)?
+}

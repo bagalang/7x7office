@@ -281,4 +281,10 @@ export const en: Record<string, string> = {
   "ws.status_connecting": "Connecting live…",
   "ws.protocol_mismatch": "The live connection is from an old client. Reload the page.",
   "ws.reload": "Reload",
+  "chat.title": "Chat",
+  "chat.hint": "The room belongs to this workspace. Members see it together.",
+  "chat.empty": "No messages yet.",
+  "chat.placeholder": "Write a message",
+  "chat.send": "Send",
+  "chat.too_long": "The message is too long.",
 };

@@ -1153,6 +1153,41 @@ a { color: var(--accent); text-decoration: none; }
 }
 .activity.compact .activity-row { padding: 5px 0; }
 
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+}
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+.chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.chat-row {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.chat-who {
+  font-size: 12px;
+  font-weight: 600;
+}
+.chat-text {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.chat-form {
+  display: flex;
+  gap: 8px;
+}
+.chat-form .input { flex: 1; }
+
 /* ---------- versions dialog ---------- */
 .versions-list {
   display: flex;
@@ -1189,7 +1224,8 @@ a { color: var(--accent); text-decoration: none; }
     width: auto;
     z-index: 40;
   }
-  .activity-pane {
+  .activity-pane,
+  .chat-pane {
     position: fixed;
     inset: var(--topbar-h) 0 0 0;
     width: auto;

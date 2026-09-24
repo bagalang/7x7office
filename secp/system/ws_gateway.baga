@@ -39,7 +39,8 @@ struct WsgConn {
     user_id: i64,
     is_admin: i64,
     ws: i64,         // абонирано пространство (0 = още не е избрано)
-    cursor: i64,
+    cursor: i64,     // последен activity id, пратен на тази връзка
+    chat_cursor: i64, // последен chat id, пратен на тази връзка
     last_ping: i64,  // monotonic ms на последния изпратен ping
     closing: i64     // 1 = връзката се затваря (не се пипа повече)
 }
@@ -53,6 +54,7 @@ fn wsg_conn_new(fd: i64) -> WsgConn {
         is_admin: 0,
         ws: 0,
         cursor: 0,
+        chat_cursor: 0,
         last_ping: 0,
         closing: 0
     }

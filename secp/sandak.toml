@@ -18,3 +18,4 @@ zipbaga = { path = "../../zipbaga" }
 bufbaga = { path = "../../bufbaga" }
 smtpbaga = { path = "../../smtpbaga" }
 wsbaga = { path = "../../wsbaga" }
+chatbaga = { path = "../../chatbaga" }

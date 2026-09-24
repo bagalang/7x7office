@@ -9,8 +9,9 @@ import { PreferencesButton } from "./PreferencesButton";
 import { useWorkspace } from "./WorkspaceProvider";
 import { useActivityBadge, useRealtime } from "./RealtimeProvider";
 import { api, FsUsage } from "../lib/api";
-import { IconActivity, IconClose, IconFolder, IconLogout, IconSearch, IconUsers, IconWorkspaces } from "./icons";
+import { IconActivity, IconChat, IconClose, IconFolder, IconLogout, IconSearch, IconUsers, IconWorkspaces } from "./icons";
 import { ActivityFeed } from "./ActivityFeed";
+import { ChatPanel } from "./ChatPanel";
 
 export type Me = { sub?: string; name?: string; is_admin?: number };
 
@@ -38,6 +39,7 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
   const [usage, setUsage] = useState<FsUsage | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Квотата е на потребител, не на workspace, но се преизчислява при смяна на
@@ -116,6 +118,19 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
         <PreferencesButton />
         <button
           type="button"
+          className={`icon-btn${chatOpen ? " active" : ""}`}
+          title={t("chat.title")}
+          aria-label={t("chat.title")}
+          aria-pressed={chatOpen}
+          onClick={() => {
+            setChatOpen((v) => !v);
+            setActivityOpen(false);
+          }}
+        >
+          <IconChat />
+        </button>
+        <button
+          type="button"
           className={`icon-btn${activityOpen ? " active" : ""}`}
           title={t("activity.title")}
           aria-label={t("activity.title")}
@@ -127,6 +142,7 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
               if (!v) badge.clear();
               return !v;
             });
+            setChatOpen(false);
           }}
         >
           <IconActivity />
@@ -228,6 +244,25 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
             {/* key={wsId}: смяната на пространството трябва да презареди лентата,
                 а не да остави действията на предишното. */}
             <ActivityFeed key={wsId} />
+          </aside>
+        ) : null}
+        {chatOpen ? (
+          <aside className="activity-pane chat-pane" aria-label={t("chat.title")}>
+            <div className="activity-bar">
+              <span className="label">{t("chat.title")}</span>
+              <span className="grow" />
+              <button
+                type="button"
+                className="icon-btn"
+                title={t("common.close")}
+                aria-label={t("common.close")}
+                onClick={() => setChatOpen(false)}
+              >
+                <IconClose />
+              </button>
+            </div>
+            <p className="muted small">{t("chat.hint")}</p>
+            <ChatPanel key={wsId} />
           </aside>
         ) : null}
       </div>

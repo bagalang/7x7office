@@ -14,6 +14,7 @@
 import "model.baga"
 import "acl_model.baga"
 import "activity_model.baga"
+import "../system/chat_model.baga"
 import "share_model.baga"
 import "versions.baga"
 import "../data/blobs.baga"
@@ -92,6 +93,11 @@ fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net !Time {
     if tree_activity_purge_ws(d, ws) < 0 {
         return TreeWsPurge { db: d, nodes: 0, err: "delete activity failed" }
     }
+    let ce = chat_purge_ws(d, ws)?
+    if orm_ok(ce) == 0 {
+        return TreeWsPurge { db: orm_db_exec(ce), nodes: 0, err: "delete chat failed" }
+    }
+    d = orm_db_exec(ce)
     // GC: има ли още някой друг (друг workspace/версия), или blob-ът е за триене
     let mut i: i64 = 0
     while i < n {

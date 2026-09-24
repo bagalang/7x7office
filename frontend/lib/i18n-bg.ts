@@ -284,4 +284,10 @@ export const bg: Record<string, string> = {
   "ws.status_connecting": "Свързване на живо…",
   "ws.protocol_mismatch": "Връзката на живо е от стар клиент. Презаредете страницата.",
   "ws.reload": "Презареди",
+  "chat.title": "Чат",
+  "chat.hint": "Стаята е на това пространство. Членовете я виждат заедно.",
+  "chat.empty": "Още няма реплики.",
+  "chat.placeholder": "Напишете съобщение",
+  "chat.send": "Изпрати",
+  "chat.too_long": "Съобщението е твърде дълго.",
 };

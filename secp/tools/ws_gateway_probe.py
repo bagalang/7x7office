@@ -232,12 +232,16 @@ def case_listen(args):
             if msg.get("type") != "event":
                 continue
             item = msg.get("item") or {}
+            actor = item.get("actor_email") or item.get("author_email") or ""
             out.write(f"event {msg.get('event')}\n")
             out.write(f"path {item.get('path')}\n")
             out.write(f"verb {item.get('verb')}\n")
-            out.write(f"actor {item.get('actor_email')}\n")
-            if not item.get("actor_email"):
+            out.write(f"actor {actor}\n")
+            if not actor:
                 out.write("actor_bad\n")
+            text = item.get("text") or ""
+            if text:
+                out.write(f"text {text}\n")
             seen += 1
         c.close()
     finally:

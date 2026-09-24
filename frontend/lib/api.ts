@@ -72,7 +72,8 @@ function scoped(path: string): string {
     path.startsWith("/v1/fs/") ||
     path.startsWith("/v1/doc/") ||
     path.startsWith("/v1/search") ||
-    path.startsWith("/v1/activity")
+    path.startsWith("/v1/activity") ||
+    path.startsWith("/v1/chat")
   ) {
     return withWs(path);
   }
@@ -558,6 +559,33 @@ export type ActivityList = {
 // `path` филтрира към възел и поддървото му (панелът „История" на файл);
 // `actor_id` — „какво е правил Иван". Двете са взаимно изключващи се в API-то
 // (пътят печели), затова подаваме само едното.
+export type ChatMessage = {
+  id: number;
+  workspace_id: number;
+  room: string;
+  author_id: number;
+  author_email: string;
+  author_name: string;
+  text: string;
+  ts: number;
+};
+
+export type ChatList = {
+  workspace_id: number;
+  room: string;
+  limit: number;
+  items: ChatMessage[];
+  count: number;
+};
+
+export async function listChat(limit = 50): Promise<ChatList> {
+  return request<ChatList>(`/v1/chat?limit=${limit}`, "GET");
+}
+
+export async function postChat(text: string): Promise<ChatMessage> {
+  return request<ChatMessage>("/v1/chat", "POST", { text });
+}
+
 export async function listActivity(opts: { path?: string; actorId?: number; limit?: number } = {}): Promise<ActivityList> {
   const parts: string[] = [];
   if (opts.limit) parts.push(`limit=${opts.limit}`);

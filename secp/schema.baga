@@ -268,6 +268,21 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_activity_on_ws_path ON activity (workspace_id, path)",
         "DROP INDEX IF EXISTS index_activity_on_ws_path"
     )
+    // Фаза 3 (чат): една стая на пространство. ts е epoch секунди (G23).
+    set = migrate_add(
+        set,
+        20260924031,
+        "create_chat_messages",
+        "CREATE TABLE chat_messages (id BIGSERIAL PRIMARY KEY, workspace_id BIGINT NOT NULL, author_id BIGINT NOT NULL, body TEXT NOT NULL, ts BIGINT NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS chat_messages"
+    )
+    set = migrate_add(
+        set,
+        20260924032,
+        "index_chat_messages_ws_id",
+        "CREATE INDEX index_chat_messages_on_ws_id ON chat_messages (workspace_id, id)",
+        "DROP INDEX IF EXISTS index_chat_messages_on_ws_id"
+    )
     return set
 }
 
@@ -493,6 +508,20 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_activity_ws_path",
         "CREATE INDEX IF NOT EXISTS index_activity_on_ws_path ON activity (workspace_id, path)",
         "DROP INDEX IF EXISTS index_activity_on_ws_path"
+    )
+    set = migrate_add(
+        set,
+        20260924031,
+        "create_chat_messages",
+        "CREATE TABLE IF NOT EXISTS chat_messages (id BIGINT, workspace_id BIGINT, author_id BIGINT, body TEXT, ts BIGINT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS chat_messages"
+    )
+    set = migrate_add(
+        set,
+        20260924032,
+        "index_chat_messages_ws_id",
+        "CREATE INDEX IF NOT EXISTS index_chat_messages_on_ws_id ON chat_messages (workspace_id, id)",
+        "DROP INDEX IF EXISTS index_chat_messages_on_ws_id"
     )
     return set
 }

@@ -283,4 +283,10 @@ export const de: Record<string, string> = {
   "ws.status_connecting": "Live-Verbindung wird hergestellt…",
   "ws.protocol_mismatch": "Die Live-Verbindung stammt von einem alten Client. Bitte die Seite neu laden.",
   "ws.reload": "Neu laden",
+  "chat.title": "Chat",
+  "chat.hint": "Der Raum gehört zu diesem Arbeitsbereich. Die Mitglieder sehen ihn gemeinsam.",
+  "chat.empty": "Noch keine Nachrichten.",
+  "chat.placeholder": "Nachricht schreiben",
+  "chat.send": "Senden",
+  "chat.too_long": "Die Nachricht ist zu lang.",
 };

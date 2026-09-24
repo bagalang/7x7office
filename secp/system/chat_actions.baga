@@ -1,0 +1,97 @@
+// system/chat_actions.baga — REST на стаята (Фаза 3).
+//
+//   GET  /v1/chat?limit=     последните реплики, от стари към нови
+//   POST /v1/chat            {text} → записаната реплика
+//
+// Правото е „четене" на пространството: и зрителят говори. Чуждо
+// пространство дава 404, както навсякъде другаде.
+// Живото разпространение НЕ е тук. HTTP нишката не пипа сокетите (G52).
+// Редът влиза в таблицата, а gateway-ът го взима на следващия tick.
+
+import "chat_model.baga"
+import "../tree/auth.baga"
+import "chatbaga/chat_room.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn chat_qlimit(ctx: FmrCtx) -> i64 {
+    let raw = str_trim(fmr_query(ctx, "limit"))
+    if raw == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
+fn chat_read_text(ctx: FmrCtx) -> str {
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return ""
+    }
+    let bo = jbody_require_object(parsed)
+    if bo.ok == 0 {
+        return ""
+    }
+    let f = jreq_str(bo.doc, bo.root, "text")
+    if f.ok == 0 {
+        return ""
+    }
+    return f.val
+}
+
+fn act_chat_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db, 1, "")?
+    if t.ok == 0 {
+        return t.out
+    }
+    let limit = chat_history_clamp(chat_qlimit(ctx))
+    let q = chat_list(t.out.db, t.ws, limit)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "workspace_id", t.ws)
+    o = jobj_str(o, "room", chat_room_key(t.ws))
+    o = jobj_i64(o, "limit", limit)
+    o = jobj_raw(o, "items", chat_rows_chrono(q))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_chat_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = tree_auth(ctx, db, 1, "")?
+    if t.ok == 0 {
+        return t.out
+    }
+    let raw = chat_read_text(ctx)
+    let why = chat_text_reject(raw)
+    if why == "too_long" {
+        return act_err(t.out.db, 400, "message too long")
+    }
+    if why != "" {
+        return act_err(t.out.db, 400, "empty message")
+    }
+    let body = chat_text_trim(raw)
+    let ins = chat_insert(t.out.db, t.ws, t.owner, body, chat_now_s())?
+    if orm_ok_q(ins) == 0 || orm_nrows(ins) < 1 {
+        return act_err(orm_db_q(ins), 500, orm_err_q(ins))
+    }
+    let id = orm_cell_by_i64(ins, 0, "id")
+    let q = chat_by_id(orm_db_q(ins), id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(q), 500, "chat row missing")
+    }
+    return act_created(orm_db_q(q), chat_to_json(q, 0))
+}
