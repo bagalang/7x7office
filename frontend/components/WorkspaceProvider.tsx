@@ -20,12 +20,13 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  TOKEN_KEY,
   Workspace,
   getActiveWorkspace,
   listWorkspaces,
   setActiveWorkspace,
 } from "../lib/api";
-import { subscribeStorage } from "../lib/storage";
+import { readStorage, subscribeStorage } from "../lib/storage";
 
 interface WorkspaceContextValue {
   wsId: number;
@@ -52,9 +53,26 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [tick, setTick] = useState(0);
 
+  // Списъкът зависи от токена: на /login още го няма и заявката връща 401.
+  // Ако заредим само веднъж при mount, след вход превключвателят изобщо не
+  // се появява (и „workspace not found" остава). Затова ключът е токенът —
+  // смяната му (вход/изход) презарежда списъка.
+  const token = useSyncExternalStore(
+    subscribeStorage,
+    () => readStorage(TOKEN_KEY) ?? "",
+    () => "",
+  );
+
   const reload = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
+    // Излязъл потребител: няма токен, няма и пространства. Иначе биха
+    // „протекли" в следващата сесия, докато новата заявка върви.
+    if (!token) {
+      setWorkspaces([]);
+      setActiveWorkspace(0);
+      return;
+    }
     let dead = false;
     listWorkspaces()
       .then((list) => {
@@ -74,7 +92,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       dead = true;
     };
-  }, [tick]);
+  }, [tick, token]);
 
   const active = workspaces.find((w) => w.id === wsId) ?? null;
 
