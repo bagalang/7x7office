@@ -13,6 +13,7 @@ import "activity_model.baga"
 import "share_model.baga"
 import "share_roles.baga"
 import "store.baga"
+import "mutate.baga"
 import "model.baga"
 import "versions.baga"
 import "text.baga"
@@ -309,89 +310,13 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if t.ok == 0 {
         return t.out
     }
-    if path == "/" {
-        return act_err(db, 400, "cannot delete root")
-    }
-    // collect blob hashes before deleting rows (nodes + their versions)
-    let sub = tree_subtree(db, t.ws, path)?
-    if orm_ok_q(sub) == 0 {
-        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
-    }
-    if orm_nrows(sub) < 1 {
-        return act_404(orm_db_q(sub), "path not found")
-    }
-    let hashes = vec_new()
-    let mut d = orm_db_q(sub)
-    let mut i: i64 = 0
-    while i < orm_nrows(sub) {
-        let h = orm_cell_by(sub, i, "hash")
-        if h != "" {
-            vec_push(hashes, h)
-        }
-        let th = orm_cell_by(sub, i, "thumb_hash")
-        if th != "" {
-            vec_push(hashes, th)
-        }
-        let nid = orm_cell_by_i64(sub, i, "id")
-        let vh = tree_ver_hashes(d, nid)?
-        if orm_ok_q(vh) == 0 {
-            return act_err(orm_db_q(vh), 500, orm_err_q(vh))
-        }
-        let mut vi: i64 = 0
-        while vi < orm_nrows(vh) {
-            let vhash = orm_cell_by(vh, vi, "hash")
-            if vhash != "" {
-                vec_push(hashes, vhash)
-            }
-            vi = vi + 1
-        }
-        let vd = tree_ver_drop_node(orm_db_q(vh), nid)?
-        if orm_ok(vd) == 0 {
-            return act_err(orm_db_exec(vd), 500, orm_err_exec(vd))
-        }
-        d = orm_db_exec(vd)
-        // текстовият индекс не е с FK (boila няма ON DELETE) — трием ръчно
-        tree_text_drop(d, nid)?
-        i = i + 1
-    }
-    let del = tree_delete_subtree(d, t.ws, path)?
-    if orm_ok(del) == 0 {
-        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
-    }
-    d = orm_db_exec(del)
-    // Изричните права следват живота на възела: ако на същия път се създаде
-    // нов файл, старите ACL редове не бива тихо да важат за него.
-    if tree_acl_drop_subtree(d, t.ws, path) < 0 {
-        return act_err(d, 500, "delete acl failed")
-    }
-    // Публичните линкове към изтритото поддърво се отнемат: иначе линк към
-    // изтрита папка остава „жив" и възкръсва, ако на същия път се появи нов
-    // файл (същата причина като ACL редовете).
-    let sr = share_revoke_subtree(d, t.ws, path, share_now_s())?
-    if sr.err != "" {
-        return act_err(sr.db, 500, sr.err)
-    }
-    d = sr.db
-    // Одит: един ред за корена на изтритото поддърво, не ред на възел —
-    // иначе едно изтриване на папка „погребва" целия feed. `node_id` вече
-    // не сочи съществуващ възел, затова разчитаме на path-а.
-    let delroot_id = orm_cell_by_i64(sub, 0, "id")
-    let logged = tree_activity_log(d, t.ws, t.owner, activity_verb_deleted(), delroot_id, path, "")?
-    d = logged.db
-    i = 0
-    while i < vec_len(hashes) {
-        tree_ver_gc(d, vec_get(hashes, i))?
-        i = i + 1
-    }
-    return act_no_content(d)
+    return tree_remove(t.out.db, t.ws, t.owner, path)?
 }
 
 fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let from = tree_qpath(ctx, "from")
     let to = tree_qpath(ctx, "to")
     // Две проверки: можеш ли да махнеш от `from` И да създадеш в `to`.
-    // Без второто viewer с write само в /public би преместил файл в
-    // /private, където няма права.
     let t = tree_auth(ctx, db, 2, from)?
     if t.ok == 0 {
         return t.out
@@ -400,73 +325,7 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if t2.ok == 0 {
         return t2.out
     }
-    let mut d = t2.out.db
-    if from == "/" || to == "/" {
-        return act_err(d, 400, "cannot move root")
-    }    if from == to {
-        return act_err(d, 400, "same path")
-    }
-    // no moving a dir into itself
-    if str_starts_with(to, concat(from, "/")) {
-        return act_err(d, 409, "cannot move into own subtree")
-    }
-    let dst = tree_find(d, t.ws, to)?
-    if orm_ok_q(dst) == 0 {
-        return act_err(orm_db_q(dst), 500, orm_err_q(dst))
-    }
-    if orm_nrows(dst) > 0 {
-        return act_err(orm_db_q(dst), 409, "destination exists")
-    }
-    d = orm_db_q(dst)
-    let sub = tree_subtree(d, t.ws, from)?
-    if orm_ok_q(sub) == 0 {
-        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
-    }
-    if orm_nrows(sub) < 1 {
-        return act_404(orm_db_q(sub), "path not found")
-    }
-    d = orm_db_q(sub)
-    // target parent must exist (mkdir -p it, like put)
-    let perr = tree_mkdir_p(d, t.ws, t.owner, tree_parent_of(to))?
-    if perr != "" {
-        return act_err(d, 409, perr)
-    }
-    // rewrite paths row by row (small trees; bulk SQL rewrite lands with versions)
-    let mut i: i64 = 0
-    while i < orm_nrows(sub) {
-        let old_path = orm_cell_by(sub, i, "path")
-        let new_path = concat(to, tree_tail(old_path, len(from)))
-        let id = orm_cell_by_i64(sub, i, "id")
-        let upd = tree_update_path(d, id, new_path, tree_parent_of(new_path), tree_name_of(new_path))?
-        if orm_ok(upd) == 0 {
-            return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
-        }
-        d = orm_db_exec(upd)
-        i = i + 1
-    }
-    // ACL редовете също пътуват с поддървото — иначе правата остават на
-    // стария (вече несъществуващ) път, а новият е без тях.
-    let am = tree_acl_move_subtree(d, t.ws, from, to)?
-    if am.err != "" {
-        return act_err(am.db, 500, am.err)
-    }
-    d = am.db
-    // Публичните линкове също пътуват: иначе линк към /a/x сочи към път,
-    // който вече не съществува и дава 404 завинаги.
-    let sm = share_move_subtree(d, t.ws, from, to)?
-    if sm.err != "" {
-        return act_err(sm.db, 500, sm.err)
-    }
-    d = sm.db
-    let q = tree_find(d, t.ws, to)?
-    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
-        return act_err(db, 500, "move ok but node missing")
-    }
-    // Одит: meta носи стария път — feed-ът показва „от /a в /b", а не само
-    // новото име (иначе преместването изглежда като създаване).
-    let meta = concat(concat("{\"from\":\"", from), "\"}")
-    let logged = tree_activity_log(d, t.ws, t.owner, activity_verb_moved(), orm_cell_by_i64(q, 0, "id"), to, meta)?
-    return act_ok(logged.db, tree_node_json(q, 0))
+    return tree_relocate(t2.out.db, t.ws, t.owner, from, to)?
 }
 
 fn act_fs_usage(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {

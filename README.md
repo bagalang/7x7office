@@ -378,6 +378,20 @@ npm run dev
 
 Вход за локалния seed: `admin@secp.local` / `admin123`.
 
+### WebDAV
+
+Пространството се монтира на API порта, не през Next:
+
+```bash
+rclone copyto ./file.txt :webdav:inbox/file.txt \
+  --webdav-url http://127.0.0.1:8085/dav/0 \
+  --webdav-vendor other \
+  --webdav-user admin@secp.local \
+  --webdav-pass "$(rclone obscure 'admin123')"
+```
+
+`0` е личното пространство. За екипно се слага неговото id (`/dav/12`). Входът е Basic (имейл и парола) или `Authorization: Bearer`. LOCK и PROPPATCH още отговарят 405.
+
 ### Realtime каналът (WS) — как се стига до него
 
 `secp` отваря втори слушател за WebSocket (`SECP_WS_PORT`, по подразбиране

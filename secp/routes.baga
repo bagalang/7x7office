@@ -15,6 +15,7 @@ import "tree/acl_actions.baga"
 import "tree/activity_actions.baga"
 import "tree/share_actions.baga"
 import "tree/share_open.baga"
+import "tree/dav_actions.baga"
 import "system/chat_actions.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
@@ -79,6 +80,7 @@ fn RID_SHARE_UPLOAD() -> i64 { return 62 }
 fn RID_ACTIVITY() -> i64 { return 63 }
 fn RID_CHAT_LIST() -> i64 { return 64 }
 fn RID_CHAT_POST() -> i64 { return 65 }
+fn RID_DAV() -> i64 { return 66 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -133,6 +135,24 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/activity", RID_ACTIVITY(), "", "fs", 0, "", "ActivityList", "200", "limit,path,actor_id")
     app = fmr_route_meta(app, "GET", "/v1/chat", RID_CHAT_LIST(), "", "chat", 0, "", "ChatList", "200", "limit")
     app = fmr_route_meta(app, "POST", "/v1/chat", RID_CHAT_POST(), "", "chat", 0, "ChatPost", "ChatMessage", "201", "")
+    // WebDAV: един id, два шаблона (корен и {*path}). public=1 — Basic е в handler-а.
+    app = fmr_route_meta(app, "OPTIONS", "/dav/{ws}", RID_DAV(), "", "dav", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "OPTIONS", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "PROPFIND", "/dav/{ws}", RID_DAV(), "", "dav", 1, "", "-", "207", "")
+    app = fmr_route_meta(app, "PROPFIND", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "207", "")
+    app = fmr_route_meta(app, "GET", "/dav/{ws}", RID_DAV(), "", "dav", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "GET", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "HEAD", "/dav/{ws}", RID_DAV(), "", "dav", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "HEAD", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "200", "")
+    app = fmr_route_meta(app, "PUT", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "201", "")
+    app = fmr_route_meta(app, "DELETE", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "204", "")
+    app = fmr_route_meta(app, "MKCOL", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "201", "")
+    app = fmr_route_meta(app, "COPY", "/dav/{ws}", RID_DAV(), "", "dav", 1, "", "-", "201", "")
+    app = fmr_route_meta(app, "COPY", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "201", "")
+    app = fmr_route_meta(app, "MOVE", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "201", "")
+    app = fmr_route_meta(app, "PROPPATCH", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "405", "")
+    app = fmr_route_meta(app, "LOCK", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "405", "")
+    app = fmr_route_meta(app, "UNLOCK", "/dav/{ws}/{*path}", RID_DAV(), "", "dav", 1, "", "-", "405", "")
     // Фаза 3: собственик управлява линковете; публичните /s/* са без Bearer.
     app = fmr_route_meta(app, "GET", "/v1/fs/share", RID_FS_SHARE_LIST(), "", "fs", 0, "", "ShareList", "200", "path")
     app = fmr_route_meta(app, "POST", "/v1/fs/share", RID_FS_SHARE_CREATE(), "", "fs", 0, "ShareCreate", "ShareLink", "201", "workspace_id")
@@ -207,6 +227,7 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_ACTIVITY() { return act_activity_list(ctx, db)? }
     if id == RID_CHAT_LIST() { return act_chat_list(ctx, db)? }
     if id == RID_CHAT_POST() { return act_chat_post(ctx, db)? }
+    if id == RID_DAV() { return act_dav(ctx, db)? }
     if id == RID_FS_SHARE_LIST() { return act_fs_share_list(ctx, db)? }
     if id == RID_FS_SHARE_CREATE() { return act_fs_share_create(ctx, db)? }
     if id == RID_FS_SHARE_REVOKE() { return act_fs_share_revoke(ctx, db)? }

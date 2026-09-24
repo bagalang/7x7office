@@ -19,3 +19,4 @@ bufbaga = { path = "../../bufbaga" }
 smtpbaga = { path = "../../smtpbaga" }
 wsbaga = { path = "../../wsbaga" }
 chatbaga = { path = "../../chatbaga" }
+davbaga = { path = "../../davbaga" }

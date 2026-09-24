@@ -1,0 +1,412 @@
+// tree/dav_actions.baga — WebDAV върху дървото (Фаза 4).
+//
+// Адрес: /dav/<workspace id>/<път> . 0 е личното пространство.
+// Клас 1: OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE.
+// LOCK и PROPPATCH отговарят 405 (виж davbaga gaps D1).
+
+import "dav_scope.baga"
+import "mutate.baga"
+import "store.baga"
+import "model.baga"
+import "auth.baga"
+import "acl_model.baga"
+import "acl_roles.baga"
+import "activity_kinds.baga"
+import "activity_model.baga"
+import "../data/blobs.baga"
+import "davbaga/dav.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "httpdbaga/http.baga"
+import "ormbaga/orm.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+
+fn dav_plain(db: OrmDb, status: i64, msg: str) -> FmrOut {
+    let mut r = http_response(status, msg)
+    r = http_set_header(r, "Content-Type", "text/plain; charset=utf-8")
+    return fmr_out(r, db)
+}
+
+fn dav_xml(db: OrmDb, status: i64, body: str) -> FmrOut {
+    let mut r = http_response(status, body)
+    r = http_set_header(r, "Content-Type", "application/xml; charset=utf-8")
+    return fmr_out(r, db)
+}
+
+fn dav_allow() -> str {
+    return "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE"
+}
+
+fn dav_options(db: OrmDb) -> FmrOut {
+    let mut r = http_response(200, "")
+    r = http_set_header(r, "DAV", "1")
+    r = http_set_header(r, "Allow", dav_allow())
+    r = http_set_header(r, "MS-Author-Via", "DAV")
+    return fmr_out(r, db)
+}
+
+fn dav_href(ws: i64, path: str) -> str {
+    let base = concat("/dav/", int_to_str(ws))
+    if path == "/" {
+        return concat(base, "/")
+    }
+    return concat(base, path)
+}
+
+fn dav_row_xml(q: OrmQuery, row: i64, ws: i64) -> str {
+    let path = orm_cell_by(q, row, "path")
+    let is_dir = orm_cell_by_i64(q, row, "is_dir")
+    let mut mime = ""
+    if is_dir == 0 {
+        mime = tree_mime(path)
+    }
+    return dav_response(dav_href(ws, path), tree_name_of(path), is_dir, orm_cell_by_i64(q, row, "size"), mime, orm_cell_by(q, row, "hash"), "")
+}
+
+fn dav_root_xml(ws: i64) -> str {
+    return dav_response(dav_href(ws, "/"), "workspace", 1, 0, "", "", "")
+}
+
+fn dav_propfind(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = dav_enter(ctx, db, 1)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let mut depth = dav_depth(fmr_header(ctx, "Depth"))
+    if depth == 0 - 2 {
+        return dav_plain(t.out.db, 400, "bad depth")
+    }
+    let mut d = t.out.db
+    let mut inner = ""
+    if t.path == "/" {
+        inner = dav_root_xml(t.ws)
+    } else {
+        let q = tree_find(d, t.ws, t.path)?
+        if orm_ok_q(q) == 0 {
+            return act_err(orm_db_q(q), 500, orm_err_q(q))
+        }
+        if orm_nrows(q) < 1 {
+            return act_404(orm_db_q(q), "path not found")
+        }
+        inner = dav_row_xml(q, 0, t.ws)
+        d = orm_db_q(q)
+        if orm_cell_by_i64(q, 0, "is_dir") == 0 {
+            depth = 0
+        }
+    }
+    if depth != 0 {
+        let mut q = tree_children(d, t.ws, t.path)?
+        if depth < 0 {
+            q = tree_subtree(d, t.ws, t.path)?
+        }
+        if orm_ok_q(q) == 0 {
+            return act_err(orm_db_q(q), 500, orm_err_q(q))
+        }
+        if depth < 0 && orm_nrows(q) > 2000 {
+            return dav_plain(orm_db_q(q), 403, "depth infinity too large")
+        }
+        let mut protect: i64 = 0
+        if t.role == "admin" || t.role == "owner" {
+            protect = 1
+        }
+        let acl = tree_acl_subject_rows(orm_db_q(q), t.ws, t.owner, t.role)?
+        if acl.err != "" {
+            return act_err(acl.db, 500, acl.err)
+        }
+        d = acl.db
+        let mut i: i64 = 0
+        while i < orm_nrows(q) {
+            let cp = orm_cell_by(q, i, "path")
+            if cp != t.path {
+                if acl_effective(acl.paths, acl.levels, acl.inherits, cp, t.level, protect) >= acl_level_read() {
+                    inner = concat(inner, dav_row_xml(q, i, t.ws))
+                }
+            }
+            i = i + 1
+        }
+    }
+    return dav_xml(d, 207, dav_multistatus(inner))
+}
+
+fn dav_get(ctx: FmrCtx, db: OrmDb, head: i64) -> FmrOut !IO !Net {
+    let t = dav_enter(ctx, db, 1)?
+    if t.ok == 0 {
+        return t.out
+    }
+    if t.path == "/" {
+        return dav_plain(t.out.db, 405, "collection")
+    }
+    let q = tree_find(t.out.db, t.ws, t.path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(t.out.db, "path not found")
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        return dav_plain(orm_db_q(q), 405, "collection")
+    }
+    let hash = orm_cell_by(q, 0, "hash")
+    if dav_if_match(fmr_header(ctx, "If-None-Match"), hash) == 1 && fmr_header(ctx, "If-None-Match") != "" {
+        let mut r = http_response(304, "")
+        r = http_set_header(r, "ETag", concat("\"", concat(hash, "\"")))
+        return fmr_out(r, orm_db_q(q))
+    }
+    let body = data_blob_get(hash)?
+    if bytes_len(body) == 0 && orm_cell_by_i64(q, 0, "size") > 0 {
+        return act_err(orm_db_q(q), 500, "blob missing")
+    }
+    let mut sent = body
+    if head == 1 {
+        sent = bytes_new(0)
+    }
+    let mut r = http_response_bytes(200, sent)
+    r = http_set_header(r, "Content-Type", tree_mime(t.path))
+    r = http_set_header(r, "ETag", concat("\"", concat(hash, "\"")))
+    return fmr_out(r, orm_db_q(q))
+}
+
+fn dav_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    if t.path == "/" {
+        return dav_plain(t.out.db, 400, "cannot overwrite root")
+    }
+    let ex = tree_find(t.out.db, t.ws, t.path)?
+    if orm_ok_q(ex) == 0 {
+        return act_err(orm_db_q(ex), 500, orm_err_q(ex))
+    }
+    let existed = orm_nrows(ex)
+    if existed > 0 {
+        let hash = orm_cell_by(ex, 0, "hash")
+        if dav_if_match(fmr_header(ctx, "If-Match"), hash) == 0 {
+            return dav_plain(orm_db_q(ex), 412, "etag mismatch")
+        }
+    }
+    let stored = tree_store_file(orm_db_q(ex), t.ws, t.owner, t.path, http_body_bytes(ctx.req), 1)?
+    if stored.resp.status >= 400 {
+        return stored
+    }
+    let mut code: i64 = 201
+    if existed > 0 {
+        code = 204
+    }
+    return dav_plain(stored.db, code, "")
+}
+
+fn dav_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    return tree_remove(t.out.db, t.ws, t.owner, t.path)?
+}
+
+fn dav_mkcol(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    if t.path == "/" {
+        return dav_plain(t.out.db, 405, "root exists")
+    }
+    if bytes_len(http_body_bytes(ctx.req)) > 0 {
+        return dav_plain(t.out.db, 415, "mkcol body")
+    }
+    let ex = tree_find(t.out.db, t.ws, t.path)?
+    if orm_ok_q(ex) == 0 {
+        return act_err(orm_db_q(ex), 500, orm_err_q(ex))
+    }
+    if orm_nrows(ex) > 0 {
+        return dav_plain(orm_db_q(ex), 405, "exists")
+    }
+    let err = tree_mkdir_p(orm_db_q(ex), t.ws, t.owner, t.path)?
+    if err != "" {
+        return dav_plain(orm_db_q(ex), 409, err)
+    }
+    let q = tree_find(orm_db_q(ex), t.ws, t.path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(orm_db_q(ex), 500, "mkdir failed")
+    }
+    let nid = orm_cell_by_i64(q, 0, "id")
+    let logged = tree_activity_log(orm_db_q(q), t.ws, t.owner, activity_verb_created(), nid, t.path, "")?
+    return dav_plain(logged.db, 201, "")
+}
+
+fn dav_dest(ctx: FmrCtx) -> str {
+    // Префиксът е токенът от URL-а (`0` за личното), не вътрешното id.
+    // Клиентът праща Destination със същия адрес, с който е отворил папката.
+    let url = dav_url_path(fmr_header(ctx, "Destination"))
+    let token = fmr_param(ctx, "ws")
+    let prefix = concat("/dav/", concat(token, "/"))
+    let root = concat("/dav/", token)
+    if url == root || url == concat(root, "/") {
+        return "/"
+    }
+    if str_starts_with(url, prefix) == 1 {
+        return tree_norm(query_decode_val(substr(url, len(prefix) - 1, len(url))))
+    }
+    return ""
+}
+
+fn dav_copy_one(db: OrmDb, ws: i64, owner: i64, from: str, to: str) -> FmrOut !IO !Net !Time {
+    let q = tree_find(db, ws, from)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(db, "path not found")
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        let err = tree_mkdir_p(orm_db_q(q), ws, owner, to)?
+        if err != "" {
+            return dav_plain(orm_db_q(q), 409, err)
+        }
+        return dav_plain(orm_db_q(q), 201, "")
+    }
+    let body = data_blob_get(orm_cell_by(q, 0, "hash"))?
+    return tree_store_file(orm_db_q(q), ws, owner, to, body, 1)?
+}
+
+fn dav_copy(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let to = dav_dest(ctx)
+    if to == "" {
+        return dav_plain(t.out.db, 502, "bad destination")
+    }
+    if to == t.path {
+        return dav_plain(t.out.db, 403, "same path")
+    }
+    let over = dav_overwrite(fmr_header(ctx, "Overwrite"))
+    let dst = tree_find(t.out.db, t.ws, to)?
+    if orm_ok_q(dst) == 0 {
+        return act_err(orm_db_q(dst), 500, orm_err_q(dst))
+    }
+    let mut d = orm_db_q(dst)
+    if orm_nrows(dst) > 0 {
+        if over == 0 {
+            return dav_plain(d, 412, "destination exists")
+        }
+        let gone = tree_remove(d, t.ws, t.owner, to)?
+        if gone.resp.status >= 400 {
+            return gone
+        }
+        d = gone.db
+    }
+    if t.path != "/" {
+        let src = tree_find(d, t.ws, t.path)?
+        if orm_ok_q(src) == 0 || orm_nrows(src) < 1 {
+            return act_404(d, "path not found")
+        }
+        if orm_cell_by_i64(src, 0, "is_dir") == 0 {
+            let one = dav_copy_one(orm_db_q(src), t.ws, t.owner, t.path, to)?
+            if one.resp.status >= 400 {
+                return one
+            }
+            return dav_plain(one.db, 201, "")
+        }
+        d = orm_db_q(src)
+    }
+    let err = tree_mkdir_p(d, t.ws, t.owner, to)?
+    if err != "" {
+        return dav_plain(d, 409, err)
+    }
+    let sub = tree_subtree(d, t.ws, t.path)?
+    if orm_ok_q(sub) == 0 {
+        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
+    }
+    d = orm_db_q(sub)
+    let mut i: i64 = 0
+    while i < orm_nrows(sub) {
+        let old = orm_cell_by(sub, i, "path")
+        if old != t.path {
+            let np = concat(to, tree_tail(old, len(t.path)))
+            if orm_cell_by_i64(sub, i, "is_dir") == 1 {
+                let e = tree_mkdir_p(d, t.ws, t.owner, np)?
+                if e != "" {
+                    return dav_plain(d, 409, e)
+                }
+            } else {
+                let one = dav_copy_one(d, t.ws, t.owner, old, np)?
+                if one.resp.status >= 400 {
+                    return one
+                }
+                d = one.db
+            }
+        }
+        i = i + 1
+    }
+    return dav_plain(d, 201, "")
+}
+
+fn dav_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let to = dav_dest(ctx)
+    if to == "" {
+        return dav_plain(t.out.db, 502, "bad destination")
+    }
+    let over = dav_overwrite(fmr_header(ctx, "Overwrite"))
+    let dst = tree_find(t.out.db, t.ws, to)?
+    if orm_ok_q(dst) == 0 {
+        return act_err(orm_db_q(dst), 500, orm_err_q(dst))
+    }
+    let mut d = orm_db_q(dst)
+    let mut replaced: i64 = 0
+    if orm_nrows(dst) > 0 {
+        if over == 0 {
+            return dav_plain(d, 412, "destination exists")
+        }
+        let gone = tree_remove(d, t.ws, t.owner, to)?
+        if gone.resp.status >= 400 {
+            return gone
+        }
+        d = gone.db
+        replaced = 1
+    }
+    let moved = tree_relocate(d, t.ws, t.owner, t.path, to)?
+    if moved.resp.status >= 400 {
+        return moved
+    }
+    let mut code: i64 = 201
+    if replaced == 1 {
+        code = 204
+    }
+    return dav_plain(moved.db, code, "")
+}
+
+fn act_dav(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let m = fmr_method(ctx)
+    if m == "OPTIONS" {
+        return dav_options(db)
+    }
+    if m == "PROPFIND" {
+        return dav_propfind(ctx, db)?
+    }
+    if m == "GET" {
+        return dav_get(ctx, db, 0)?
+    }
+    if m == "HEAD" {
+        return dav_get(ctx, db, 1)?
+    }
+    if m == "PUT" {
+        return dav_put(ctx, db)?
+    }
+    if m == "DELETE" {
+        return dav_delete(ctx, db)?
+    }
+    if m == "MKCOL" {
+        return dav_mkcol(ctx, db)?
+    }
+    if m == "COPY" {
+        return dav_copy(ctx, db)?
+    }
+    if m == "MOVE" {
+        return dav_move(ctx, db)?
+    }
+    let mut r = http_response(405, "not implemented")
+    r = http_set_header(r, "Allow", dav_allow())
+    return fmr_out(r, db)
+}

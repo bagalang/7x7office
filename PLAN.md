@@ -8,7 +8,7 @@
 Фаза 1  файлове MVP   ──►  upload/download/list + thumbnails
 Фаза 2  idm + ACL     ──►  users, roles, workspaces, права
 Фаза 3  споделяне     ──►  линкове, cells, activity, WS, чат
-Фаза 4  WebDAV        ──►  davbaga, монтиране от ОС
+Фаза 4  WebDAV        ──►  davbaga, монтиране от ОС   ✅
 Фаза 5  офис          ──►  preview/edit DOCX/XLSX/ODT/ODS + версии
 Фаза 5.5 фронтенд      ──►  4 езика (bg/en/de/ru) + spellCheck + светла/тъмна тема
 Фаза 6  търсене/поща  ──►  FTS, smtpbaga, scheduler actions
@@ -178,14 +178,14 @@
 
 **Зависимости:** uuidbaga, chronobaga, wsbaga, chatbaga
 
-## Фаза 4 — WebDAV
+## Фаза 4 — WebDAV ✅ (2026-09-25)
 
-**Резултат:** Finder/Explorer/rclone монтират workspace; файлов мениджър на ОС-то работи върху secp.
+**Резултат:** rclone и `curl` работят върху `/dav/<id>/`. `0` е личното пространство. Вход: Basic `имейл:парола` или Bearer.
 
-- [ ] **Нов пакет `davbaga`** (универсален): PROPFIND, PROPPATCH, MKCOL, GET, PUT, DELETE, COPY, MOVE, LOCK/UNLOCK (опция), Depth, If-* headers
-- [ ] XML тела чрез xmlbaga; маршрут `/dav/<workspace>/...` в secp → tree модул
-- [ ] ETag/Mtime консистентност с фаза 1; ACL enforcement (фаза 2)
-- [ ] Тестове: litmus-стил сценарии + rclone mount ръчна проверка
+- [x] **Пакет `davbaga`**: Depth, Destination, Overwrite, If-Match, Basic, multistatus XML (2026-09-25). Чист тест `tests/dav_test.baga`
+- [x] Маршрут `/dav/{ws}` и `/dav/{ws}/{*path}` — catch-all във fmrbaga. OPTIONS минава към маршрута, когато не е CORS preflight
+- [x] PROPFIND (0, 1, infinity до 2000 възела), GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE. ETag е hash-ът на blob-а. Правата са същите като REST (ACL). Жив тест `tools/dav_smoke.sh`, включително rclone copyto
+- [ ] PROPPATCH, LOCK/UNLOCK и пълният `If` header — клас 2, още не (davbaga D1/D2). Клиент, който иска заключване, получава 405
 
 **Зависимости:** davbaga (нов: httpdbaga, xmlbaga)
 

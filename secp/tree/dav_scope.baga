@@ -1,0 +1,144 @@
+// tree/dav_scope.baga — кой и върху кое пространство е WebDAV заявката.
+//
+// Пътят е /dav/<id>/... . id 0 е личното пространство. Входът е Basic
+// (имейл:парола) или Bearer, защото файловият мениджър не праща JWT сам.
+
+import "auth.baga"
+import "acl_model.baga"
+import "../idm/user_model.baga"
+import "../idm/ws_model.baga"
+import "../idm/ws_roles.baga"
+import "davbaga/dav.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "httpdbaga/http.baga"
+import "ormbaga/orm.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+
+struct DavIn {
+    ok: i64,
+    ws: i64,
+    owner: i64,
+    level: i64,
+    role: str,
+    path: str,
+    out: FmrOut
+}
+
+fn dav_fail(out: FmrOut) -> DavIn {
+    return DavIn { ok: 0, ws: 0, owner: 0, level: 0, role: "", path: "", out: out }
+}
+
+fn dav_unauthorized(db: OrmDb) -> FmrOut {
+    let mut r = http_response(401, "unauthorized")
+    r = http_set_header(r, "WWW-Authenticate", "Basic realm=\"7x7office\"")
+    return fmr_out(r, db)
+}
+
+fn dav_digits(s: str) -> i64 {
+    if s == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn dav_user(ctx: FmrCtx, db: OrmDb) -> IdmAuth !IO !Net {
+    let h = fmr_header(ctx, "Authorization")
+    let basic = dav_basic(h)
+    if basic.ok == 1 {
+        return idm_user_authenticate(db, basic.user, basic.pass)?
+    }
+    let a = act_require_auth(ctx, db)
+    if a.ok == 0 {
+        return idm_auth_bad()
+    }
+    let q = idm_user_find_by_email(db, to_lower(str_trim(a.ctx.user_sub)))?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return idm_auth_bad()
+    }
+    return IdmAuth {
+        ok: 1,
+        id: orm_cell_by_i64(q, 0, "id"),
+        email: orm_cell_by(q, 0, "email"),
+        name: orm_cell_by(q, 0, "name"),
+        is_admin: orm_cell_by_i64(q, 0, "is_admin")
+    }
+}
+
+fn dav_tree_path(ctx: FmrCtx) -> str {
+    let raw = fmr_param(ctx, "path")
+    if raw == "" {
+        return "/"
+    }
+    return tree_norm(query_decode_val(raw))
+}
+
+// need: 1 четене, 2 писане. OPTIONS не минава оттук.
+fn dav_enter(ctx: FmrCtx, db: OrmDb, need: i64) -> DavIn !IO !Net {
+    let who = dav_user(ctx, db)?
+    if who.ok == 0 {
+        return dav_fail(dav_unauthorized(db))
+    }
+    let ws_raw = fmr_param(ctx, "ws")
+    if dav_digits(ws_raw) == 0 {
+        return dav_fail(act_404(db, "workspace not found"))
+    }
+    let mut d = db
+    let mut ws = parse_int(ws_raw)
+    if ws == 0 {
+        let ens = ws_personal_ensure(d, who.id)?
+        if ens.err != "" {
+            return dav_fail(act_err(ens.db, 500, ens.err))
+        }
+        ws = ens.id
+        d = ens.db
+    }
+    let wq = ws_find(d, ws)?
+    if orm_ok_q(wq) == 0 {
+        return dav_fail(act_err(orm_db_q(wq), 500, orm_err_q(wq)))
+    }
+    if orm_nrows(wq) < 1 {
+        return dav_fail(act_404(orm_db_q(wq), "workspace not found"))
+    }
+    d = orm_db_q(wq)
+    let acc = ws_access(d, ws, who.id, who.is_admin)?
+    if acc.ok == 0 {
+        return dav_fail(act_404(acc.db, "workspace not found"))
+    }
+    d = acc.db
+    let path = dav_tree_path(ctx)
+    let mut level = acc.level
+    if path != "/" {
+        let mut protect: i64 = 0
+        if acc.role == "admin" || acc.role == "owner" {
+            protect = 1
+        }
+        let eff = tree_acl_effective_at(d, ws, who.id, acc.role, path, acc.level, protect)?
+        if eff.err != "" {
+            return dav_fail(act_err(eff.db, 500, eff.err))
+        }
+        level = eff.level
+        d = eff.db
+    }
+    if ws_level_allows(level, need) == 0 {
+        return dav_fail(act_err(d, 403, "insufficient rights"))
+    }
+    return DavIn {
+        ok: 1,
+        ws: ws,
+        owner: who.id,
+        level: level,
+        role: acc.role,
+        path: path,
+        out: fmr_out(http_response(200, ""), d)
+    }
+}

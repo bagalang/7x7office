@@ -1,0 +1,147 @@
+// tree/mutate.baga — триене и преместване на поддърво.
+//
+// Изнесено от actions.baga, за да го ползват и REST, и WebDAV, без втори
+// път, който забравя версии, ACL или линкове.
+
+import "model.baga"
+import "store.baga"
+import "acl_model.baga"
+import "activity_kinds.baga"
+import "activity_model.baga"
+import "share_model.baga"
+import "versions.baga"
+import "text.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn tree_remove(db: OrmDb, ws: i64, owner: i64, path: str) -> FmrOut !IO !Net !Time {
+    if path == "/" {
+        return act_err(db, 400, "cannot delete root")
+    }
+    let sub = tree_subtree(db, ws, path)?
+    if orm_ok_q(sub) == 0 {
+        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
+    }
+    if orm_nrows(sub) < 1 {
+        return act_404(orm_db_q(sub), "path not found")
+    }
+    let hashes = vec_new()
+    let mut d = orm_db_q(sub)
+    let mut i: i64 = 0
+    while i < orm_nrows(sub) {
+        let h = orm_cell_by(sub, i, "hash")
+        if h != "" {
+            vec_push(hashes, h)
+        }
+        let th = orm_cell_by(sub, i, "thumb_hash")
+        if th != "" {
+            vec_push(hashes, th)
+        }
+        let nid = orm_cell_by_i64(sub, i, "id")
+        let vh = tree_ver_hashes(d, nid)?
+        if orm_ok_q(vh) == 0 {
+            return act_err(orm_db_q(vh), 500, orm_err_q(vh))
+        }
+        let mut vi: i64 = 0
+        while vi < orm_nrows(vh) {
+            let vhash = orm_cell_by(vh, vi, "hash")
+            if vhash != "" {
+                vec_push(hashes, vhash)
+            }
+            vi = vi + 1
+        }
+        let vd = tree_ver_drop_node(orm_db_q(vh), nid)?
+        if orm_ok(vd) == 0 {
+            return act_err(orm_db_exec(vd), 500, orm_err_exec(vd))
+        }
+        d = orm_db_exec(vd)
+        tree_text_drop(d, nid)?
+        i = i + 1
+    }
+    let del = tree_delete_subtree(d, ws, path)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    d = orm_db_exec(del)
+    if tree_acl_drop_subtree(d, ws, path) < 0 {
+        return act_err(d, 500, "delete acl failed")
+    }
+    let sr = share_revoke_subtree(d, ws, path, share_now_s())?
+    if sr.err != "" {
+        return act_err(sr.db, 500, sr.err)
+    }
+    d = sr.db
+    let delroot_id = orm_cell_by_i64(sub, 0, "id")
+    let logged = tree_activity_log(d, ws, owner, activity_verb_deleted(), delroot_id, path, "")?
+    d = logged.db
+    i = 0
+    while i < vec_len(hashes) {
+        tree_ver_gc(d, vec_get(hashes, i))?
+        i = i + 1
+    }
+    return act_no_content(d)
+}
+
+fn tree_relocate(db: OrmDb, ws: i64, owner: i64, from: str, to: str) -> FmrOut !IO !Net !Time {
+    let mut d = db
+    if from == "/" || to == "/" {
+        return act_err(d, 400, "cannot move root")
+    }
+    if from == to {
+        return act_err(d, 400, "same path")
+    }
+    if str_starts_with(to, concat(from, "/")) == 1 {
+        return act_err(d, 409, "cannot move into own subtree")
+    }
+    let dst = tree_find(d, ws, to)?
+    if orm_ok_q(dst) == 0 {
+        return act_err(orm_db_q(dst), 500, orm_err_q(dst))
+    }
+    if orm_nrows(dst) > 0 {
+        return act_err(orm_db_q(dst), 409, "destination exists")
+    }
+    d = orm_db_q(dst)
+    let sub = tree_subtree(d, ws, from)?
+    if orm_ok_q(sub) == 0 {
+        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
+    }
+    if orm_nrows(sub) < 1 {
+        return act_404(orm_db_q(sub), "path not found")
+    }
+    d = orm_db_q(sub)
+    let perr = tree_mkdir_p(d, ws, owner, tree_parent_of(to))?
+    if perr != "" {
+        return act_err(d, 409, perr)
+    }
+    let mut i: i64 = 0
+    while i < orm_nrows(sub) {
+        let old_path = orm_cell_by(sub, i, "path")
+        let new_path = concat(to, tree_tail(old_path, len(from)))
+        let id = orm_cell_by_i64(sub, i, "id")
+        let upd = tree_update_path(d, id, new_path, tree_parent_of(new_path), tree_name_of(new_path))?
+        if orm_ok(upd) == 0 {
+            return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+        }
+        d = orm_db_exec(upd)
+        i = i + 1
+    }
+    let am = tree_acl_move_subtree(d, ws, from, to)?
+    if am.err != "" {
+        return act_err(am.db, 500, am.err)
+    }
+    d = am.db
+    let sm = share_move_subtree(d, ws, from, to)?
+    if sm.err != "" {
+        return act_err(sm.db, 500, sm.err)
+    }
+    d = sm.db
+    let q = tree_find(d, ws, to)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(db, 500, "move ok but node missing")
+    }
+    let meta = concat(concat("{\"from\":\"", from), "\"}")
+    let logged = tree_activity_log(d, ws, owner, activity_verb_moved(), orm_cell_by_i64(q, 0, "id"), to, meta)?
+    return act_ok(logged.db, tree_node_json(q, 0))
+}
