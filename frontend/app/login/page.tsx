@@ -3,10 +3,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../components/AuthProvider";
+import { useI18n } from "../../components/I18nProvider";
+import { PreferencesButton } from "../../components/PreferencesButton";
 import { ApiError } from "../../lib/api";
 
 export default function LoginPage() {
   const { login, authed, ready } = useAuth();
+  const { t } = useI18n();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -25,7 +28,7 @@ export default function LoginPage() {
       await login(email, password);
       router.push("/");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "грешен вход");
+      setError(err instanceof ApiError ? err.message : t("login.error"));
     } finally {
       setBusy(false);
     }
@@ -33,14 +36,17 @@ export default function LoginPage() {
 
   return (
     <div className="login-wrap">
+      <div className="login-prefs">
+        <PreferencesButton />
+      </div>
       <form className="login-card" onSubmit={onSubmit}>
         <div className="logo">
           <span className="logo-mark">7×7</span>
           7x7office
         </div>
-        <p className="sub">Вход в платформата</p>
+        <p className="sub">{t("login.sub")}</p>
         <div className="field">
-          <label htmlFor="email">Имейл</label>
+          <label htmlFor="email">{t("login.email")}</label>
           <input
             id="email"
             className="input"
@@ -53,7 +59,7 @@ export default function LoginPage() {
           />
         </div>
         <div className="field">
-          <label htmlFor="password">Парола</label>
+          <label htmlFor="password">{t("login.password")}</label>
           <input
             id="password"
             className="input"
@@ -66,7 +72,7 @@ export default function LoginPage() {
         </div>
         {error ? <p className="err">{error}</p> : null}
         <button type="submit" className="btn" disabled={busy} style={{ marginTop: 8 }}>
-          {busy ? "Вход…" : "Вход"}
+          {busy ? t("login.submitting") : t("login.submit")}
         </button>
       </form>
     </div>

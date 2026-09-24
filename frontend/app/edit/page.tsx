@@ -6,9 +6,11 @@ import { useSearchParams } from "next/navigation";
 import { RequireAuth } from "../../components/RequireAuth";
 import { DocEditor } from "../../components/DocEditor";
 import { SheetEditor } from "../../components/SheetEditor";
+import { useI18n } from "../../components/I18nProvider";
 import { ApiError, DocContent, loadDoc } from "../../lib/api";
 
 function EditorScreen() {
+  const { t } = useI18n();
   const params = useSearchParams();
   const path = params.get("path") ?? "/";
   const [doc, setDoc] = useState<DocContent | null>(null);
@@ -24,13 +26,13 @@ function EditorScreen() {
       })
       .catch((err: unknown) => {
         if (!cancel) {
-          setError(err instanceof ApiError ? err.message : "документът не се отваря");
+          setError(err instanceof ApiError ? err.message : t("edit.open_error"));
         }
       });
     return () => {
       cancel = true;
     };
-  }, [path]);
+  }, [path, t]);
 
   if (error) {
     return (
@@ -38,7 +40,7 @@ function EditorScreen() {
         <div className="login-card">
           <p className="err">{error}</p>
           <p style={{ textAlign: "center" }}>
-            <Link href="/">← Към файловете</Link>
+            <Link href="/">{t("edit.back_to_files")}</Link>
           </p>
         </div>
       </div>
@@ -47,7 +49,7 @@ function EditorScreen() {
   if (!doc) {
     return (
       <div className="login-wrap">
-        <p className="muted">Отваряне на {path}…</p>
+        <p className="muted">{t("edit.opening", { path })}</p>
       </div>
     );
   }
@@ -55,12 +57,9 @@ function EditorScreen() {
     return (
       <div className="login-wrap">
         <div className="login-card">
-          <p className="err">
-            Старият формат „.{doc.format}“ е само за четене. Конвертирайте в .docx/.xlsx, за да
-            редактирате.
-          </p>
+          <p className="err">{t("edit.legacy", { format: doc.format })}</p>
           <p style={{ textAlign: "center" }}>
-            <Link href="/">← Към файловете</Link>
+            <Link href="/">{t("edit.back_to_files")}</Link>
           </p>
         </div>
       </div>
@@ -73,9 +72,10 @@ function EditorScreen() {
 }
 
 export default function EditPage() {
+  const { t } = useI18n();
   return (
     <RequireAuth>
-      <Suspense fallback={<p className="muted">Зареждане…</p>}>
+      <Suspense fallback={<p className="muted">{t("edit.loading")}</p>}>
         <EditorScreen />
       </Suspense>
     </RequireAuth>

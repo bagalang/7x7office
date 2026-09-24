@@ -8,6 +8,14 @@
   --accent: #1a73e8;
   --accent-dark: #1765cc;
   --accent-soft: #e8f0fe;
+  --on-accent: #ffffff;
+  /* фон на заглавен ред на таблица / legend */
+  --table-head: #f0f3f8;
+  --row-hover: #f1f5fb;
+  /* фон под картите с действия (полупрозрачен над surface) */
+  --overlay: rgba(255, 255, 255, 0.92);
+  --backdrop: rgba(31, 35, 40, 0.45);
+  --warn: #b25e00;
   --danger: #d93025;
   --danger-soft: #fce8e6;
   --radius: 8px;
@@ -17,6 +25,39 @@
   --shadow-lg: 0 12px 40px rgba(60, 64, 67, 0.22);
   --topbar-h: 56px;
   --sidebar-w: 232px;
+}
+
+/* ── Тъмна тема ──────────────────────────────────────────────────────────
+   Не е просто инверсия. За комфорт на очите:
+   · фонът не е чист #000, а много тъмносив (#14171c) — чистото черно създава
+     „ореол" около светлия текст и уморява повече;
+   · текстът не е чист бял, а #e3e6ea — максималният контраст е по-нисък
+     (≈13:1 вместо 21:1), за да не „свети";
+   · акцентът е по-светъл (#6aa6f8), за да държи контраст върху тъмно;
+   · сенките са по-силни (тъмни), защото светлите не се виждат.
+   Размерът/наситеността на шрифта остават същите — това е консенсусът в
+   „тъмна тема" гайдовете (Material, Apple HIG, WCAG 1.4.3). */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #14171c;
+  --surface: #1c2027;
+  --ink: #e3e6ea;
+  --muted: #9aa2ad;
+  --line: #2c323b;
+  --accent: #6aa6f8;
+  --accent-dark: #8bbaff;
+  --accent-soft: #223046;
+  --on-accent: #0f1216;
+  --table-head: #232830;
+  --row-hover: #232830;
+  --overlay: rgba(28, 32, 39, 0.94);
+  --backdrop: rgba(0, 0, 0, 0.62);
+  --warn: #e5a54b;
+  --danger: #f28b82;
+  --danger-soft: #3a2422;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.65);
 }
 
 * { box-sizing: border-box; }
@@ -58,7 +99,7 @@ a { color: var(--accent); text-decoration: none; }
   cursor: pointer;
   white-space: nowrap;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   transition: background 0.12s ease, box-shadow 0.12s ease;
 }
 .btn:hover:not(:disabled) { background: var(--accent-dark); box-shadow: var(--shadow-sm); }
@@ -151,7 +192,7 @@ a { color: var(--accent); text-decoration: none; }
   height: 28px;
   border-radius: 7px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 700;
 }
@@ -184,7 +225,7 @@ a { color: var(--accent); text-decoration: none; }
   height: 32px;
   border-radius: 50%;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 600;
   border: 0;
@@ -228,6 +269,34 @@ a { color: var(--accent); text-decoration: none; }
   text-align: left;
 }
 .menu .menu-item:hover { background: var(--bg); }
+.menu .menu-item.on { color: var(--accent); font-weight: 600; }
+.menu .menu-item .lang-code {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.menu .menu-item.on .lang-code { background: var(--accent-soft); color: var(--accent); }
+.menu .menu-sect {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.menu .menu-sep {
+  height: 1px;
+  margin: 5px 0;
+  background: var(--line);
+}
+.menu.prefs { min-width: 230px; }
 
 /* ---------- sidebar ---------- */
 
@@ -379,7 +448,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tbody tr { cursor: pointer; }
-.table tbody tr:hover { background: #f1f5fb; }
+.table tbody tr:hover { background: var(--row-hover); }
 .table tbody tr.selected { background: var(--accent-soft); }
 
 .cell-name {
@@ -466,7 +535,7 @@ a { color: var(--accent); text-decoration: none; }
   position: absolute;
   top: 6px;
   right: 6px;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--overlay);
   border-radius: 6px;
   box-shadow: var(--shadow-sm);
 }
@@ -555,7 +624,7 @@ a { color: var(--accent); text-decoration: none; }
   text-align: left;
   white-space: nowrap;
 }
-.preview-table th { background: #f0f3f8; font-weight: 600; color: var(--muted); }
+.preview-table th { background: var(--table-head); font-weight: 600; color: var(--muted); }
 .preview-facts { margin: 14px 0; border-top: 1px solid var(--line); }
 .preview-facts div {
   display: flex;
@@ -574,7 +643,7 @@ a { color: var(--accent); text-decoration: none; }
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(31, 35, 40, 0.45);
+  background: var(--backdrop);
   display: grid;
   place-items: center;
   z-index: 50;
@@ -625,7 +694,13 @@ a { color: var(--accent); text-decoration: none; }
   display: grid;
   place-items: center;
   padding: 16px;
-  background: linear-gradient(180deg, #eef3fb 0%, var(--bg) 60%);
+  position: relative;
+  background: linear-gradient(180deg, var(--accent-soft) 0%, var(--bg) 60%);
+}
+.login-prefs {
+  position: absolute;
+  top: 16px;
+  right: 16px;
 }
 .login-card {
   background: var(--surface);
@@ -664,7 +739,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 .editor-name { font-weight: 600; font-size: 15px; }
 .editor-status { font-size: 12px; color: var(--muted); }
-.editor-status.dirty { color: #e37400; }
+.editor-status.dirty { color: var(--warn); }
 
 .editor-toolbar {
   display: flex;
@@ -731,7 +806,7 @@ a { color: var(--accent); text-decoration: none; }
   box-shadow: var(--shadow-sm);
 }
 .sheet th {
-  background: #f0f3f8;
+  background: var(--table-head);
   border: 1px solid var(--line);
   font-size: 12px;
   font-weight: 500;
@@ -802,4 +877,32 @@ a { color: var(--accent); text-decoration: none; }
   }
   .topbar-search { display: none; }
   .content-main { padding: 12px 14px 24px; }
+}
+
+/* ---------- достъпност / комфорт за очите ---------- */
+
+/* Видим фокус с клавиатура (не махаме outline-а на мишка). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Уважаваме „намали движението" — без преходи и анимации. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* По-голяма цел за докосване на тъч устройства. */
+@media (pointer: coarse) {
+  .icon-btn { width: 38px; height: 38px; }
+  .row-actions { opacity: 1; }
+  .btn { padding: 9px 16px; }
 }

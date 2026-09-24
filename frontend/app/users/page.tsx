@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { RequireAuth } from "../../components/RequireAuth";
 import { AppShell } from "../../components/AppShell";
 import { Dialog } from "../../components/Dialog";
+import { useI18n } from "../../components/I18nProvider";
 import { IconPlus } from "../../components/icons";
 import { ApiError, api } from "../../lib/api";
 
@@ -26,13 +27,14 @@ function initialsOf(email: string, name: string): string {
   return letters.toUpperCase() || "?";
 }
 
-function messageOf(err: unknown): string {
+function messageOf(err: unknown, fallback: string): string {
   if (err instanceof ApiError) return err.message;
   if (err instanceof Error) return err.message;
-  return "грешка";
+  return fallback;
 }
 
 function UsersScreen() {
+  const { t } = useI18n();
   const [me, setMe] = useState<Me | null>(null);
   const [rows, setRows] = useState<UserRow[]>([]);
   const [email, setEmail] = useState("");
@@ -61,7 +63,7 @@ function UsersScreen() {
         if (cancel) return;
         setRows(list.items ?? []);
       } catch (err) {
-        if (!cancel) setError(messageOf(err));
+        if (!cancel) setError(messageOf(err, t("common.error")));
       } finally {
         if (!cancel) setBusy(false);
       }
@@ -69,7 +71,7 @@ function UsersScreen() {
     return () => {
       cancel = true;
     };
-  }, [reload]);
+  }, [reload, t]);
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
@@ -89,7 +91,7 @@ function UsersScreen() {
       setCreateOpen(false);
       setReload((n) => n + 1);
     } catch (err) {
-      setError(messageOf(err));
+      setError(messageOf(err, t("common.error")));
       setBusy(false);
     }
   }
@@ -98,27 +100,27 @@ function UsersScreen() {
     <AppShell>
       <main className="content-main">
         <div className="page-head">
-          <h1>Потребители</h1>
+          <h1>{t("users.title")}</h1>
           <span className="grow" />
           {me?.is_admin === 1 ? (
             <button type="button" className="btn" onClick={() => setCreateOpen(true)}>
               <IconPlus width={16} height={16} />
-              Нов потребител
+              {t("users.new")}
             </button>
           ) : null}
         </div>
 
-        {me && me.is_admin !== 1 ? <p className="err">Само администратор вижда тази страница.</p> : null}
+        {me && me.is_admin !== 1 ? <p className="err">{t("users.admin_only")}</p> : null}
         {error ? <p className="err">{error}</p> : null}
-        {busy ? <p className="muted">Зареждане…</p> : null}
+        {busy ? <p className="muted">{t("common.loading")}</p> : null}
 
         {me?.is_admin === 1 ? (
           <table className="table">
             <thead>
               <tr>
-                <th>Имейл</th>
-                <th style={{ width: 220 }}>Име</th>
-                <th style={{ width: 140 }}>Роля</th>
+                <th>{t("users.col_email")}</th>
+                <th style={{ width: 220 }}>{t("users.col_name")}</th>
+                <th style={{ width: 140 }}>{t("users.col_role")}</th>
               </tr>
             </thead>
             <tbody>
@@ -135,7 +137,7 @@ function UsersScreen() {
                   <td className={row.name ? "" : "muted"}>{row.name || "—"}</td>
                   <td>
                     <span className={`badge${row.is_admin === 1 ? " admin" : ""}`}>
-                      {row.is_admin === 1 ? "админ" : "потребител"}
+                      {row.is_admin === 1 ? t("users.role_admin") : t("users.role_user")}
                     </span>
                   </td>
                 </tr>
@@ -146,10 +148,10 @@ function UsersScreen() {
       </main>
 
       {createOpen ? (
-        <Dialog title="Нов потребител" onClose={() => setCreateOpen(false)}>
+        <Dialog title={t("users.new")} onClose={() => setCreateOpen(false)}>
           <form onSubmit={onCreate}>
             <div className="field">
-              <label htmlFor="u-email">Имейл</label>
+              <label htmlFor="u-email">{t("users.col_email")}</label>
               <input
                 id="u-email"
                 className="input"
@@ -161,7 +163,7 @@ function UsersScreen() {
               />
             </div>
             <div className="field">
-              <label htmlFor="u-name">Име</label>
+              <label htmlFor="u-name">{t("common.name")}</label>
               <input
                 id="u-name"
                 className="input"
@@ -170,7 +172,7 @@ function UsersScreen() {
               />
             </div>
             <div className="field">
-              <label htmlFor="u-pass">Парола</label>
+              <label htmlFor="u-pass">{t("users.password")}</label>
               <input
                 id="u-pass"
                 className="input"
@@ -183,14 +185,14 @@ function UsersScreen() {
             </div>
             <label className="check">
               <input type="checkbox" checked={admin} onChange={(e) => setAdmin(e.target.checked)} />
-              администратор
+              {t("users.admin_check")}
             </label>
             <div className="dialog-actions">
               <button type="button" className="btn ghost" onClick={() => setCreateOpen(false)}>
-                Отказ
+                {t("common.cancel")}
               </button>
               <button type="submit" className="btn" disabled={busy}>
-                Създай
+                {t("common.create")}
               </button>
             </div>
           </form>

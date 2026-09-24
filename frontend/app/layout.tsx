@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "../components/AuthProvider";
+import { ThemeProvider } from "../components/ThemeProvider";
+import { I18nProvider } from "../components/I18nProvider";
+import { THEME_SCRIPT } from "../lib/theme";
 
 export const metadata: Metadata = {
   title: "7x7office · secp",
@@ -9,9 +12,19 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="bg">
+    // lang="bg" е само SSR началната стойност; I18nProvider го сменя според
+    // избора на потребителя (и за spellCheck, и за екранни четци).
+    <html lang="bg-BG" suppressHydrationWarning>
+      <head>
+        {/* Темата се слага преди първото рисуване — иначе мига бяло при тъмна. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <ThemeProvider>
+          <I18nProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </I18nProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

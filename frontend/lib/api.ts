@@ -58,6 +58,9 @@ export const api = {
   get: <T>(path: string) => request<T>(path, "GET"),
   post: <T>(path: string, body?: unknown) => request<T>(path, "POST", body),
   del: <T>(path: string) => request<T>(path, "DELETE"),
+  // Preview връща типизиран `kind`; текстовото съдържание (ако има) е в `text`.
+  preview: (path: string) =>
+    request<{ kind: string; text: string }>(`/v1/fs/preview?path=${qpath(path)}`, "GET"),
 };
 
 export async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {

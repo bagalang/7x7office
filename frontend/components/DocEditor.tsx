@@ -1,9 +1,14 @@
 "use client";
 
+// DocEditor — markdown редактор (contentEditable). `spellCheck` е включен:
+// браузърът проверява според `lang` на <html>, който I18nProvider държи в
+// синхрон с избрания език (bg/en/de/ru имат речници във всеки браузър).
+
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, DocContent, saveDoc } from "../lib/api";
 import { htmlToMd, mdToHtml } from "../lib/markdown";
+import { useI18n } from "./I18nProvider";
 import { IconClose } from "./icons";
 
 type SaveState = "saved" | "dirty" | "saving";
@@ -33,6 +38,7 @@ function ToolButton({
 }
 
 export function DocEditor({ doc }: { doc: DocContent }) {
+  const { t, lang } = useI18n();
   const router = useRouter();
   const areaRef = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<SaveState>("saved");
@@ -40,7 +46,12 @@ export function DocEditor({ doc }: { doc: DocContent }) {
   const [conflict, setConflict] = useState(false);
   const etagRef = useRef<string | undefined>(doc.etag);
   const stateRef = useRef<SaveState>("saved");
-  stateRef.current = state;
+
+  // Държим ref в синхрон със state, но в effect (не по време на render) —
+  // иначе React ругае и може да пропусне обновяване.
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     if (areaRef.current) {
@@ -74,7 +85,7 @@ export function DocEditor({ doc }: { doc: DocContent }) {
         etagRef.current = undefined;
         setConflict(true);
       }
-      setError(err instanceof Error ? err.message : "грешка при запис");
+      setError(err instanceof Error ? err.message : t("editor.err_save"));
       setState("dirty");
     }
   }
@@ -91,41 +102,41 @@ export function DocEditor({ doc }: { doc: DocContent }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const status =
-    state === "saving" ? "Записване…" : state === "dirty" ? "Незапазени промени" : "Запазено";
+    state === "saving" ? t("editor.saving") : state === "dirty" ? t("editor.dirty") : t("editor.saved");
 
   return (
     <div className="editor-shell">
       <header className="editor-topbar">
-        <button type="button" className="icon-btn" title="Назад" onClick={() => router.push("/")}>
+        <button type="button" className="icon-btn" title={t("editor.back")} onClick={() => router.push("/")}>
           <IconClose />
         </button>
         <span className="editor-name">{doc.name}</span>
         <span className={`editor-status${state === "dirty" ? " dirty" : ""}`}>{status}</span>
         <span className="grow" />
         <button type="button" className="btn" onClick={() => void save()} disabled={state === "saving"}>
-          Запази
+          {t("editor.save")}
         </button>
       </header>
 
       <div className="editor-toolbar">
-        <ToolButton label={<b>B</b>} title="Удебелен (Ctrl+B)" onAction={() => exec("bold")} />
-        <ToolButton label={<i>I</i>} title="Курсив (Ctrl+I)" onAction={() => exec("italic")} />
+        <ToolButton label={<b>B</b>} title={t("editor.bold")} onAction={() => exec("bold")} />
+        <ToolButton label={<i>I</i>} title={t("editor.italic")} onAction={() => exec("italic")} />
         <span className="tool-sep" />
-        <ToolButton label="H1" title="Заглавие 1" onAction={() => exec("formatBlock", "h1")} />
-        <ToolButton label="H2" title="Заглавие 2" onAction={() => exec("formatBlock", "h2")} />
-        <ToolButton label="H3" title="Заглавие 3" onAction={() => exec("formatBlock", "h3")} />
-        <ToolButton label="¶" title="Обикновен текст" onAction={() => exec("formatBlock", "p")} />
+        <ToolButton label="H1" title={t("editor.h1")} onAction={() => exec("formatBlock", "h1")} />
+        <ToolButton label="H2" title={t("editor.h2")} onAction={() => exec("formatBlock", "h2")} />
+        <ToolButton label="H3" title={t("editor.h3")} onAction={() => exec("formatBlock", "h3")} />
+        <ToolButton label="¶" title={t("editor.paragraph")} onAction={() => exec("formatBlock", "p")} />
         <span className="tool-sep" />
-        <ToolButton label="•" title="Списък" onAction={() => exec("insertUnorderedList")} />
-        <ToolButton label="1." title="Номериран списък" onAction={() => exec("insertOrderedList")} />
+        <ToolButton label="•" title={t("editor.bullet")} onAction={() => exec("insertUnorderedList")} />
+        <ToolButton label="1." title={t("editor.numbered")} onAction={() => exec("insertOrderedList")} />
         <span className="tool-sep" />
-        <ToolButton label="⌫" title="Махни форматирането" onAction={() => exec("removeFormat")} />
+        <ToolButton label="⌫" title={t("editor.clear_format")} onAction={() => exec("removeFormat")} />
       </div>
 
       {error ? (
         <p className="err" style={{ margin: "8px 24px" }}>
           {error}
-          {conflict ? " Натиснете „Запази“ отново, за да презапишете файла с това съдържание." : ""}
+          {conflict ? t("editor.conflict_hint") : ""}
         </p>
       ) : null}
 
@@ -135,7 +146,11 @@ export function DocEditor({ doc }: { doc: DocContent }) {
           className="editor-page"
           contentEditable
           suppressContentEditableWarning
-          spellCheck={false}
+          // Проверката на правописа следва езика на интерфейса (bg/en/de/ru).
+          // `lang` на елемента е необходим, защото contentEditable не наследява
+          // винаги <html lang> в Chrome.
+          lang={lang}
+          spellCheck
           onInput={() => setState("dirty")}
         />
       </div>

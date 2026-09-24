@@ -1,18 +1,17 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { AppShell } from "./AppShell";
 import { Dialog } from "./Dialog";
+import { useI18n } from "./I18nProvider";
+import { FilePreview, VersionsDialog } from "./FilePreview";
 import {
   IconChevronRight,
-  IconClose,
   IconDownload,
   IconFile,
   IconFileText,
   IconFolder,
   IconGridView,
-  IconHistory,
   IconImage,
   IconListView,
   IconPencil,
@@ -25,30 +24,22 @@ import {
   ApiError,
   FsList,
   FsNode,
-  FsVersion,
-  ZipEntry,
   api,
   authedFetch,
   downloadFile,
-  downloadVersion,
-  downloadZipEntry,
-  listVersions,
-  listZip,
   putFile,
   qpath,
-  restoreVersion,
 } from "../lib/api";
 import { readStorage, writeStorage } from "../lib/storage";
-import { mdToHtml } from "../lib/markdown";
 
-function formatBytes(n: number): string {
+export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
   return `${(n / 1073741824).toFixed(2)} GB`;
 }
 
-function formatDate(iso?: string): string {
+export function formatDate(iso?: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
@@ -70,23 +61,6 @@ function joinPath(dir: string, name: string): string {
   return `${dir}/${clean}`;
 }
 
-function crumbs(path: string): { name: string; path: string }[] {
-  const out = [{ name: "Файлове", path: "/" }];
-  if (path === "/") return out;
-  let cur = "";
-  for (const part of path.split("/").filter(Boolean)) {
-    cur += `/${part}`;
-    out.push({ name: part, path: cur });
-  }
-  return out;
-}
-
-function messageOf(err: unknown): string {
-  if (err instanceof ApiError) return err.message;
-  if (err instanceof Error) return err.message;
-  return "грешка";
-}
-
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 const TEXT_EXT = /\.(txt|md|markdown|csv|json|ya?ml|xml|log|baga|ts|tsx|js|css|html)$/i;
 
@@ -101,6 +75,7 @@ type View = "list" | "grid";
 type SortKey = "name" | "size" | "date";
 
 export function FileBrowser() {
+  const { t, lang } = useI18n();
   const [path, setPath] = useState("/");
   const [items, setItems] = useState<FsNode[]>([]);
   const [error, setError] = useState("");
@@ -137,7 +112,7 @@ export function FileBrowser() {
         if (cancel) return;
         setItems(list.items ?? []);
       } catch (err) {
-        if (!cancel) setError(messageOf(err));
+        if (!cancel) setError(messageOf(err, t("common.error")));
       } finally {
         if (!cancel) setBusy(false);
       }
@@ -145,7 +120,7 @@ export function FileBrowser() {
     return () => {
       cancel = true;
     };
-  }, [path, reload]);
+  }, [path, reload, t]);
 
   const filtered = items.filter((n) =>
     query ? n.name.toLowerCase().includes(query.toLowerCase()) : true
@@ -155,7 +130,7 @@ export function FileBrowser() {
     if (a.is_dir !== b.is_dir) return b.is_dir - a.is_dir;
     if (sort === "size") return b.size - a.size;
     if (sort === "date") return (b.updated_at ?? "").localeCompare(a.updated_at ?? "");
-    return a.name.localeCompare(b.name, "bg");
+    return a.name.localeCompare(b.name, lang);
   });
 
   async function run(action: () => Promise<void>) {
@@ -165,7 +140,7 @@ export function FileBrowser() {
       await action();
       setReload((n) => n + 1);
     } catch (err) {
-      setError(messageOf(err));
+      setError(messageOf(err, t("common.error")));
       setBusy(false);
     }
   }
@@ -174,7 +149,7 @@ export function FileBrowser() {
     e.preventDefault();
     const dest = joinPath(path, folder);
     if (!dest) {
-      setError("невалидно име на папка");
+      setError(t("files.err_bad_folder"));
       return;
     }
     setMkdirOpen(false);
@@ -189,9 +164,9 @@ export function FileBrowser() {
     const batch = Array.from(files);
     await run(async () => {
       for (const file of batch) {
-        if (file.size < 1) throw new ApiError(400, `${file.name}: празен файл`);
+        if (file.size < 1) throw new ApiError(400, t("files.err_empty_file", { name: file.name }));
         const dest = joinPath(path, file.name);
-        if (!dest) throw new ApiError(400, `${file.name}: невалидно име`);
+        if (!dest) throw new ApiError(400, t("files.err_bad_file", { name: file.name }));
         await putFile(dest, file);
       }
     });
@@ -201,7 +176,7 @@ export function FileBrowser() {
     e.preventDefault();
     const dest = joinPath(parentOf(renamePath), renameValue);
     if (!dest) {
-      setError("невалидно име");
+      setError(t("files.err_bad_name"));
       return;
     }
     const from = renamePath;
@@ -231,8 +206,8 @@ export function FileBrowser() {
       <IconSearch width={16} height={16} />
       <input
         className="input"
-        placeholder="Търсене в папката…"
-        aria-label="Търсене"
+        placeholder={t("files.search_placeholder")}
+        aria-label={t("files.search_aria")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
@@ -245,16 +220,16 @@ export function FileBrowser() {
         <button
           type="button"
           className="icon-btn"
-          title="Свали"
-          onClick={() => void downloadFile(node).catch((err) => setError(messageOf(err)))}
+          title={t("files.download")}
+          onClick={() => void downloadFile(node).catch((err) => setError(messageOf(err, t("common.error"))))}
         >
           <IconDownload />
         </button>
       ) : null}
-      <button type="button" className="icon-btn" title="Преименувай" onClick={() => startRename(node)}>
+      <button type="button" className="icon-btn" title={t("files.rename")} onClick={() => startRename(node)}>
         <IconPencil />
       </button>
-      <button type="button" className="icon-btn danger" title="Изтрий" onClick={() => setDeleteTarget(node)}>
+      <button type="button" className="icon-btn danger" title={t("files.delete")} onClick={() => setDeleteTarget(node)}>
         <IconTrash />
       </button>
     </span>
@@ -264,7 +239,7 @@ export function FileBrowser() {
     <AppShell search={searchBox}>
       <main className="content-main">
         <div className="crumbs">
-          {crumbs(path).map((c, i, all) => (
+          {crumbs(path, t("files.title")).map((c, i, all) => (
             <span key={c.path} style={{ display: "inline-flex", alignItems: "center" }}>
               {i > 0 ? (
                 <span className="sep">
@@ -288,7 +263,7 @@ export function FileBrowser() {
         <div className="toolbar">
           <label className="btn">
             <IconUpload width={16} height={16} />
-            Качи
+            {t("files.upload")}
             <input
               type="file"
               multiple
@@ -301,24 +276,24 @@ export function FileBrowser() {
           </label>
           <button type="button" className="btn ghost" onClick={() => setMkdirOpen(true)}>
             <IconPlus width={16} height={16} />
-            Нова папка
+            {t("files.new_folder")}
           </button>
           <span className="grow" />
           <select
             className="select"
-            aria-label="Сортиране"
+            aria-label={t("files.sort_aria")}
             value={sort}
             onChange={(e) => setSort(e.target.value as SortKey)}
           >
-            <option value="name">По име</option>
-            <option value="size">По размер</option>
-            <option value="date">По дата</option>
+            <option value="name">{t("files.sort_name")}</option>
+            <option value="size">{t("files.sort_size")}</option>
+            <option value="date">{t("files.sort_date")}</option>
           </select>
-          <span className="toggle" role="group" aria-label="Изглед">
+          <span className="toggle" role="group" aria-label={t("files.view_aria")}>
             <button
               type="button"
               className={view === "list" ? "active" : ""}
-              title="Списък"
+              title={t("files.view_list")}
               onClick={() => pickView("list")}
             >
               <IconListView />
@@ -326,7 +301,7 @@ export function FileBrowser() {
             <button
               type="button"
               className={view === "grid" ? "active" : ""}
-              title="Решетка"
+              title={t("files.view_grid")}
               onClick={() => pickView("grid")}
             >
               <IconGridView />
@@ -340,9 +315,9 @@ export function FileBrowser() {
           <table className="table">
             <thead>
               <tr>
-                <th>Име</th>
-                <th style={{ width: 110 }}>Размер</th>
-                <th style={{ width: 170 }}>Променен</th>
+                <th>{t("files.col_name")}</th>
+                <th style={{ width: 110 }}>{t("files.col_size")}</th>
+                <th style={{ width: 170 }}>{t("files.col_modified")}</th>
                 <th style={{ width: 110 }} />
               </tr>
             </thead>
@@ -380,14 +355,14 @@ export function FileBrowser() {
                           className="input"
                           value={renameValue}
                           onChange={(e) => setRenameValue(e.target.value)}
-                          aria-label="Ново име"
+                          aria-label={t("files.new_name_aria")}
                           autoFocus
                         />
                         <button type="submit" className="btn" style={{ padding: "5px 10px" }}>
-                          Запази
+                          {t("common.save")}
                         </button>
                         <button type="button" className="btn ghost" style={{ padding: "5px 10px" }} onClick={() => setRenamePath("")}>
-                          Отказ
+                          {t("common.cancel")}
                         </button>
                       </form>
                     ) : (
@@ -423,7 +398,7 @@ export function FileBrowser() {
                 </span>
                 <span className="grid-meta">
                   <span className="label">{node.name}</span>
-                  <span className="sub">{node.is_dir ? "папка" : formatBytes(node.size)}</span>
+                  <span className="sub">{node.is_dir ? t("files.folder") : formatBytes(node.size)}</span>
                 </span>
                 {rowActions(node)}
               </div>
@@ -433,10 +408,10 @@ export function FileBrowser() {
 
         {sorted.length === 0 && !busy ? (
           <div className="empty-state">
-            {query ? `Няма резултати за „${query}“.` : "Папката е празна. Качете файл или създайте папка."}
+            {query ? t("files.empty_query", { query }) : t("files.empty_folder")}
           </div>
         ) : null}
-        {busy ? <p className="muted">Зареждане…</p> : null}
+        {busy ? <p className="muted">{t("common.loading")}</p> : null}
       </main>
 
       {open ? (
@@ -463,10 +438,10 @@ export function FileBrowser() {
       ) : null}
 
       {mkdirOpen ? (
-        <Dialog title="Нова папка" onClose={() => setMkdirOpen(false)}>
+        <Dialog title={t("files.mkdir_title")} onClose={() => setMkdirOpen(false)}>
           <form onSubmit={onMkdir}>
             <div className="field">
-              <label htmlFor="mkdir-name">Име</label>
+              <label htmlFor="mkdir-name">{t("common.name")}</label>
               <input
                 id="mkdir-name"
                 className="input"
@@ -477,10 +452,10 @@ export function FileBrowser() {
             </div>
             <div className="dialog-actions">
               <button type="button" className="btn ghost" onClick={() => setMkdirOpen(false)}>
-                Отказ
+                {t("common.cancel")}
               </button>
               <button type="submit" className="btn" disabled={busy}>
-                Създай
+                {t("common.create")}
               </button>
             </div>
           </form>
@@ -488,13 +463,11 @@ export function FileBrowser() {
       ) : null}
 
       {deleteTarget ? (
-        <Dialog title="Изтриване" onClose={() => setDeleteTarget(null)}>
-          <p style={{ margin: 0 }}>
-            Сигурни ли сте, че искате да изтриете <b>{deleteTarget.name}</b>?
-          </p>
+        <Dialog title={t("files.delete_title")} onClose={() => setDeleteTarget(null)}>
+          <p style={{ margin: 0 }}>{t("files.delete_confirm", { name: deleteTarget.name })}</p>
           <div className="dialog-actions">
             <button type="button" className="btn ghost" onClick={() => setDeleteTarget(null)}>
-              Отказ
+              {t("common.cancel")}
             </button>
             <button
               type="button"
@@ -508,7 +481,7 @@ export function FileBrowser() {
                 });
               }}
             >
-              Изтрий
+              {t("common.delete")}
             </button>
           </div>
         </Dialog>
@@ -517,298 +490,21 @@ export function FileBrowser() {
   );
 }
 
-function FilePreview({
-  node,
-  onClose,
-  onRename,
-  onDelete,
-  onShowVersions,
-  onError,
-}: {
-  node: FsNode;
-  onClose: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-  onShowVersions: () => void;
-  onError: (msg: string) => void;
-}) {
-  const router = useRouter();
-  const [kind, setKind] = useState("");
-  const [text, setText] = useState("");
-  const [img, setImg] = useState("");
-  const [err, setErr] = useState("");
-  const editable = /\.(docx|odt|txt|md|xlsx|ods|csv)$/i.test(node.name);
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  useEffect(() => {
-    let dead = false;
-    let obj = "";
-    setKind("");
-    setText("");
-    setImg("");
-    setErr("");
-    (async () => {
-      const prev = await api.get<{ kind: string; text: string }>(`/v1/fs/preview?path=${qpath(node.path)}`);
-      if (dead) return;
-      setKind(prev.kind);
-      setText(prev.text ?? "");
-      if (prev.kind !== "image" && prev.kind !== "pdf") return;
-      const res = await authedFetch(`/v1/fs/file?path=${qpath(node.path)}`);
-      if (!res.ok || dead) return;
-      obj = URL.createObjectURL(await res.blob());
-      if (dead) {
-        URL.revokeObjectURL(obj);
-        return;
-      }
-      setImg(obj);
-    })().catch((e: unknown) => {
-      if (!dead) setErr(messageOf(e));
-    });
-    return () => {
-      dead = true;
-      if (obj) URL.revokeObjectURL(obj);
-    };
-  }, [node.path]);
-
-  return (
-    <aside className="preview-pane">
-      <div className="preview-bar">
-        <span className="label">{node.name}</span>
-        <span className="grow" />
-        <button type="button" className="icon-btn" title="Затвори" onClick={onClose}>
-          <IconClose />
-        </button>
-      </div>
-      <div className="preview-body">
-        {err ? <p className="err">{err}</p> : null}
-        {kind === "image" && img ? <img className="preview-img" src={img} alt="" /> : null}
-        {kind === "pdf" && img ? (
-          <embed className="preview-pdf" src={img} type="application/pdf" />
-        ) : null}
-        {kind === "markdown" ? (
-          <div className="preview-md" dangerouslySetInnerHTML={{ __html: mdToHtml(text) }} />
-        ) : null}
-        {kind === "csv" ? <PreviewTable text={text} sep={text.includes(";") ? ";" : ","} /> : null}
-        {kind === "sheet" ? <PreviewTable text={text} sep={"\t"} /> : null}
-        {kind === "zip" ? <ZipPreview node={node} onError={onError} /> : null}
-        {kind === "text" ? <pre>{text}</pre> : null}
-        {kind === "empty" ? <p className="muted">Няма текстов преглед за този файл.</p> : null}
-        {kind === "" && !err ? <p className="muted">Отваряне…</p> : null}
-
-        <dl className="preview-facts">
-          <div>
-            <dt>Размер</dt>
-            <dd>{formatBytes(node.size)}</dd>
-          </div>
-          <div>
-            <dt>Променен</dt>
-            <dd>{formatDate(node.updated_at)}</dd>
-          </div>
-          <div>
-            <dt>Път</dt>
-            <dd>{node.path}</dd>
-          </div>
-        </dl>
-
-        <div className="preview-actions">
-          {editable ? (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => router.push(`/edit?path=${encodeURIComponent(node.path)}`)}
-            >
-              <IconPencil width={16} height={16} /> Редактирай
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className={editable ? "btn ghost" : "btn"}
-            onClick={() => void downloadFile(node).catch((e) => onError(messageOf(e)))}
-          >
-            <IconDownload width={16} height={16} /> Свали
-          </button>
-          <button type="button" className="btn ghost" onClick={onShowVersions}>
-            <IconHistory width={16} height={16} /> Версии
-          </button>
-          <button type="button" className="btn ghost" onClick={onRename}>
-            <IconPencil width={16} height={16} /> Преименувай
-          </button>
-          <button type="button" className="btn danger-ghost" onClick={onDelete}>
-            <IconTrash width={16} height={16} /> Изтрий
-          </button>
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-function PreviewTable({ text, sep }: { text: string; sep: string }) {
-  const rows = text
-    .split("\n")
-    .filter((l) => l.trim() !== "")
-    .map((l) => l.split(sep));
-  if (rows.length === 0) return <p className="muted">Празна таблица.</p>;
-  return (
-    <div className="preview-table-wrap">
-      <table className="preview-table">
-        <tbody>
-          {rows.map((row, r) => (
-            <tr key={r}>
-              {row.map((cell, c) => (r === 0 ? <th key={c}>{cell}</th> : <td key={c}>{cell}</td>))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ZipPreview({ node, onError }: { node: FsNode; onError: (msg: string) => void }) {
-  const [items, setItems] = useState<ZipEntry[] | null>(null);
-  const [err, setErr] = useState("");
-
-  useEffect(() => {
-    let dead = false;
-    setItems(null);
-    setErr("");
-    listZip(node.path)
-      .then((z) => {
-        if (!dead) setItems(z.items);
-      })
-      .catch((e: unknown) => {
-        if (!dead) setErr(messageOf(e));
-      });
-    return () => {
-      dead = true;
-    };
-  }, [node.path]);
-
-  if (err) return <p className="err">{err}</p>;
-  if (!items) return <p className="muted">Отваряне на архива…</p>;
-  if (items.length === 0) return <p className="muted">Празен архив.</p>;
-  return (
-    <div className="preview-table-wrap">
-      <table className="preview-table">
-        <tbody>
-          {items.map((it) => (
-            <tr key={it.name}>
-              <td>
-                <span className="zip-name">
-                  {it.is_dir ? "📁 " : ""}
-                  {it.name}
-                </span>
-              </td>
-              <td className="muted">{it.is_dir ? "" : formatBytes(it.size)}</td>
-              <td>
-                {it.is_dir ? null : (
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    title="Свали"
-                    onClick={() => void downloadZipEntry(node, it.name).catch((e) => onError(messageOf(e)))}
-                  >
-                    <IconDownload width={15} height={15} />
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function VersionsDialog({
-  node,
-  onClose,
-  onRestored,
-}: {
-  node: FsNode;
-  onClose: () => void;
-  onRestored: () => void;
-}) {
-  const [items, setItems] = useState<FsVersion[]>([]);
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let dead = false;
-    listVersions(node.path)
-      .then((list) => {
-        if (!dead) setItems(list.items ?? []);
-      })
-      .catch((e: unknown) => {
-        if (!dead) setErr(messageOf(e));
-      });
-    return () => {
-      dead = true;
-    };
-  }, [node.path]);
-
-  async function onRestore(v: FsVersion) {
-    setBusy(true);
-    setErr("");
-    try {
-      await restoreVersion(node.path, v.id);
-      onRestored();
-    } catch (e: unknown) {
-      setErr(messageOf(e));
-      setBusy(false);
-    }
+function crumbs(path: string, rootLabel: string): { name: string; path: string }[] {
+  const out = [{ name: rootLabel, path: "/" }];
+  if (path === "/") return out;
+  let cur = "";
+  for (const part of path.split("/").filter(Boolean)) {
+    cur += `/${part}`;
+    out.push({ name: part, path: cur });
   }
+  return out;
+}
 
-  return (
-    <Dialog title={`Версии на ${node.name}`} onClose={onClose}>
-      {err ? <p className="err">{err}</p> : null}
-      {items.length === 0 && !err ? (
-        <p className="muted">Няма запазени версии. Версия се пази при всяка промяна на файла.</p>
-      ) : null}
-      <div className="versions-list">
-        {items.map((v) => (
-          <div key={v.id} className="version-row">
-            <span className="version-meta">
-              <span className="label">v{v.id}</span>
-              <span className="sub">
-                {formatBytes(v.size)} · {formatDate(v.created_at)}
-              </span>
-            </span>
-            <span className="row-actions" style={{ opacity: 1 }}>
-              <button
-                type="button"
-                className="icon-btn"
-                title="Свали тази версия"
-                onClick={() => void downloadVersion(node, v.id).catch((e: unknown) => setErr(messageOf(e)))}
-              >
-                <IconDownload />
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                title="Възстанови"
-                disabled={busy}
-                onClick={() => void onRestore(v)}
-              >
-                <IconHistory />
-              </button>
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="dialog-actions">
-        <button type="button" className="btn ghost" onClick={onClose}>
-          Затвори
-        </button>
-      </div>
-    </Dialog>
-  );
+export function messageOf(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error) return err.message;
+  return fallback;
 }
 
 function Thumb({ path }: { path: string }) {

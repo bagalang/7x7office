@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, DocContent, saveDoc } from "../lib/api";
+import { useI18n } from "./I18nProvider";
 import { IconClose, IconPlus } from "./icons";
 
 type SaveState = "saved" | "dirty" | "saving";
@@ -50,6 +51,7 @@ function toTsv(rows: string[][]): string {
 }
 
 export function SheetEditor({ doc }: { doc: DocContent }) {
+  const { t } = useI18n();
   const router = useRouter();
   const [rows, setRows] = useState<string[][]>(() => parseTsv(doc.text));
   const [state, setState] = useState<SaveState>("saved");
@@ -57,7 +59,11 @@ export function SheetEditor({ doc }: { doc: DocContent }) {
   const [conflict, setConflict] = useState(false);
   const etagRef = useRef<string | undefined>(doc.etag);
   const stateRef = useRef<SaveState>("saved");
-  stateRef.current = state;
+
+  // Държим ref в синхрон със state, но в effect (не по време на render).
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   useEffect(() => {
     setRows(parseTsv(doc.text));
@@ -101,7 +107,7 @@ export function SheetEditor({ doc }: { doc: DocContent }) {
         etagRef.current = undefined;
         setConflict(true);
       }
-      setError(err instanceof Error ? err.message : "грешка при запис");
+      setError(err instanceof Error ? err.message : t("editor.err_save"));
       setState("dirty");
     }
   }
@@ -118,33 +124,33 @@ export function SheetEditor({ doc }: { doc: DocContent }) {
   }); // rows/state менят се — без deps масив, презаписваме слушателя
 
   const status =
-    state === "saving" ? "Записване…" : state === "dirty" ? "Незапазени промени" : "Запазено";
+    state === "saving" ? t("editor.saving") : state === "dirty" ? t("editor.dirty") : t("editor.saved");
   const cols = rows[0]?.length ?? MIN_COLS;
 
   return (
     <div className="editor-shell">
       <header className="editor-topbar">
-        <button type="button" className="icon-btn" title="Назад" onClick={() => router.push("/")}>
+        <button type="button" className="icon-btn" title={t("editor.back")} onClick={() => router.push("/")}>
           <IconClose />
         </button>
         <span className="editor-name">{doc.name}</span>
         <span className={`editor-status${state === "dirty" ? " dirty" : ""}`}>{status}</span>
         <span className="grow" />
         <button type="button" className="btn ghost" onClick={addRow}>
-          <IconPlus width={14} height={14} /> Ред
+          <IconPlus width={14} height={14} /> {t("editor.add_row")}
         </button>
         <button type="button" className="btn ghost" onClick={addCol}>
-          <IconPlus width={14} height={14} /> Колона
+          <IconPlus width={14} height={14} /> {t("editor.add_col")}
         </button>
         <button type="button" className="btn" onClick={() => void save()} disabled={state === "saving"}>
-          Запази
+          {t("editor.save")}
         </button>
       </header>
 
       {error ? (
         <p className="err" style={{ margin: "8px 24px" }}>
           {error}
-          {conflict ? " Натиснете „Запази“ отново, за да презапишете файла с това съдържание." : ""}
+          {conflict ? t("editor.conflict_hint") : ""}
         </p>
       ) : null}
 

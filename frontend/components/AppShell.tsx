@@ -4,6 +4,8 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "./AuthProvider";
+import { useI18n } from "./I18nProvider";
+import { PreferencesButton } from "./PreferencesButton";
 import { api, FsUsage } from "../lib/api";
 import { IconFolder, IconLogout, IconUsers } from "./icons";
 
@@ -25,6 +27,7 @@ function initialsOf(email: string): string {
 
 export function AppShell({ search, children }: { search?: ReactNode; children: ReactNode }) {
   const { logout } = useAuth();
+  const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
   const [me, setMe] = useState<Me | null>(null);
@@ -71,27 +74,31 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
         </Link>
         {search}
         <span className="grow" />
+        <PreferencesButton />
         <div className="menu-wrap" ref={menuRef}>
           <button
             type="button"
             className="avatar"
-            aria-label="Профил"
+            aria-label={t("nav.profile")}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
           >
             {initialsOf(email)}
           </button>
           {menuOpen ? (
-            <div className="menu">
+            <div className="menu" role="menu">
               <div className="menu-head">{email}</div>
               <button
                 type="button"
+                role="menuitem"
                 className="menu-item"
                 onClick={() => {
                   logout();
                   router.replace("/login");
                 }}
               >
-                <IconLogout /> Изход
+                <IconLogout /> {t("nav.logout")}
               </button>
             </div>
           ) : null}
@@ -100,18 +107,18 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
 
       <nav className="sidebar">
         <Link href="/" className={`nav-item${pathname === "/" ? " active" : ""}`}>
-          <IconFolder /> Файлове
+          <IconFolder /> {t("nav.files")}
         </Link>
         {me?.is_admin === 1 ? (
           <Link href="/users" className={`nav-item${pathname === "/users" ? " active" : ""}`}>
-            <IconUsers /> Потребители
+            <IconUsers /> {t("nav.users")}
           </Link>
         ) : null}
         <div className="quota">
           <div className="bar">
             <span style={{ width: `${pct}%` }} />
           </div>
-          {formatBytes(used)} от {formatBytes(quota)}
+          {t("quota.used_of", { used: formatBytes(used), quota: formatBytes(quota) })}
         </div>
       </nav>
 
