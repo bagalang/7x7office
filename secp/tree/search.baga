@@ -1,0 +1,70 @@
+// tree/search.baga — търсене по име и по извлечено съдържание (Фаза 6).
+//
+// v1 е преносимо: ILIKE по tree_nodes.name И по tree_text.text. Не ползва
+// PG `to_tsvector`, защото boilaDB не го поддържа (И двете среди трябва да
+// работят — виж gaps G11). За размерите на secp (лични файлове, хиляди редове)
+// ILIKE + индекси върши работа; при ръст → GIN/PGroonga или searchbaga.
+//
+// Резултатът е: път, име, дали е папка, размер, дали съвпада по име.
+
+import "model.baga"
+import "../data/blobs.baga"
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "bufbaga/buf.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+// LIKE специални знаци в потребителския въпрос се екранират с `\`,
+// за да не се превърне "100%" в "започва с 100".
+fn tree_search_esc(q: str) -> str {
+    let mut b = buf_new()
+    let mut i: i64 = 0
+    while i < len(q) {
+        let c = char_at(q, i)
+        if c == 92 || c == 37 || c == 95 {
+            b = buf_push_chr(b, 92)
+        }
+        b = buf_push_chr(b, c)
+        i = i + 1
+    }
+    return buf_str(b)
+}
+
+// Един параметър, 2 колони → не можем `$1` на две места с ormbaga
+// (param-ите се броят по позиция), затова подаваме шаблона два пъти.
+fn tree_search_nodes(db: OrmDb, owner: i64, pat: str, limit: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT n.id, n.name, n.path, n.is_dir, n.size, n.updated_at, n.hash, CASE WHEN t.node_id IS NULL THEN 0 ELSE 1 END AS in_text FROM tree_nodes n LEFT JOIN tree_text t ON t.node_id = n.id WHERE n.owner_id = $1 AND n.is_dir = 0 AND (n.name ILIKE $2 ESCAPE '\\' OR t.text ILIKE $3 ESCAPE '\\') ORDER BY n.name LIMIT "
+    let vals = vec_new()
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, pat)
+    vec_push(vals, pat)
+    return orm_query_params_str(db, concat(sql, int_to_str(limit)), vals)?
+}
+
+fn tree_search_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_str(o, "path", orm_cell_by(q, row, "path"))
+    o = jobj_i64(o, "is_dir", orm_cell_by_i64(q, row, "is_dir"))
+    o = jobj_i64(o, "size", orm_cell_by_i64(q, row, "size"))
+    o = jobj_i64(o, "in_text", orm_cell_by_i64(q, row, "in_text"))
+    let ua = orm_cell_by(q, row, "updated_at")
+    if ua != "" {
+        o = jobj_str(o, "updated_at", ua)
+    }
+    return o
+}
+
+// `from` капацитетът: 1..100, дефолт 25.
+fn tree_search_limit(raw: str) -> i64 {
+    let n = parse_int(raw)
+    if n < 1 {
+        return 25
+    }
+    if n > 100 {
+        return 100
+    }
+    return n
+}

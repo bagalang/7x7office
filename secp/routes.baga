@@ -7,6 +7,7 @@ import "idm/user_actions.baga"
 import "tree/actions.baga"
 import "tree/docs.baga"
 import "tree/versions_files.baga"
+import "tree/search_actions.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -44,6 +45,7 @@ fn RID_FS_VERSION_GET() -> i64 { return 36 }
 fn RID_FS_VERSION_RESTORE() -> i64 { return 37 }
 fn RID_FS_ZIP_LIST() -> i64 { return 38 }
 fn RID_FS_ZIP_GET() -> i64 { return 39 }
+fn RID_SEARCH() -> i64 { return 40 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -79,6 +81,7 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "POST", "/v1/fs/version/restore", RID_FS_VERSION_RESTORE(), "", "fs", 0, "", "Node", "200", "path,version")
     app = fmr_route_meta(app, "GET", "/v1/fs/zip/list", RID_FS_ZIP_LIST(), "", "fs", 0, "", "ZipList", "200", "path")
     app = fmr_route_meta(app, "GET", "/v1/fs/zip/get", RID_FS_ZIP_GET(), "", "fs", 0, "", "bytes", "200", "path,entry")
+    app = fmr_route_meta(app, "GET", "/v1/search", RID_SEARCH(), "", "fs", 0, "", "SearchList", "200", "q")
     return app
 }
 
@@ -126,5 +129,6 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if id == RID_FS_VERSION_RESTORE() { return act_fs_version_restore(ctx, db)? }
     if id == RID_FS_ZIP_LIST() { return act_fs_zip_list(ctx, db)? }
     if id == RID_FS_ZIP_GET() { return act_fs_zip_get(ctx, db)? }
+    if id == RID_SEARCH() { return act_search(ctx, db)? }
     return fmr_out(fmr_500("unhandled route"), db)
 }

@@ -1,0 +1,48 @@
+// tree/search_actions.baga — REST за търсене (Фаза 6).
+//   GET /v1/search?q=...&limit=25
+// и поддръжката на текстовия индекс (tree_text), който търсенето ползва.
+
+import "auth.baga"
+import "model.baga"
+import "search.baga"
+import "text.baga"
+import "ormbaga/orm.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+// ---------- GET /v1/search ----------
+
+fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let raw = query_decode_val(fmr_query(ctx, "q"))
+    let q = str_trim(raw)
+    if len(q) < 2 {
+        return act_err(t.out.db, 400, "query too short (min 2 chars)")
+    }
+    let pat = concat(concat("%", tree_search_esc(q)), "%")
+    let limit = tree_search_limit(fmr_query(ctx, "limit"))
+    let nq = tree_search_nodes(t.out.db, t.owner, pat, limit)?
+    if orm_ok_q(nq) == 0 {
+        return act_err(orm_db_q(nq), 500, orm_err_q(nq))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(nq) {
+        arr = jarr_obj(arr, tree_search_json(nq, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "query", q)
+    o = jobj_i64(o, "limit", limit)
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(nq))
+    return act_ok(orm_db_q(nq), o)
+}

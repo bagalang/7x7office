@@ -10,6 +10,7 @@ import "auth.baga"
 import "store.baga"
 import "model.baga"
 import "versions.baga"
+import "text.baga"
 import "../data/blobs.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -321,6 +322,8 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
             return act_err(orm_db_exec(vd), 500, orm_err_exec(vd))
         }
         d = orm_db_exec(vd)
+        // текстовият индекс не е с FK (boila няма ON DELETE) — трием ръчно
+        tree_text_drop(d, nid)?
         i = i + 1
     }
     let del = tree_delete_subtree(d, t.owner, path)?

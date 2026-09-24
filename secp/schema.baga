@@ -57,6 +57,23 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_tree_versions_on_node ON tree_versions (node_id)",
         "DROP INDEX IF EXISTS index_tree_versions_on_node"
     )
+    // Фаза 6: извлечен текст за търсене. Отделен от tree_nodes, за да не
+    // раздува метаданните; node_id е и PK (1:1 с файл). Трие се от модула
+    // tree при триене на възел.
+    set = migrate_add(
+        set,
+        20260924008,
+        "create_tree_text",
+        "CREATE TABLE tree_text (node_id BIGINT PRIMARY KEY, owner_id BIGINT NOT NULL, text TEXT NOT NULL DEFAULT '', updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS tree_text"
+    )
+    set = migrate_add(
+        set,
+        20260924009,
+        "index_tree_text_owner",
+        "CREATE INDEX index_tree_text_on_owner ON tree_text (owner_id)",
+        "DROP INDEX IF EXISTS index_tree_text_on_owner"
+    )
     return set
 }
 
@@ -111,6 +128,20 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_tree_versions_node",
         "CREATE INDEX index_tree_versions_on_node ON tree_versions (node_id)",
         "DROP INDEX IF EXISTS index_tree_versions_on_node ON tree_versions"
+    )
+    set = migrate_add(
+        set,
+        20260924008,
+        "create_tree_text",
+        "CREATE TABLE IF NOT EXISTS tree_text (node_id BIGINT, owner_id BIGINT, text TEXT, updated_at TIMESTAMPTZ, PRIMARY KEY (node_id))",
+        "DROP TABLE IF EXISTS tree_text"
+    )
+    set = migrate_add(
+        set,
+        20260924009,
+        "index_tree_text_owner",
+        "CREATE INDEX IF NOT EXISTS index_tree_text_on_owner ON tree_text (owner_id)",
+        "DROP INDEX IF EXISTS index_tree_text_on_owner ON tree_text"
     )
     return set
 }
