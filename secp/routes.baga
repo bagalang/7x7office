@@ -3,6 +3,7 @@
 
 import "system/actions.baga"
 import "idm/auth_actions.baga"
+import "idm/reset_actions.baga"
 import "idm/user_actions.baga"
 import "tree/actions.baga"
 import "tree/docs.baga"
@@ -47,6 +48,8 @@ fn RID_FS_ZIP_LIST() -> i64 { return 38 }
 fn RID_FS_ZIP_GET() -> i64 { return 39 }
 fn RID_SEARCH() -> i64 { return 40 }
 fn RID_SEARCH_REINDEX() -> i64 { return 41 }
+fn RID_FORGOT() -> i64 { return 42 }
+fn RID_RESET() -> i64 { return 43 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -62,6 +65,8 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/login", RID_UI_LOGIN(), "", "ui", 1, "", "LoginPage", "200", "error")
     app = fmr_route_meta(app, "POST", "/v1/auth/login", RID_LOGIN(), "", "auth", 1, "LoginRequest", "TokenResponse", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/auth/logout", RID_LOGOUT(), "", "auth", 1, "", "-", "303", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/forgot", RID_FORGOT(), "", "auth", 1, "ForgotRequest", "Message", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/auth/reset", RID_RESET(), "", "auth", 1, "ResetRequest", "Message", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/me", RID_ME(), "", "auth", 0, "", "Me", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/users", RID_USERS_LIST(), "", "idm", 0, "", "UserList", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/users", RID_USERS_CREATE(), "", "idm", 0, "UserCreate", "User", "201", "")
@@ -111,6 +116,8 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if id == RID_UI_LOGIN() { return act_ui_login(ctx, db) }
     if id == RID_LOGIN() { return act_login(ctx, db)? }
     if id == RID_LOGOUT() { return act_logout(ctx, db) }
+    if id == RID_FORGOT() { return act_forgot(ctx, db)? }
+    if id == RID_RESET() { return act_reset(ctx, db)? }
     if id == RID_ME() { return act_me(ctx, db)? }
     if id == RID_USERS_LIST() { return act_users_list(ctx, db)? }
     if id == RID_USERS_CREATE() { return act_users_create(ctx, db)? }

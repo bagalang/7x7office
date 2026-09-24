@@ -1,0 +1,135 @@
+// tools/mock_smtp.baga — прост SMTP сървър за dev, който пише писмата във файл.
+//
+// Защо съществува: за да се тества пощата (reset, welcome) без реален
+// доставчик и без пароли. Играе plain SMTP (без TLS) и записва всяко
+// прието писмо в MOCK_SMTP_OUT (по подразбиране ./mock_mail.txt).
+//
+// Ползване:
+//   MOCK_SMTP_PORT=2525 MOCK_SMTP_OUT=/tmp/mail.txt ./target/mock_smtp
+//   и в secp: SMTP_HOST=127.0.0.1 SMTP_PORT=2525 SMTP_TLS=plain \
+//             SMTP_FROM=no-reply@7x7.local
+
+import "smtpbaga/smtp.baga"
+import "std/net/tcp.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+fn mock_port() -> i64 !IO {
+    let raw = env("MOCK_SMTP_PORT")?
+    if raw == "" {
+        return 2525
+    }
+    let p = parse_int(raw)
+    if p < 1 {
+        return 2525
+    }
+    return p
+}
+
+fn mock_out_path() -> str !IO {
+    let p = env("MOCK_SMTP_OUT")?
+    if p == "" {
+        return "./mock_mail.txt"
+    }
+    return p
+}
+
+// Дописва писмото към файла, отделено с ясна граница. Append (не
+// презапис) — така няколко писма се виждат едно след друго.
+fn mock_append(body: str) -> i64 !IO {
+    let path = mock_out_path()?
+    let old = read_file(path)?
+    let mut all = old
+    all = concat(all, "-----BEGIN MAIL-----\n")
+    all = concat(all, body)
+    all = concat(all, "-----END MAIL-----\n")
+    return write_file(path, all)?
+}
+
+// Чете DATA тялото до самотна точка и връща dot-unstuff-нато съдържание.
+struct MockBody {
+    conn: SmtpConn,
+    body: str
+}
+
+fn mock_body(sc: SmtpConn) -> MockBody !Net !IO {
+    let mut c = sc
+    let mut out = ""
+    let mut running: i64 = 1
+    while running == 1 {
+        let rd = smtp_read_line(c)?
+        c = rd.conn
+        if rd.reply.ok == 0 {
+            running = 0
+        } else {
+            let ln = rd.reply.text
+            if ln == "." {
+                running = 0
+            } else {
+                let mut real = ln
+                if str_starts_with(ln, "..") {
+                    real = substr(ln, 1, len(ln))
+                }
+                out = concat(out, concat(real, "\n"))
+            }
+        }
+    }
+    return MockBody { conn: c, body: out }
+}
+
+// Една сесия. Връща 0 при успех.
+fn mock_session(fd: i64) -> i64 !Net !IO {
+    tcp_set_timeouts(fd, 60)?
+    let mut sc = SmtpConn { fd: fd, tls: 0, conn: tls_conn_bad(""), buf: bytes_of_str(""), ok: 1 }
+    sc = smtp_write(sc, "220 mock-smtp ready\r\n")?
+    let ehlo = smtp_read_line(sc)?
+    sc = ehlo.conn
+    if !str_starts_with(smtp_upper(ehlo.reply.text), "EHLO") && !str_starts_with(smtp_upper(ehlo.reply.text), "HELO") {
+        tcp_close(sc.fd)?
+        return 1
+    }
+    sc = smtp_write(sc, "250-mock-smtp\r\n250 SIZE 10485760\r\n")?
+    let mail = smtp_read_line(sc)?
+    sc = mail.conn
+    sc = smtp_write(sc, "250 ok\r\n")?
+    let rcpt = smtp_read_line(sc)?
+    sc = rcpt.conn
+    sc = smtp_write(sc, "250 ok\r\n")?
+    let data = smtp_read_line(sc)?
+    sc = data.conn
+    if data.reply.text != "DATA" {
+        tcp_close(sc.fd)?
+        return 1
+    }
+    sc = smtp_write(sc, "354 end with .\r\n")?
+    let b = mock_body(sc)?
+    sc = b.conn
+    // Header с envelope, за да се вижда на кого е пратено.
+    let env = concat(concat("ENVELOPE ", mail.reply.text), concat(" / ", rcpt.reply.text))
+    let full = concat(concat(env, "\n\n"), b.body)
+    let w = mock_append(full)?
+    sc = smtp_write(sc, "250 accepted\r\n")?
+    let q = smtp_read_line(sc)?
+    sc = q.conn
+    sc = smtp_write(sc, "221 bye\r\n")?
+    tcp_close(sc.fd)?
+    return 0
+}
+
+fn main() -> i64 !Net !IO {
+    let port = mock_port()?
+    let l = tcp_listen(port)?
+    if l < 0 {
+        eprintln(concat("mock_smtp: не мога да слушам на ", int_to_str(port)))
+        return 1
+    }
+    print(concat(concat("mock_smtp: слушам на :", int_to_str(port)), concat(" → ", mock_out_path()?)))
+    while true {
+        let fd = tcp_accept(l)?
+        if fd >= 0 {
+            mock_session(fd)?
+        }
+    }
+    return 0
+}

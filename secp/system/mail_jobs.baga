@@ -1,0 +1,96 @@
+// system/mail_jobs.baga — вид задача "mail-send" за scheduler-а (Фаза 6.3).
+//
+// Защо писмата минават през опашката, а не се пращат в самия handler:
+// заявката („забравих паролата") трябва да отговори бързо и еднакво,
+// независимо дали SMTP сървърът е бърз, бавен или недостъпен. Ако
+// пращахме синхронно, забавен доставчик щеше да държи HTTP връзката, а
+// провал на писмото щеше да върне 500 на потребителя — при все че
+// заявката е приета правилно.
+//
+// Втори аргумент: писмото не бива да съдържа тайни в payload-а. Тук
+// payload-ът е само съдържанието на писмото. Reset токенът Е в текста на
+// писмото (иначе как ще стигне до потребителя) — затова ops_jobs не се
+// логва цялостно и last_error пази само SMTP грешката, не тялото.
+
+import "ormbaga/orm.baga"
+import "../idm/mail.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+import "std/os/os.baga"
+
+// Строи payload за mail-send. Връща JSON; енкю-то е в scheduler-а
+// (ops_enqueue_mail), за да няма цикъл от импорти.
+fn mj_payload(to: str, subject: str, text: str) -> str {
+    let mut o = jobj_new()
+    o = jobj_str(o, "to", to)
+    o = jobj_str(o, "subject", subject)
+    o = jobj_str(o, "text", text)
+    return jobj_encode(o)
+}
+
+struct MjMsg {
+    ok: i64,
+    to: str,
+    subject: str,
+    text: str,
+    err: str
+}
+
+fn mj_msg_bad(err: str) -> MjMsg {
+    return MjMsg { ok: 0, to: "", subject: "", text: "", err: err }
+}
+
+// Разчита payload-а. Липсващо поле = счупен payload → задачата се
+// проваля веднага (не е временна грешка, повторен опит не помага).
+fn mj_msg_parse(payload: str) -> MjMsg {
+    let parsed = jbody_parse_str(payload)
+    if parsed.ok == 0 {
+        return mj_msg_bad(parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return mj_msg_bad(b.err)
+    }
+    let to = jreq_str(b.doc, b.root, "to")
+    if to.ok == 0 {
+        return mj_msg_bad(to.err)
+    }
+    let subject = jreq_str(b.doc, b.root, "subject")
+    if subject.ok == 0 {
+        return mj_msg_bad(subject.err)
+    }
+    let text = jreq_str(b.doc, b.root, "text")
+    if text.ok == 0 {
+        return mj_msg_bad(text.err)
+    }
+    return MjMsg { ok: 1, to: to.val, subject: subject.val, text: text.val, err: "" }
+}
+
+// Резултатът е съвместим с ops_run_extract: ok + db + err.
+struct MjRun {
+    ok: i64,
+    db: OrmDb,
+    err: str
+}
+
+// Изпълнява mail-send. Пощата може да е изключена (SMTP_HOST липсва) —
+// тогава задачата е „изпълнена", защото няма какво да се направи и
+// повторен опит не би помогнал. Това е нарочно: dev средите няма да
+// трупат failed задачи.
+fn mj_run(db: OrmDb, job: i64, payload: str) -> MjRun !IO !Net !Random !Time {
+    let msg = mj_msg_parse(payload)
+    if msg.ok == 0 {
+        return MjRun { ok: 0, db: db, err: msg.err }
+    }
+    if mail_enabled()? == 0 {
+        eprintln(concat("secp mail: изключена поща, пропускам писмо до ", msg.to))
+        return MjRun { ok: 1, db: db, err: "" }
+    }
+    let cfg = mail_config()?
+    let sent = mail_send_one(cfg, msg.to, msg.subject, msg.text)?
+    if sent.ok == 0 {
+        return MjRun { ok: 0, db: db, err: sent.err }
+    }
+    return MjRun { ok: 1, db: db, err: "" }
+}

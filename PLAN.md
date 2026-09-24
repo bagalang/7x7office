@@ -167,8 +167,14 @@
       EHLO, STARTTLS (RFC 3207), AUTH LOGIN, multipart/alternative, RFC 5322
       дата, RFC 2047 UTF-8 заглавия, dot-stuffing. Тест `tests/smtp_test.baga`
       с mock сървър (plain + STARTTLS), без реален доставчик.
-- [ ] secp: `POST /v1/auth/forgot` + `POST /v1/auth/reset` (token с TTL, jobs)
-- [ ] secp: welcome писмо при създаване на потребител
+- [x] secp: `POST /v1/auth/forgot` + `POST /v1/auth/reset` — токен с TTL
+      (`SECP_RESET_TTL_MIN`, деф. 60 мин), пази се само SHA-256 хешът,
+      еднократна употреба; нов токен инвалидира старите. Писмото минава
+      през scheduler-а (нов вид `mail-send`) — заявката отговаря веднага
+- [x] secp: welcome писмо при създаване на потребител (пак през опашката)
+- [x] UI: `/forgot` и `/reset` страници (4 езика, светла/тъмна тема)
+- [x] dev инструмент: `secp/tools/mock_smtp.baga` — SMTP сървър, който
+      записва писмата във файл (тестове без реален доставчик)
 - [ ] reportbaga: админ отчети (storage per workspace, activity)
 - [ ] **searchbaga** (само ако PG FTS не стигне): индекс върху rocksbaga
 

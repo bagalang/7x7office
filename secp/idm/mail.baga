@@ -1,0 +1,160 @@
+// idm/mail.baga — конфигурация и изпращане на писма през smtpbaga.
+//
+// Защо конфигурацията е тук, а не в fmrbaga: пощата е домейн на idm
+// (welcome, reset), а fmrbaga е универсалният framework. Пакетът
+// smtpbaga остава универсален — тук само се чете средата.
+//
+// Когато SMTP_HOST не е зададен, mail_enabled() == 0 и приложението
+// работи нормално (писма просто не се пращат). Това е важно за dev и за
+// тестове: няма реален доставчик, няма и мрежа навън.
+
+import "smtpbaga/smtp.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+
+fn mail_cfg_or(name: str, def: str) -> str !IO {
+    let v = env(name)?
+    if v == "" {
+        return def
+    }
+    return v
+}
+
+// 1 когато има SMTP_HOST. Иначе всички mail_* връщат „изключено".
+fn mail_enabled() -> i64 !IO {
+    let h = env("SMTP_HOST")?
+    if h == "" {
+        return 0
+    }
+    return 1
+}
+
+// Малък локален lower — to_lower идва от httpdbaga, а idm не бива да
+// тегли целия HTTP пакет само за да свали регистъра на "STARTTLS".
+//
+// ВНИМАВАЙ: не се строи ред с `chr()` + `concat`! Редовете в Baga са
+// байтови низове и `chr(208)` дава невалиден за `chr()` байт, а
+// `concat` спира на първия NUL — кирилицата се разпада (виж gaps G24).
+// Затова се работи на ниво байтове и накрая `str_of_bytes`.
+// Слага се само ASCII A-Z → a-z; останалите байтове минават както са.
+fn mail_lower(s: str) -> str {
+    let v = vec_new()
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 65 && c <= 90 {
+            vec_push(v, c + 32)
+        } else {
+            vec_push(v, c)
+        }
+        i = i + 1
+    }
+    return str_of_bytes(bytes_from_vec(v))
+}
+
+// Име на режима за транспорта. Изрично, не „по подразбиране TLS".
+fn mail_tls_mode() -> i64 !IO {
+    let raw = mail_lower(mail_cfg_or("SMTP_TLS", "starttls")?)
+    if raw == "plain" || raw == "none" {
+        return SMTP_PLAIN()
+    }
+    if raw == "tls" || raw == "implicit" {
+        return SMTP_TLS()
+    }
+    return SMTP_STARTTLS()
+}
+
+// Портът следва режима, освен ако SMTP_PORT не го задава изрично:
+// 465 при implicit TLS, 587 при STARTTLS, 25 при plain.
+fn mail_default_port(mode: i64) -> i64 {
+    if mode == SMTP_TLS() {
+        return 465
+    }
+    if mode == SMTP_STARTTLS() {
+        return 587
+    }
+    return 25
+}
+
+fn mail_port() -> i64 !IO {
+    let mode = mail_tls_mode()?
+    let raw = env("SMTP_PORT")?
+    if raw == "" {
+        return mail_default_port(mode)
+    }
+    let p = parse_int(raw)
+    if p < 1 || p > 65535 {
+        return mail_default_port(mode)
+    }
+    return p
+}
+
+// Строи SmtpCfg от средата. anchor остава празен (= приемай самоподписан)
+// само ако изрично е поискано с SMTP_INSECURE=1; иначе няма как да се
+// подкара срещу реален доставчик без проверка на сертификата.
+fn mail_config() -> SmtpCfg !IO {
+    let mode = mail_tls_mode()?
+    let mut cfg = smtp_cfg(mail_cfg_or("SMTP_HOST", "")?, mail_port()?, mail_cfg_or("SMTP_FROM", "")?)
+    cfg.tls = mode
+    cfg.user = mail_cfg_or("SMTP_USER", "")?
+    cfg.pass = mail_cfg_or("SMTP_PASS", "")?
+    cfg.helo = mail_cfg_or("SMTP_HELO", "")?
+    let t = env("SMTP_TIMEOUT_S")?
+    if t != "" {
+        let n = parse_int(t)
+        if n > 0 {
+            cfg.timeout_s = n
+        }
+    }
+    // Самоподписан сертификат се приема само при dev (SMTP_INSECURE=1) —
+    // срещу реален доставчик това е изключено по подразбиране.
+    if mail_cfg_or("SMTP_INSECURE", "")? == "1" {
+        cfg.anchor_der = bytes_of_str("")
+    }
+    return cfg
+}
+
+// Публичният адрес на приложението — за линковете в писмата.
+// Без него линкът е относителен и не върши работа по пощата.
+fn mail_public_url() -> str !IO {
+    let u = env("SECP_PUBLIC_URL")?
+    if u == "" {
+        return "http://127.0.0.1:3010"
+    }
+    // Маха завъртящата наклонена черта, за да не се дублира при concat.
+    let n = len(u)
+    if n > 0 && char_at(u, n - 1) == 47 {
+        return substr(u, 0, n - 1)
+    }
+    return u
+}
+
+// Изпраща писмо и връща 0 при успех. Грешката се логва, но не се хвърля:
+// провал на писмо не бива да съсипва заявката, която го е предизвикала
+// (напр. създаване на потребител). Виж gaps G21 за това решение.
+struct MailSend {
+    ok: i64,
+    err: str
+}
+
+fn mail_send_one(cfg: SmtpCfg, to: str, subject: str, text: str) -> MailSend !Net !IO !Random !Time {
+    let r = smtp_send_text(cfg, to, subject, text)?
+    if r.ok == 1 {
+        return MailSend { ok: 1, err: "" }
+    }
+    let msg = concat(r.err.stage, concat(": ", r.err.msg))
+    eprintln(concat(concat("secp mail: ", to), concat(" — ", msg)))
+    return MailSend { ok: 0, err: msg }
+}
+
+// Изпраща писмо, ако пощата е включена. Връща 1 при изпратено/изключено,
+// 0 само при опит, който се е провалил.
+fn mail_try(to: str, subject: str, text: str) -> i64 !Net !IO !Random !Time {
+    if mail_enabled()? == 0 {
+        return 1
+    }
+    let cfg = mail_config()?
+    let r = mail_send_one(cfg, to, subject, text)?
+    return r.ok
+}

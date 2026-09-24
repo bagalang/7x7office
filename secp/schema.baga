@@ -89,6 +89,23 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_ops_jobs_on_status ON ops_jobs (status)",
         "DROP INDEX IF EXISTS index_ops_jobs_on_status"
     )
+    // Фаза 6.3: reset на парола. Пази се САМО хешът на токена (SHA-256):
+    // ако базата изтече, от хеша не може да се влезе. used_at прави
+    // токена еднократен.
+    set = migrate_add(
+        set,
+        20260924012,
+        "create_idm_resets",
+        "CREATE TABLE idm_resets (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES idm_users(id) ON DELETE CASCADE, token_hash TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS idm_resets"
+    )
+    set = migrate_add(
+        set,
+        20260924013,
+        "index_idm_resets_user_id",
+        "CREATE INDEX index_idm_resets_on_user_id ON idm_resets (user_id)",
+        "DROP INDEX IF EXISTS index_idm_resets_on_user_id"
+    )
     return set
 }
 
@@ -173,6 +190,21 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_ops_jobs_status",
         "CREATE INDEX IF NOT EXISTS index_ops_jobs_on_status ON ops_jobs (status)",
         "DROP INDEX IF EXISTS index_ops_jobs_on_status ON ops_jobs"
+    )
+    // Фаза 6.3: reset на парола (boila: без SERIAL/FK/DEFAULT).
+    set = migrate_add(
+        set,
+        20260924012,
+        "create_idm_resets",
+        "CREATE TABLE IF NOT EXISTS idm_resets (id BIGINT, user_id BIGINT, token_hash TEXT, expires_at TIMESTAMPTZ, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_resets"
+    )
+    set = migrate_add(
+        set,
+        20260924013,
+        "index_idm_resets_user_id",
+        "CREATE INDEX IF NOT EXISTS index_idm_resets_on_user_id ON idm_resets (user_id)",
+        "DROP INDEX IF EXISTS index_idm_resets_on_user_id ON idm_resets"
     )
     return set
 }

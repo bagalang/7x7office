@@ -1,0 +1,178 @@
+// idm/reset_model.baga — токени за смяна на забравена парола.
+//
+// Защо хеш, а не суров токен: базата може да изтече (backup, dump, лог).
+// Ако пазим суровия токен, всеки с четене на таблицата може да смени
+// паролата на всеки. Пазим SHA-256(token) — от хеша не се влиза, а
+// проверката е сравнение на хешове.
+//
+// Защо отделна таблица, а не колона в idm_users: един потребител може да
+// поиска няколко пъти (стар линк + нов); старите изтичат, новият работи.
+// Освен това историята се вижда отделно от потребителя.
+//
+// Срокът е в минути от момента на издаване. TTL се брои в SQL (NOW()),
+// за да не зависи от часовника на приложението.
+
+import "std/crypto/sha256.baga"
+import "std/bytes/bytes.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+import "ormbaga/orm.baga"
+
+fn idm_reset_table() -> str {
+    return "idm_resets"
+}
+
+// Колко минути важи един линк. 0 или невалидно → 60.
+fn idm_reset_ttl_min() -> i64 !IO {
+    let raw = env("SECP_RESET_TTL_MIN")?
+    if raw == "" {
+        return 60
+    }
+    let n = parse_int(raw)
+    if n < 1 {
+        return 60
+    }
+    return n
+}
+
+// 32 случайни байта → 64 hex знака. Суровото се праща по пощата; в
+// базата отива само хешът (виж idm_reset_new).
+fn idm_reset_token_new() -> str !Random {
+    return bytes_to_hex(random_bytes(32))
+}
+
+fn idm_reset_hash(token: str) -> str {
+    return sha256_hex(token)
+}
+
+// Издава нов токен за user_id и връща СУРОВИЯ токен (само тук).
+// Старите неизползвани токени на същия потребител се маркират използвани —
+// така не може да се натрупат няколко живи линка.
+struct IdmResetNewOk {
+    token: str,
+    db: OrmDb
+}
+
+struct IdmResetNewFail {
+    err: str,
+    db: OrmDb
+}
+
+enum IdmResetNew {
+    IdmResetNewOk(IdmResetNewOk),
+    IdmResetNewErr(IdmResetNewFail)
+}
+
+fn idm_reset_ok(r: IdmResetNew) -> i64 {
+    return match r {
+        IdmResetNewOk(_u1) => 1,
+        IdmResetNewErr(_u2) => 0,
+    }
+}
+
+fn idm_reset_token(r: IdmResetNew) -> str {
+    return match r {
+        IdmResetNewOk(u) => u.token,
+        IdmResetNewErr(_u) => "",
+    }
+}
+
+fn idm_reset_db(r: IdmResetNew) -> OrmDb {
+    return match r {
+        IdmResetNewOk(u) => u.db,
+        IdmResetNewErr(u) => u.db,
+    }
+}
+
+fn idm_reset_err(r: IdmResetNew) -> str {
+    return match r {
+        IdmResetNewOk(_u) => "",
+        IdmResetNewErr(u) => u.err,
+    }
+}
+
+fn idm_reset_new(db: OrmDb, user_id: i64) -> IdmResetNew !IO !Net !Random {
+    let inval = idm_reset_invalidate_user(db, user_id)?
+    let mut d = db
+    if orm_ok(inval) == 1 {
+        d = orm_db_exec(inval)
+    }
+    let token = idm_reset_token_new()?
+    let hash = idm_reset_hash(token)
+    let ttl = int_to_str(idm_reset_ttl_min()?)
+    let sql = concat("INSERT INTO idm_resets (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + (", ttl)
+    let sql2 = concat(sql, " * INTERVAL '1 minute'))")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    vec_push(vals, hash)
+    let ins = orm_exec_params_str(d, sql2, vals)?
+    if orm_ok(ins) == 0 {
+        return IdmResetNewErr(IdmResetNewFail { err: orm_err_exec(ins), db: orm_db_exec(ins) })
+    }
+    return IdmResetNewOk(IdmResetNewOk { token: token, db: orm_db_exec(ins) })
+}
+
+// Маркира всички живи токени на потребителя като използвани.
+fn idm_reset_invalidate_user(db: OrmDb, user_id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    let sql = "UPDATE idm_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL"
+    return orm_exec_params_str(db, sql, vals)?
+}
+
+// Търси валиден (неизползван и неизтекъл) ред по хеша на подадения токен.
+struct IdmReset {
+    ok: i64,
+    id: i64,
+    user_id: i64,
+    db: OrmDb,
+    err: str
+}
+
+fn idm_reset_bad(db: OrmDb, err: str) -> IdmReset {
+    return IdmReset { ok: 0, id: 0, user_id: 0, db: db, err: err }
+}
+
+fn idm_reset_find(db: OrmDb, token: str) -> IdmReset !IO !Net {
+    if len(token) < 16 {
+        return idm_reset_bad(db, "invalid token")
+    }
+    let vals = vec_new()
+    vec_push(vals, idm_reset_hash(token))
+    let sql = "SELECT id, user_id FROM idm_resets WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()"
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return idm_reset_bad(db, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return idm_reset_bad(orm_db_q(q), "token is invalid or expired")
+    }
+    return IdmReset {
+        ok: 1,
+        id: orm_cell_by_i64(q, 0, "id"),
+        user_id: orm_cell_by_i64(q, 0, "user_id"),
+        db: orm_db_q(q),
+        err: ""
+    }
+}
+
+// Маркира конкретен токен като използван (еднократна употреба).
+fn idm_reset_consume(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    let sql = "UPDATE idm_resets SET used_at = NOW() WHERE id = $1"
+    return orm_exec_params_str(db, sql, vals)?
+}
+
+// Сменя паролата по id на потребителя (не по имейл — така смяната не
+// зависи от това дали имейлът е уникален/нормализиран).
+fn idm_user_set_password(db: OrmDb, user_id: i64, hash: str, salt: str, iters: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, hash)
+    vec_push(vals, salt)
+    vec_push(vals, int_to_str(iters))
+    vec_push(vals, int_to_str(user_id))
+    let sql = "UPDATE idm_users SET pass_hash = $1, pass_salt = $2, pass_iters = $3 WHERE id = $4"
+    return orm_exec_params_str(db, sql, vals)?
+}

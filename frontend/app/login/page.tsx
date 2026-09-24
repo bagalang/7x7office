@@ -74,6 +74,9 @@ export default function LoginPage() {
         <button type="submit" className="btn" disabled={busy} style={{ marginTop: 8 }}>
           {busy ? t("login.submitting") : t("login.submit")}
         </button>
+        <p className="sub" style={{ marginTop: 12, textAlign: "center" }}>
+          <a href="/forgot">{t("login.forgot")}</a>
+        </p>
       </form>
     </div>
   );

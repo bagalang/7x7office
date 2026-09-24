@@ -1,0 +1,32 @@
+// lib/mail_welcome.baga — welcome писмо при създаване на потребител.
+//
+// Изнесено е от idm/, защото го викат двама (admin create и евентуално
+// саморегистрация), а текстът на писмото не е нито домейн модел, нито
+// handler. Така смяната на текста е на едно място.
+//
+// Паролата НЕ се праща по поща: имейлът не е тайна връзка. Праща се линк
+// за вход, а паролата се дава отделно от администратора (или се задава
+// през /reset). Това е съзнателен избор — виж README, „Пароли".
+
+import "../idm/mail.baga"
+import "../idm/mail_text.baga"
+import "../system/scheduler.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+// Нарежда welcome писмо. НЕ хвърля и не съсипва създаването на
+// потребителя: ако планирането се провали, се логва и се продължава —
+// потребителят вече е създаден и това е важното. Виж gaps G21.
+fn mw_enqueue(db: OrmDb, email: str, name: str) -> OrmDb !IO !Net {
+    if mail_enabled()? == 0 {
+        return db
+    }
+    let link = concat(mail_public_url()?, "/login")
+    let body = mt_welcome_text(email, link)
+    let job = ops_enqueue_mail(db, email, "Добре дошли в 7x7office", body)?
+    if orm_ok(job) == 0 {
+        eprintln(concat("secp mail: welcome не се нареди: ", orm_err_exec(job)))
+        return orm_db_exec(job)
+    }
+    return orm_db_exec(job)
+}

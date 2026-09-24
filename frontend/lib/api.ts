@@ -82,6 +82,20 @@ export async function login(email: string, password: string): Promise<TokenRespo
   return data;
 }
 
+// Заявка за смяна на забравена парола. Сървърът винаги отговаря 200
+// (без да издава дали имейлът съществува), затова няма клон за „няма
+// такъв потребител".
+export async function requestPasswordReset(email: string): Promise<string> {
+  const data = await request<{ message?: string }>("/v1/auth/forgot", "POST", { email });
+  return data.message ?? "";
+}
+
+// Смяна на паролата с токен от писмото.
+export async function resetPassword(token: string, password: string): Promise<string> {
+  const data = await request<{ message?: string }>("/v1/auth/reset", "POST", { token, password });
+  return data.message ?? "";
+}
+
 export function logout(): void {
   const token = getToken();
   setToken(null);

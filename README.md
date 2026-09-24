@@ -164,11 +164,44 @@ ticker worker от `main`: на партиди взима `pending`, марки�
 `done`/`failed`. След 3 опита остава `failed` с причината. При старт задачите, останали
 `running` от убит процес, се връщат на `pending` (gaps G13).
 
-- Видове: `extract-text` (ползва се от reindex); `expire` е за Фаза 7 (TTL на споделяния).
+- Видове: `extract-text` (ползва се от reindex); `mail-send` (Фаза 6.3 — писмата
+  минават през опашката, за да не чака заявката доставчик); `expire` е за Фаза 7.
 - `SECP_SCHED_MS` (дефолт 5000) — `0` изключва scheduler-а (за тестове / `--check`).
 - Всяка итерация отваря собствена DB връзка — връзките не се споделят между нишки.
 
 Проверка: `SELECT kind, status, count(*) FROM ops_jobs GROUP BY kind, status;`
+
+## Поща (Фаза 6.3)
+
+Изпращането е през **`smtpbaga`** (универсален пакет, `app-product/smtpbaga/`).
+Пощата е **изключена по подразбиране**: без `SMTP_HOST` приложението работи
+нормално, а писмата просто не се пращат (важно за dev и тестове).
+
+- `POST /v1/auth/forgot` `{email}` — винаги отговаря 200, независимо дали имейлът
+  съществува. Така не може да се проверява кои имейли имат акаунт. Ако има, се
+  нарежда писмо с линк `SECP_PUBLIC_URL/reset?token=…`.
+- `POST /v1/auth/reset` `{token, password}` — сменя паролата. Токенът е **еднократен**
+  (в базата се пази само `SHA-256` хешът), с TTL `SECP_RESET_TTL_MIN` (деф. 60 мин).
+  Нов токен инвалидира предишните неизползвани.
+- При създаване на потребител се нарежда welcome писмо. **Паролата не се праща по
+  поща** — имейлът не е тайна връзка.
+
+Променливи: `SMTP_HOST`, `SMTP_PORT` (деф. 465/587/25 според `SMTP_TLS`),
+`SMTP_TLS` (`starttls` деф. | `tls` | `plain`), `SMTP_FROM`, `SMTP_USER`, `SMTP_PASS`,
+`SMTP_HELO`, `SMTP_TIMEOUT_S`, `SECP_PUBLIC_URL`, `SECP_RESET_TTL_MIN`.
+`SMTP_INSECURE=1` приема самоподписан сертификат — **само за dev**.
+
+Проверка без реален доставчик: `secp/tools/mock_smtp.baga` слуша на `MOCK_SMTP_PORT`
+и записва писмата в `MOCK_SMTP_OUT`:
+
+```bash
+# терминал 1
+MOCK_SMTP_PORT=2525 MOCK_SMTP_OUT=/tmp/mail.txt ./target/mock_smtp
+# терминал 2 (secp)
+SMTP_HOST=127.0.0.1 SMTP_PORT=2525 SMTP_TLS=plain SMTP_FROM=no-reply@7x7.local …
+```
+
+UI: `/forgot` и `/reset` (двете с връзка от `/login`), 4 езика.
 
 ## Фронтенд
 

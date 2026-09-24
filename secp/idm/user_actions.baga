@@ -3,6 +3,7 @@
 
 import "user_model.baga"
 import "../lib/pass.baga"
+import "../lib/mail_welcome.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -150,5 +151,8 @@ fn act_users_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(d, 500, "create ok but user missing")
     }
-    return act_created(orm_db_q(q), idm_user_to_json(q, 0))
+    // Welcome писмо (ако пощата е включена). Не се чака и не може да
+    // провали създаването — то вече е станало.
+    let d2 = mw_enqueue(orm_db_q(q), email, str_trim(name_f.val))?
+    return act_created(d2, idm_user_to_json(q, 0))
 }

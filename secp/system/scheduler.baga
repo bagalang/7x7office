@@ -11,9 +11,11 @@
 //
 // Регистрирани видове (kind):
 //   extract-text  — извлича текст за търсене от вече качен файл
+//   mail-send     — праща писмо от опашката (Фаза 6.3)
 //   expire        — чисти стари записи по TTL (подготвено за Фаза 7)
 
 import "ormbaga/orm.baga"
+import "mail_jobs.baga"
 import "std/str/str.baga"
 import "std/os/os.baga"
 import "std/time/time.baga"
@@ -101,6 +103,12 @@ fn ops_next_id(db: OrmDb) -> OrmCount !IO !Net {
     return orm_count_sql(db, "SELECT MAX(id) AS count FROM ops_jobs")?
 }
 
+// Удобно записване на писмо в опашката. Прави payload-а тук, за да не
+// вика idm-ът jsonx директно.
+fn ops_enqueue_mail(db: OrmDb, to: str, subject: str, text: str) -> OrmExec !IO !Net {
+    return ops_enqueue(db, "mail-send", mj_payload(to, subject, text))?
+}
+
 fn ops_claim(db: OrmDb) -> OrmQuery !IO !Net {
     let n = int_to_str(ops_batch())
     let sql = concat("SELECT id, kind, payload, attempts FROM ops_jobs WHERE status = 'pending' ORDER BY id LIMIT ", n)
@@ -143,7 +151,7 @@ fn ops_fail(db: OrmDb, id: i64, kind: str, attempts: i64, err: str) -> OrmExec !
 }
 
 // Връща броя обработени задачи (за лога/metrics).
-fn ops_tick(db: OrmDb) -> i64 !IO !Net !Time {
+fn ops_tick(db: OrmDb) -> i64 !IO !Net !Time !Random {
     if orm_ok_db(db) == 0 {
         return 0
     }
@@ -178,13 +186,22 @@ struct OpsRun {
 
 // Изпълнява една задача. Тук са и двата вида; при грешка опитва пак.
 // id е id-то на ЗАДАЧАТА (за ops_jobs), payload е този на файла/обекта.
-fn ops_run_one(db: OrmDb, id: i64, kind: str, payload: str, att: i64) -> OpsRun !IO !Net !Time {
+fn ops_run_one(db: OrmDb, id: i64, kind: str, payload: str, att: i64) -> OpsRun !IO !Net !Time !Random {
     if kind == "extract-text" {
         let r = ops_run_extract(db, id, payload)?
         if r.ok == 1 {
             return OpsRun { ok: 1, db: r.db }
         }
         let f = ops_fail(r.db, id, kind, att, r.err)?
+        return OpsRun { ok: 0, db: orm_db_exec(f) }
+    }
+    if kind == "mail-send" {
+        let m = mj_run(db, id, payload)?
+        if m.ok == 1 {
+            let s = ops_set_status(m.db, id, "done")?
+            return OpsRun { ok: 1, db: orm_db_exec(s) }
+        }
+        let f = ops_fail(m.db, id, kind, att, m.err)?
         return OpsRun { ok: 0, db: orm_db_exec(f) }
     }
     if kind == "expire" {

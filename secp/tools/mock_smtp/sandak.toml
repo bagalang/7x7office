@@ -1,0 +1,17 @@
+[package]
+name = "mock_smtp"
+version = "0.1.0"
+entry = "main.baga"
+kind = "bin"
+
+# Dev инструмент: SMTP сървър, който записва писмата във файл. Служи за
+# тестване на пощата (Фаза 6.3) без реален доставчик и без пароли.
+#
+# Ползване:
+#   cd app-product/7x7office/secp/tools/mock_smtp
+#   sandak build
+#   MOCK_SMTP_PORT=2525 MOCK_SMTP_OUT=/tmp/mail.txt ./target/mock_smtp
+
+[dependencies]
+std = { path = "../../../../../std" }
+smtpbaga = { path = "../../../../smtpbaga" }

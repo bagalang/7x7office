@@ -6,10 +6,11 @@
 Модулен монолит по шаблона `apps/*` от [BASE.md](../../BASE.md):
 `fmrbaga → httpdbaga · jwtbaga · ormbaga → pgbaga (Postgres) или boilaDB`.
 
-## Статус: Фаза 0 — скелет
+## Статус: Фаза 6.3 — търсене, scheduler, поща
 
-- миграции: `idm_users`, `idm_sessions` (Postgres + boila двойни сетове)
+- миграции: `idm_users`, `idm_sessions`, `idm_resets`, `tree_*`, `ops_jobs` (Postgres + boila двойни сетове)
 - вход: `POST /v1/auth/login` (JSON **или** форма) → JWT + HttpOnly cookie
+- забравена парола: `POST /v1/auth/forgot` + `POST /v1/auth/reset` (токен с TTL, еднократен; писмо през scheduler-а)
 - `POST /v1/auth/logout`, `GET /v1/me` (bearer)
 - системни: `/health`, `/ready`, `/v1/meta`, `/openapi.json`, `/metrics`
 - UI (tplbaga, SSR): `GET /login`, `GET /`
@@ -19,14 +20,21 @@
 
 ```
 secp/
-  start.baga            entrypoint: migrate → seed admin → fmr_run
+  start.baga            entrypoint: migrate → seed admin → ops_start → fmr_run
   routes.baga           route table + fmr_dispatch
   schema.baga           миграции (собственост на приложението)
   lib/pass.baga         PBKDF2-HMAC-SHA256 (gaps G1 → passbaga)
-  idm/                  идентичности: users, auth
+  lib/mail_welcome.baga welcome писмо при създаване на потребител
+  idm/                  идентичности: users, auth, поща
     user_model.baga     idm_users CRUD + authenticate
     auth_actions.baga   login / logout / me
-  system/actions.baga   health/ready/meta/openapi/metrics
+    reset_model.baga    idm_resets: токени за смяна на парола
+    reset_actions.baga  forgot / reset
+    mail.baga           SMTP конфигурация от средата + изпращане
+    mail_text.baga      текстовете на писмата (чист модул, без зависимости)
+  system/scheduler.baga фонови задачи (ops_jobs): extract-text, mail-send
+  system/mail_jobs.baga mail-send: разчита payload и праща
+  tools/mock_smtp.baga  dev SMTP сървър (пише писмата във файл)
   ui/                   SSR страници (tplbaga)
   sandak.toml
   gaps.md               езикови/пакетни дупки
@@ -67,4 +75,14 @@ curl -X POST localhost:8080/v1/auth/login \
 
 Виж [.env.example](.env.example). Ключови: `PORT`, `FMR_WORKERS`,
 `JWT_SECRET`, `PG*` (или `ORM_BACKEND=boila` + `BOILA_*`),
-`SECP_ADMIN_*`, `SECP_PASS_ITERS`.
+`SECP_ADMIN_*`, `SECP_PASS_ITERS`, `SECP_SCHED_MS`.
+
+Поща (Фаза 6.3) е **изключена без `SMTP_HOST`** — приложението работи
+нормално. Когато е включена: `SMTP_PORT` (деф. 465/587/25 според
+`SMTP_TLS`), `SMTP_TLS` (`starttls` | `tls` | `plain`), `SMTP_FROM`,
+`SMTP_USER`, `SMTP_PASS`, `SECP_PUBLIC_URL` (за линковете в писмата),
+`SECP_RESET_TTL_MIN` (деф. 60). `SMTP_INSECURE=1` приема самоподписан
+сертификат — само за dev.
+
+За тест без реален доставчик: `tools/mock_smtp.baga` (пише писмата във
+файл). Виж [../README.md](../README.md), раздел „Поща".

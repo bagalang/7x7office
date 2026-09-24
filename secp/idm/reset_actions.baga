@@ -1,0 +1,119 @@
+// idm/reset_actions.baga — забравена парола (Фаза 6.3).
+//
+// Две стъпки:
+//   POST /v1/auth/forgot  {email}                  → винаги 200 + писмо
+//   POST /v1/auth/reset   {token, password}        → нова парола
+//
+// Защо forgot винаги връща 200, дори за непознат имейл: ако отговаряше
+// 404, всеки можеше да проверява кои имейли имат акаунт (user
+// enumeration). Затова отговорът е един и същ, а писмо се праща само на
+// съществуващ потребител. Това е съзнателен компромис: по-малко ясно
+// съобщение срещу изтичане на списък с потребители.
+
+import "reset_model.baga"
+import "../lib/pass.baga"
+import "user_model.baga"
+import "mail.baga"
+import "mail_text.baga"
+import "../system/scheduler.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "std/str/str.baga"
+
+// Един и същ отговор и за намерен, и за ненамерен имейл.
+fn idm_forgot_msg() -> str {
+    return "Ако този имейл има акаунт, изпратихме линк за смяна на паролата."
+}
+
+fn act_forgot(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let email_f = jreq_str(b.doc, b.root, "email")
+    if email_f.ok == 0 {
+        return act_err(db, 400, email_f.err)
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    // mail_lower, не httpdbaga.to_lower: същата причина като в mail.baga
+    // (gaps G24) — email-ите на практика са ASCII, но не е гарантирано.
+    let email = mail_lower(str_trim(email_f.val))
+    let q = idm_user_find_by_email(db, email)?
+    if orm_ok_q(q) == 0 {
+        return act_err(db, 500, orm_err_q(q))
+    }
+    let mut d = orm_db_q(q)
+    if orm_nrows(q) > 0 {
+        let uid = orm_cell_by_i64(q, 0, "id")
+        let tok = idm_reset_new(d, uid)?
+        d = idm_reset_db(tok)
+        if idm_reset_ok(tok) == 1 {
+            let link = concat(concat(mail_public_url()?, "/reset?token="), idm_reset_token(tok))
+            let body = mt_reset_text(link, idm_reset_ttl_min()?)
+            let job = ops_enqueue_mail(d, orm_cell_by(q, 0, "email"), "Смяна на паролата — 7x7office", body)?
+            d = orm_db_exec(job)
+        } else {
+            // Не издаваме токен, но не казваме и защо — иначе отговорът
+            // издава, че имейлът съществува.
+            eprintln(concat("secp reset: не мога да издам токен: ", idm_reset_err(tok)))
+        }
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "message", idm_forgot_msg())
+    return act_ok(d, o)
+}
+
+fn act_reset(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let token_f = jreq_str(b.doc, b.root, "token")
+    if token_f.ok == 0 {
+        return act_err(db, 400, token_f.err)
+    }
+    let password = jreq_str(b.doc, b.root, "password")
+    if password.ok == 0 {
+        return act_err(db, 400, password.err)
+    }
+    if len(str_trim(password.val)) < 8 {
+        return act_err(db, 400, "паролата трябва да е поне 8 знака")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let found = idm_reset_find(db, str_trim(token_f.val))?
+    if found.ok == 0 {
+        return act_err(found.db, 400, "линкът е невалиден или изтекъл")
+    }
+    let iters = pass_iters_cfg()?
+    let salt = pass_new_salt()?
+    let hash = pass_make(password.val, salt, iters)
+    let upd = idm_user_set_password(found.db, found.user_id, hash, salt, iters)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let mut d = orm_db_exec(upd)
+    // Еднократна употреба: маркираме токена веднага след успешна смяна.
+    let used = idm_reset_consume(d, found.id)?
+    if orm_ok(used) == 1 {
+        d = orm_db_exec(used)
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "message", "паролата е сменена")
+    return act_ok(d, o)
+}
