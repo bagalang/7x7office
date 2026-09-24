@@ -33,3 +33,12 @@
 | G14 | `orm_update_by_id` винаги бие по колона `id` — таблица с друг PK (напр. `tree_text.node_id`) не се обновява | изричен `UPDATE ... WHERE node_id = $2` в `tree/text.baga` | `orm_update_by_pk(db, table, pk_col, id, ...)` в ormbaga |
 | G15 | „индексиран, но без текст" и „още не е индексиран" изглеждат еднакво (липсващ ред) → reindex нарежда файловете вечно | пишем ред и при празен текст (виж G14 — формата на записа е един и същ) | колона `status` в `tree_text` или `indexed_at` в `tree_nodes` |
 | G16 | `concat` е строго 2-аргументен — `concat(a, b, c)` не се компилира | влагане: `concat(a, concat(b, c))`; за дълги съобщения — междинна `let` | вариадичен `concat` в std (или `str_builder`); дребно, но се набива на очи при логове |
+
+## Фаза 6.3 (smtpbaga)
+
+| # | Дупка | Заобикаляне | Правилно решение |
+|---|-------|-------------|------------------|
+| G17 | `str_split` дели само по първия символ на разделителя (`char_at(delim, 0)`) — `str_split(s, "\r\n")` оставя `\n` във всеки ред | делим на `"\n"` и махаме завършващ `\r` (`smtp_strip_cr` в `smtpbaga/src/message.baga`) | `str_split` да търси целия низ-разделител |
+| G18 | `tls_conn_read_app` чете, докато връзката се затвори (писана за HTTP) — при SMTP блокира, защото сървърът чака следващата команда | собствен буфер в `smtpbaga/src/transport.baga`: един `tls_read_record` + изяждане на байт по байт | `tls_conn_read` с режим „един запис“ за line-протоколи |
+| G19 | `std/bytes` работи с `Vec<i64>`, а builtin-ите (`base64_encode`, `tls_conn_write`) — с `bytes`; типовете не се смесват имплицитно | мост с `vec_from_bytes`/`bytes_of_str` на границата | `base64_encode` да приема и `bytes`, или `bytes` да е `Vec<i64>` изцяло |
+| G20 | няма `gethostname()` в `std/os` — SMTP EHLO име не може да се вземе от средата | `cfg.helo` или `"localhost"` (mock сървърите го приемат) | `os_hostname()` в std; ползва се и от логовете |

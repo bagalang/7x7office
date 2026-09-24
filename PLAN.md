@@ -163,11 +163,16 @@
 
 ### 6.3 Поща (smtpbaga) ⏳
 
-- [ ] **Нов пакет `smtpbaga`** (SMTP клиент, pure TLS от std): welcome, share invite, reset password
+- [x] **Нов пакет `smtpbaga`** — SMTP клиент върху `std/net` (TCP + TLS 1.3):
+      EHLO, STARTTLS (RFC 3207), AUTH LOGIN, multipart/alternative, RFC 5322
+      дата, RFC 2047 UTF-8 заглавия, dot-stuffing. Тест `tests/smtp_test.baga`
+      с mock сървър (plain + STARTTLS), без реален доставчик.
+- [ ] secp: `POST /v1/auth/forgot` + `POST /v1/auth/reset` (token с TTL, jobs)
+- [ ] secp: welcome писмо при създаване на потребител
 - [ ] reportbaga: админ отчети (storage per workspace, activity)
 - [ ] **searchbaga** (само ако PG FTS не стигне): индекс върху rocksbaga
 
-**Зависимости:** smtpbaga (нов), reportbaga, queuebaga, grebaga (CLI търсене)
+**Зависимости:** smtpbaga (готов), reportbaga, queuebaga, grebaga (CLI търсене)
 
 ## Фаза 7 — Хардънинг и мащаб (по желание)
 
