@@ -112,6 +112,36 @@ echo "=== невалиден / несъществуващ workspace ==="
 [[ "$(code -H "$AUTH" "$B/v1/fs/list?path=/&workspace_id=abc")" == "200" ]] \
   && pass "невалиден id → третира се като личен (200)" || fail "невалиден id не е 200"
 
+# Личното пространство се създава лениво при първото отваряне на UI-а. UI-ът
+# пуска списъка и профила паралелно, значи две заявки могат да видят „още
+# няма личен" и да вмъкнат по едно — втората удря UNIQUE(slug) и връща 500.
+# Нов потребител + няколко паралелни заявки е точният тест за този race.
+echo "=== лично пространство при паралелни заявки (race) ==="
+# ВАЖНО: чакаме САМО pids на curl-овете. Гол `wait` би чакал и фоновия
+# сървър от `boot` — той не свършва никога и тестът виси.
+curl -s -X POST "$B/v1/users" -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"email":"race@secp.local","password":"pass12345","name":"race"}' >/dev/null
+RACE=$(login race@secp.local pass12345)
+rm -f /tmp/wsf_race_codes.txt
+PIDS=""
+for _ in 1 2 3 4 5 6 7 8; do
+  curl -s -H "Authorization: Bearer $RACE" "$B/v1/workspaces" -o /tmp/wsf_race.json -w '%{http_code}\n' \
+    >>/tmp/wsf_race_codes.txt &
+  PIDS="$PIDS $!"
+done
+for p in $PIDS; do wait "$p"; done
+# Внимание: `grep -c` връща 1 при нула съвпадения, затова `|| echo 0` би
+# добавил ВТОРИ ред. Затова броим през awk, а не с grep+fallback.
+OK=$(awk '$0=="200"{n++} END{print n+0}' /tmp/wsf_race_codes.txt)
+BAD=$(awk '$0!="200"{n++} END{print n+0}' /tmp/wsf_race_codes.txt)
+rm -f /tmp/wsf_race_codes.txt
+[[ "$OK" == "8" && "$BAD" == "0" ]] && pass "8/8 паралелни заявки минават (без 500)" \
+  || fail "паралелни заявки: $OK успешни, $BAD грешки (очаквах 8/0)"
+# ...и в базата има точно ЕДНО лично пространство (без дубликати)
+PCNT=$($PSQL -c "SELECT COUNT(*) FROM idm_workspaces w JOIN idm_users u ON u.id = w.owner_id WHERE w.is_personal = 1 AND u.email = 'race@secp.local'")
+[[ "$PCNT" == "1" ]] && pass "точно 1 лично пространство (без дубликати)" \
+  || fail "лични пространства за race: $PCNT (очаквах 1)"
+
 echo "=== роли върху реални файлове (viewer/editor) ==="
 for u in alice bob; do
   curl -s -X POST "$B/v1/users" -H "$AUTH" -H 'Content-Type: application/json' \
