@@ -22,3 +22,14 @@
 | G8 | Next няма „тема без блясък" — `ThemeProvider` се монтира след първия paint | inline `<script>` в `<head>`, който слага `data-theme` от localStorage преди рисуване | Next `beforeInteractive` script или server-side cookie за темата |
 | G9 | `no-img-element` lint warning за blob URL thumbnails | оставяме `<img>` (Next `<Image>` не работи с `blob:`) | `unoptimized` image wrapper или собствен thumbnail endpoint |
 | G10 | `spellCheck` върху `contentEditable` не наследява надеждно `<html lang>` в Chrome | слагаме и `lang` на самия editor елемент | — (това е коректният начин) |
+
+## Фаза 6 (търсене + scheduler)
+
+| # | Дупка | Заобикаляне | Правилно решение |
+|---|-------|-------------|------------------|
+| G11 | няма преносим full-text: PG има `to_tsvector`, boilaDB — не | `ILIKE ... ESCAPE '\'` по име и по извлечен текст; работи и на двете среди | **searchbaga** (индекс върху rocksbaga) или PG GIN + `pg_trgm`; решението е в `tree/search.baga` и се сменя на едно място |
+| G12 | `go_bg` worker-ите не могат да ползват DB връзката на главната нишка (връзките не са thread-safe) | scheduler-ът отваря собствена връзка на всеки tick; queuebaga изобщо не пази в DB | `ormbaga` пул с per-thread връзки (има `pool/`, но `fmr_open_db` не го ползва) |
+| G13 | няма lease/visibility timeout в `ops_jobs` — убит процес оставя `running` завинаги | при старт `UPDATE ... SET status='pending' WHERE status='running'` | lease с `locked_until` + периодично освобождаване (моделът на Cells `scheduler`) |
+| G14 | `orm_update_by_id` винаги бие по колона `id` — таблица с друг PK (напр. `tree_text.node_id`) не се обновява | изричен `UPDATE ... WHERE node_id = $2` в `tree/text.baga` | `orm_update_by_pk(db, table, pk_col, id, ...)` в ormbaga |
+| G15 | „индексиран, но без текст" и „още не е индексиран" изглеждат еднакво (липсващ ред) → reindex нарежда файловете вечно | пишем ред и при празен текст (виж G14 — формата на записа е един и същ) | колона `status` в `tree_text` или `indexed_at` в `tree_nodes` |
+| G16 | `concat` е строго 2-аргументен — `concat(a, b, c)` не се компилира | влагане: `concat(a, concat(b, c))`; за дълги съобщения — междинна `let` | вариадичен `concat` в std (или `str_builder`); дребно, но се набива на очи при логове |

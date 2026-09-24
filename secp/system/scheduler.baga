@@ -1,0 +1,282 @@
+// system/scheduler.baga — фонови задачи (Фаза 6).
+//
+// Моделът е опростен вариант на Cells `scheduler/actions`: таблица `ops_jobs`
+// е персистентна опашка, а един tick върши дребна работа на стъпки.
+// Часовникът идва от викащия (main вдига ticker worker), за да не тука
+// scheduler-ът знае как е стартиран.
+//
+// Защо НЕ queuebaga: той пази работата в /tmp файлове и иска споделено
+// състояние между нишки (виж gap G12). Тук задачите трябва да преживеят
+// рестарт и да се виждат от всички worker-и → в базата.
+//
+// Регистрирани видове (kind):
+//   extract-text  — извлича текст за търсене от вече качен файл
+//   expire        — чисти стари записи по TTL (подготвено за Фаза 7)
+
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+import "std/time/time.baga"
+
+fn ops_table() -> str {
+    return "ops_jobs"
+}
+
+fn ops_backend_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+// Между tick-овете. 0 изключва scheduler-а (SECP_SCHED_MS=0).
+fn ops_tick_ms() -> i64 !IO {
+    let raw = env("SECP_SCHED_MS")?
+    if raw == "" {
+        return 5000
+    }
+    let n = parse_int(raw)
+    if n < 0 {
+        return 5000
+    }
+    return n
+}
+
+// Колко задачи да се опитат на tick — за да не блокира един tick.
+fn ops_batch() -> i64 {
+    return 8
+}
+
+// ---------- опашка ----------
+
+struct OpsJob {
+    id: i64,
+    kind: str,
+    payload: str,
+    attempts: i64
+}
+
+// Записва задача. best_effort=1 не вдига (ползва се при enqueue от
+// handler, където провал на планирането не бива да съсипва заявката).
+fn ops_enqueue(db: OrmDb, kind: str, payload: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "kind")
+    vec_push(cols, "payload")
+    vec_push(cols, "status")
+    vec_push(cols, "attempts")
+    vec_push(cols, "run_at")
+    let vals = vec_new()
+    vec_push(vals, kind)
+    vec_push(vals, payload)
+    vec_push(vals, "pending")
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    if ops_backend_boila()? == 1 {
+        // Пишем id-то ръчно: MAX(id)+1 (boila няма SERIAL).
+        let c = ops_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let cols2 = vec_new()
+        vec_push(cols2, "id")
+        vec_push(cols2, "kind")
+        vec_push(cols2, "payload")
+        vec_push(cols2, "status")
+        vec_push(cols2, "attempts")
+        vec_push(cols2, "run_at")
+        let vals2 = vec_new()
+        vec_push(vals2, int_to_str(orm_count_n(c) + 1))
+        vec_push(vals2, kind)
+        vec_push(vals2, payload)
+        vec_push(vals2, "pending")
+        vec_push(vals2, "0")
+        vec_push(vals2, "0")
+        return orm_insert_strs(orm_db_c(c), ops_table(), cols2, vals2)?
+    }
+    return orm_insert_strs(db, ops_table(), cols, vals)?
+}
+
+fn ops_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM ops_jobs")?
+}
+
+fn ops_claim(db: OrmDb) -> OrmQuery !IO !Net {
+    let n = int_to_str(ops_batch())
+    let sql = concat("SELECT id, kind, payload, attempts FROM ops_jobs WHERE status = 'pending' ORDER BY id LIMIT ", n)
+    return orm_query_params_str(db, sql, vec_new())?
+}
+
+fn ops_set_status(db: OrmDb, id: i64, status: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "status")
+    let vals = vec_new()
+    vec_push(vals, status)
+    return orm_update_by_id(db, ops_table(), id, cols, vals)?
+}
+
+fn ops_bump_attempts(db: OrmDb, id: i64, attempts: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "attempts")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(attempts))
+    return orm_update_by_id(db, ops_table(), id, cols, vals)?
+}
+
+fn ops_fail(db: OrmDb, id: i64, kind: str, attempts: i64, err: str) -> OrmExec !IO !Net {
+    // След 3 опита задачата остава failed с причината — за диагноза.
+    let mut status = "pending"
+    if attempts >= 3 {
+        status = "failed"
+    }
+    let msg = concat(concat(concat("secp scheduler: job ", int_to_str(id)), concat(" (", kind)), concat(") се провали: ", err))
+    eprintln(concat(msg, concat(concat(" [опит ", int_to_str(attempts)), "]")))
+    let cols = vec_new()
+    vec_push(cols, "status")
+    vec_push(cols, "attempts")
+    vec_push(cols, "last_error")
+    let vals = vec_new()
+    vec_push(vals, status)
+    vec_push(vals, int_to_str(attempts))
+    vec_push(vals, err)
+    return orm_update_by_id(db, ops_table(), id, cols, vals)?
+}
+
+// Връща броя обработени задачи (за лога/metrics).
+fn ops_tick(db: OrmDb) -> i64 !IO !Net !Time {
+    if orm_ok_db(db) == 0 {
+        return 0
+    }
+    let q = ops_claim(db)?
+    if orm_ok_q(q) == 0 {
+        return 0
+    }
+    let mut d = orm_db_q(q)
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let id = orm_cell_by_i64(q, i, "id")
+        let kind = orm_cell_by(q, i, "kind")
+        let payload = orm_cell_by(q, i, "payload")
+        let att = orm_cell_by_i64(q, i, "attempts") + 1
+        let run = ops_set_status(d, id, "running")?
+        d = orm_db_exec(run)
+        let r = ops_run_one(d, id, kind, payload, att)?
+        d = r.db
+        if r.ok == 1 {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+struct OpsRun {
+    ok: i64,
+    db: OrmDb
+}
+
+// Изпълнява една задача. Тук са и двата вида; при грешка опитва пак.
+// id е id-то на ЗАДАЧАТА (за ops_jobs), payload е този на файла/обекта.
+fn ops_run_one(db: OrmDb, id: i64, kind: str, payload: str, att: i64) -> OpsRun !IO !Net !Time {
+    if kind == "extract-text" {
+        let r = ops_run_extract(db, id, payload)?
+        if r.ok == 1 {
+            return OpsRun { ok: 1, db: r.db }
+        }
+        let f = ops_fail(r.db, id, kind, att, r.err)?
+        return OpsRun { ok: 0, db: orm_db_exec(f) }
+    }
+    if kind == "expire" {
+        // Фаза 7 (споделени връзки) → тук. Засега е no-op, за да не е мъртъв
+        // код пътят, а да е ясно къде влиза TTL логиката.
+        let s = ops_set_status(db, id, "done")?
+        return OpsRun { ok: 1, db: orm_db_exec(s) }
+    }
+    // Непознат вид: не прилича на временна грешка → failed веднага.
+    let f = ops_fail(db, id, kind, 3, concat("unknown kind: ", kind))?
+    return OpsRun { ok: 0, db: orm_db_exec(f) }
+}
+
+struct OpsExtract {
+    ok: i64,
+    db: OrmDb,
+    err: str
+}
+
+// extract-text: payload е node id, job е id-то на задачата.
+fn ops_run_extract(db: OrmDb, job: i64, payload: str) -> OpsExtract !IO !Net !Time {
+    let nid = parse_int(payload)
+    if nid < 1 {
+        return OpsExtract { ok: 0, db: db, err: "bad node id" }
+    }
+    let q = tree_find_id(db, nid)?
+    if orm_ok_q(q) == 0 {
+        return OpsExtract { ok: 0, db: db, err: orm_err_q(q) }
+    }
+    if orm_nrows(q) < 1 {
+        // Възелът е изтрит междувременно — задачата е изпълнена (нищо за правене).
+        let s = ops_set_status(orm_db_q(q), job, "done")?
+        return OpsExtract { ok: 1, db: orm_db_exec(s), err: "" }
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        let s = ops_set_status(orm_db_q(q), job, "done")?
+        return OpsExtract { ok: 1, db: orm_db_exec(s), err: "" }
+    }
+    let owner = orm_cell_by_i64(q, 0, "owner_id")
+    let path = orm_cell_by(q, 0, "path")
+    let ext = tree_ext(path)
+    let body = data_blob_get(orm_cell_by(q, 0, "hash"))?
+    let text = tree_extract_text(ext, body)?
+    let wrote = tree_text_put(orm_db_q(q), nid, owner, text)?
+    if wrote != 0 {
+        return OpsExtract { ok: 0, db: orm_db_q(q), err: "text index write failed" }
+    }
+    let s = ops_set_status(orm_db_q(q), job, "done")?
+    return OpsExtract { ok: 1, db: orm_db_exec(s), err: "" }
+}
+
+// ---------- стартиране ----------
+
+// Вдига ticker worker (веднъж, от main). Връща 0 при успех.
+// Всяка итерация отваря собствена DB връзка: връзките не се споделят
+// между нишки (виж gap G12), а задачите идват рядко — цената е нищожна.
+fn ops_start(tick_ms: i64) -> i64 !Par !IO !Net !Time !Random {
+    if tick_ms < 1 {
+        return 0
+    }
+    go_bg(ops_loop, tick_ms)
+    return 0
+}
+
+fn ops_loop(tick_ms: i64) -> i64 !IO !Net !Par !Time !Random {
+    let app = fmr_build_app()?
+    // Възстановяване след рестарт: задачи, останали 'running' от убит процес,
+    // се връщат в опашката. Иначе щяха да висят вечно (няма lease/visibility
+    // timeout като в истинска опашка — виж gaps G13).
+    let db0 = fmr_open_db(app)?
+    if orm_ok_db(db0) == 1 {
+        let r = ops_recover(db0)?
+        orm_close(orm_db_exec(r))?
+    }
+    while true {
+        let db = fmr_open_db(app)?
+        if orm_ok_db(db) == 1 {
+            let n = ops_tick(db)?
+            if n > 0 {
+                eprintln(concat("secp scheduler: изпълнени ", int_to_str(n)))
+            }
+        }
+        orm_close(db)?
+        sleep_ms(tick_ms)
+    }
+    return 0
+}
+
+// running → pending. Извиква се веднъж при старт.
+fn ops_recover(db: OrmDb) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, "pending")
+    let sql = "UPDATE ops_jobs SET status = $1 WHERE status = 'running'"
+    return orm_exec_params_str(db, sql, vals)?
+}

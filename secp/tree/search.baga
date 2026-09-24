@@ -68,3 +68,10 @@ fn tree_search_limit(raw: str) -> i64 {
     }
     return n
 }
+
+// Всички текстови файлове на всички собственици (за преиндексиране).
+// Само за администратор — виж act_search_reindex.
+fn tree_search_all_files(db: OrmDb, limit: i64) -> OrmQuery !IO !Net {
+    let sql = concat("SELECT id FROM tree_nodes WHERE is_dir = 0 ORDER BY id LIMIT ", int_to_str(limit))
+    return orm_query_params_str(db, sql, vec_new())?
+}

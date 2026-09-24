@@ -5,6 +5,7 @@ import "routes.baga"
 import "schema.baga"
 import "lib/pass.baga"
 import "idm/user_model.baga"
+import "system/scheduler.baga"
 import "fmrbaga/app.baga"
 import "ormbaga/orm.baga"
 import "ormbaga/migrate.baga"
@@ -64,6 +65,12 @@ fn main() -> i64 !Net !IO !Par !Random !Time {
     let rc = boot_migrate()?
     if rc != 0 {
         return rc
+    }
+    // Фонови задачи (Фаза 6). SECP_SCHED_MS=0 ги изключва — нужно за
+    // тестове и за `--check`, където не искаме безкраен worker.
+    let tick = ops_tick_ms()?
+    if tick > 0 {
+        ops_start(tick)?
     }
     return fmr_run()?
 }

@@ -128,9 +128,42 @@
 
 **Резултат:** full-text търсене по име+съдържание; покани/ресет по имейл; фонови actions.
 
-- [ ] v1 търсене: PG full-text (`to_tsvector`) чрез pgbaga + извличане на текст чрез officebaga
+### 6.1 Търсене ✅ (2026-09-24)
+
+- [x] Извличане на текст при запис: `tree/text.baga` — plain/md/csv/json/html/xml + DOCX/XLSX/ODT/ODS
+      през officebaga; таван `SECP_TEXT_MAX_KB` (по подразбиране 1 MiB) да пази базата от гигантски текстове
+- [x] Извлеченият текст е в отделна таблица `tree_text` (node_id е PK, 1:1 с файл) — не раздува `tree_nodes`
+- [x] `GET /v1/search?q=` — `ILIKE` по име **и** по извлечено текст (`ESCAPE '\'`, за да не стане „100%" шаблон).
+      Избран е `ILIKE`, а не PG `to_tsvector`: boilaDB няма FTS, а приложението трябва да работи и на двете (gaps G11)
+- [x] Резултат: id/име/път/размер/`in_text` (съвпадение в съдържанието) + брояч; лимит 1..100
+- [x] Фронтенд `/search`: търсене на живо (350 ms debounce), въпросът влиза в URL-а (`?q=` — споделим линк),
+      връзка в навигацията; 4 езика
+- [x] `POST /v1/search/reindex` (само админ): нарежда `extract-text` за файловете, които още нямат индекс
+      (файловете отпреди тази фаза). Идемпотентно
+- [x] `scripts/check-i18n.mjs` — проверка, че четирите речника имат еднакви ключове **и** еднакви `{var}`;
+      вързана в `npm run check`. Хваща „преведох ключа само в bg"
+
+**Забележка:** пълнотекстовото търсене умишлено не е `to_tsvector` — виж gaps G11. При ръст (1M+ възела)
+се минава на PG GIN + `pg_trgm` или на **searchbaga** върху rocksbaga (по-долу).
+
+### 6.2 Scheduler ✅ (2026-09-24)
+
+- [x] Таблица `ops_jobs` — **персистентна** опашка (kind, payload, status, attempts, run_at, last_error).
+      Не queuebaga: тя пази работата в `/tmp` и иска споделено състояние между нишки (gaps G12);
+      тук задачите трябва да преживеят рестарт и да се виждат от всички worker-и
+- [x] `system/scheduler.baga`: един ticker worker (вдига се от `main`), който на партиди (8) взима
+      `pending` → `running` → `done`/`failed`. След 3 опита остава `failed` с причината
+- [x] Възстановяване след рестарт: `running` задачите се връщат на `pending` при старт
+      (иначе висят вечно — няма lease/timeout, виж gaps G13)
+- [x] Вид `extract-text` (ползва се от reindex); `expire` е за Фаза 7 (TTL)
+- [x] `SECP_SCHED_MS` (дефолт 5000) — 0 изключва scheduler-а (за тестове / `--check`)
+- [x] Всяка итерация отваря собствена DB връзка: връзките не се споделят между нишки (gaps G12)
+
+**Зависимости:** officebaga, ormbaga, fmrbaga
+
+### 6.3 Поща (smtpbaga) ⏳
+
 - [ ] **Нов пакет `smtpbaga`** (SMTP клиент, pure TLS от std): welcome, share invite, reset password
-- [ ] Scheduler actions (по `scheduler/actions` модела): thumbnail, extract-text, expire-shares, quota-report — през queuebaga + timer
 - [ ] reportbaga: админ отчети (storage per workspace, activity)
 - [ ] **searchbaga** (само ако PG FTS не стигне): индекс върху rocksbaga
 

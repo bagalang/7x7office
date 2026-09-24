@@ -78,22 +78,21 @@ fn tree_text_drop(db: OrmDb, node_id: i64) -> i64 !IO !Net {
     return 0
 }
 
-// Идемпотентно: при повторен запис текстът се презаписва. Празен текст
-// трие реда — така папките и нетекстовите файлове не трупат редове.
+// Идемпотентно: при повторен запис текстът се презаписва. Записваме реда и
+// при празен текст — иначе reindex не може да различи „вече индексиран, но
+// без текст" от „още не е индексиран" и ще го нарежда вечно (виж gaps G14).
 fn tree_text_put(db: OrmDb, node_id: i64, owner: i64, text: str) -> i64 !IO !Net {
-    if text == "" {
-        return tree_text_drop(db, node_id)?
-    }
     let ex = tree_text_find(db, node_id)?
     if orm_ok_q(ex) == 0 {
         return -1
     }
     if orm_nrows(ex) > 0 {
-        let cols = vec_new()
-        vec_push(cols, "text")
         let vals = vec_new()
         vec_push(vals, text)
-        let upd = orm_update_by_id(orm_db_q(ex), "tree_text", node_id, cols, vals)?
+        vec_push(vals, int_to_str(node_id))
+        // ВНИМАВАЙ: orm_update_by_id винаги бие по колона `id`, а тук PK е
+        // `node_id` — затова е изричен UPDATE.
+        let upd = orm_exec_params_str(orm_db_q(ex), "UPDATE tree_text SET text = $1, updated_at = NOW() WHERE node_id = $2", vals)?
         if orm_ok(upd) == 0 {
             return -1
         }

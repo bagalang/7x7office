@@ -96,6 +96,16 @@ fn tree_children(db: OrmDb, owner: i64, parent_path: str) -> OrmQuery !IO !Net {
     return orm_query_params_str(db, sql2, vals)?
 }
 
+// Червей: възел по id (scheduler-ът получава само id-та; owner-ското
+// филтриране тук не важи — задачата е системна, не потребителска).
+fn tree_find_id(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat("SELECT ", tree_cols())
+    let sql2 = concat(sql, " FROM tree_nodes WHERE id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_query_params_str(db, sql2, vals)?
+}
+
 // The node itself plus every descendant (for delete / move).
 fn tree_subtree(db: OrmDb, owner: i64, path: str) -> OrmQuery !IO !Net {
     let sql = concat("SELECT ", tree_cols())

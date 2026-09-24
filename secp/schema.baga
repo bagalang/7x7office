@@ -74,6 +74,21 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_tree_text_on_owner ON tree_text (owner_id)",
         "DROP INDEX IF EXISTS index_tree_text_on_owner"
     )
+    // Фаза 6: фонови задачи (scheduler).
+    set = migrate_add(
+        set,
+        20260924010,
+        "create_ops_jobs",
+        "CREATE TABLE ops_jobs (id BIGSERIAL PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', attempts BIGINT NOT NULL DEFAULT 0, run_at BIGINT NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS ops_jobs"
+    )
+    set = migrate_add(
+        set,
+        20260924011,
+        "index_ops_jobs_status",
+        "CREATE INDEX index_ops_jobs_on_status ON ops_jobs (status)",
+        "DROP INDEX IF EXISTS index_ops_jobs_on_status"
+    )
     return set
 }
 
@@ -142,6 +157,22 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_tree_text_owner",
         "CREATE INDEX IF NOT EXISTS index_tree_text_on_owner ON tree_text (owner_id)",
         "DROP INDEX IF EXISTS index_tree_text_on_owner ON tree_text"
+    )
+    // Фаза 6: фонови задачи (scheduler). Персистентни, за да преживеят
+    // рестарт; tick-ът ги взима партидно и ги маркира running/done/failed.
+    set = migrate_add(
+        set,
+        20260924010,
+        "create_ops_jobs",
+        "CREATE TABLE IF NOT EXISTS ops_jobs (id BIGINT, kind TEXT, payload TEXT, status TEXT, attempts BIGINT, run_at BIGINT, last_error TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS ops_jobs"
+    )
+    set = migrate_add(
+        set,
+        20260924011,
+        "index_ops_jobs_status",
+        "CREATE INDEX IF NOT EXISTS index_ops_jobs_on_status ON ops_jobs (status)",
+        "DROP INDEX IF EXISTS index_ops_jobs_on_status ON ops_jobs"
     )
     return set
 }

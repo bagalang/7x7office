@@ -6,6 +6,8 @@ import "auth.baga"
 import "model.baga"
 import "search.baga"
 import "text.baga"
+import "../idm/user_model.baga"
+import "../system/scheduler.baga"
 import "ormbaga/orm.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -45,4 +47,45 @@ fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     o = jobj_raw(o, "items", jarr_encode(arr))
     o = jobj_i64(o, "count", orm_nrows(nq))
     return act_ok(orm_db_q(nq), o)
+}
+
+// ---------- POST /v1/search/reindex (админ) ----------
+
+// Планира extract-text за всички файлове, които още нямат текст в индекса.
+// Нужно е веднъж след въвеждане на търсенето (файловете отпреди фаза 6).
+// Идемпотентно: редовете с текст не се пипат; задачите вървят на партиди.
+fn act_search_reindex(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let a = act_require_auth(ctx, db)
+    if a.ok == 0 {
+        return a.out
+    }
+    // само администратор: пипа индекса на всички, не само своите файлове
+    let u = idm_user_find_by_email(db, a.ctx.user_sub)?
+    if orm_ok_q(u) == 0 || orm_nrows(u) < 1 {
+        return act_err(db, 401, "unknown user")
+    }
+    if orm_cell_by_i64(u, 0, "is_admin") != 1 {
+        return act_err(orm_db_q(u), 403, "admin only")
+    }
+    let sql = "SELECT n.id FROM tree_nodes n LEFT JOIN tree_text t ON t.node_id = n.id WHERE n.is_dir = 0 AND t.node_id IS NULL ORDER BY n.id LIMIT 1000"
+    let q = orm_query_params_str(orm_db_q(u), sql, vec_new())?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut d = orm_db_q(q)
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let nid = orm_cell_by_i64(q, i, "id")
+        let e = ops_enqueue(d, "extract-text", int_to_str(nid))?
+        if orm_ok(e) == 0 {
+            return act_err(orm_db_exec(e), 500, orm_err_exec(e))
+        }
+        d = orm_db_exec(e)
+        n = n + 1
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "enqueued", n)
+    return act_ok(d, o)
 }
