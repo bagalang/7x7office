@@ -1,0 +1,239 @@
+// idm/ws_members.baga — членове на workspace (Фаза 2).
+//
+// Само owner (или админ) пипа членствата — това е смисълът на ролята.
+//
+// Две предпазни правила, за да не се заключи екипът сам:
+//   - не може да се махне/понижи последният owner на workspace-а
+//   - не може да се пипа членството в личния workspace (той е на собственика)
+//
+// Потребителят се задава по имейл, не по id: id-тата на boila се дават с
+// MAX(id)+1 и не са стабилни за външни хора, а имейлът е това, което
+// админът вижда в UI-а.
+
+import "ws_model.baga"
+import "ws_roles.baga"
+import "ws_actions.baga"
+import "user_model.baga"
+import "user_actions.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn act_ws_members(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let ws_id = ws_qid(ctx, "workspace_id")
+    let g = ws_gate(ctx, db, ws_id, ws_role_level_viewer())?
+    if g.ok == 0 {
+        return g.out
+    }
+    let q = ws_members_of(g.db, ws_id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, ws_member_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(orm_db_q(q), o)
+}
+
+// Тялото носи email (на потребителя) и role. Личният workspace не приема
+// нови членове през този endpoint — той е само на собственика.
+fn act_ws_member_add(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let ws_id = ws_qid(ctx, "workspace_id")
+    let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
+    if g.ok == 0 {
+        return g.out
+    }
+    let wq = ws_find(g.db, ws_id)?
+    if orm_ok_q(wq) == 0 || orm_nrows(wq) < 1 {
+        return act_404(g.db, "workspace not found")
+    }
+    if orm_cell_by_i64(wq, 0, "is_personal") == 1 {
+        return act_err(orm_db_q(wq), 409, "cannot add members to the personal workspace")
+    }
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(g.db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(g.db, 400, b.err)
+    }
+    let email_f = jreq_str(b.doc, b.root, "email")
+    if email_f.ok == 0 {
+        return act_err(g.db, 400, email_f.err)
+    }
+    let email = to_lower(str_trim(email_f.val))
+    if idm_email_ok(email) == 0 {
+        return act_err(g.db, 400, "invalid email")
+    }
+    let role_f = jreq_str(b.doc, b.root, "role")
+    if role_f.ok == 0 {
+        return act_err(g.db, 400, role_f.err)
+    }
+    let role = str_trim(role_f.val)
+    if ws_role_valid(role) == 0 {
+        return act_err(g.db, 400, "role must be owner, editor or viewer")
+    }
+    let uq = idm_user_find_by_email(g.db, email)?
+    if orm_ok_q(uq) == 0 {
+        return act_err(orm_db_q(uq), 500, orm_err_q(uq))
+    }
+    if orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "user not found")
+    }
+    let user_id = orm_cell_by_i64(uq, 0, "id")
+    let mut d = orm_db_q(uq)
+    let dup = ws_member_row(d, ws_id, user_id)?
+    if orm_ok_q(dup) == 0 {
+        return act_err(orm_db_q(dup), 500, orm_err_q(dup))
+    }
+    d = orm_db_q(dup)
+    if orm_nrows(dup) > 0 {
+        // Вече е член: това е по-скоро смяна на ролята. Приемаме го и не
+        // правим втори ред (иначе правата се удвояват непредвидимо).
+        let mid = orm_cell_by_i64(dup, 0, "id")
+        let upd = ws_member_set_role(d, mid, role)?
+        if orm_ok(upd) == 0 {
+            return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+        }
+    } else {
+        let ins = ws_member_add(d, ws_id, user_id, role)?
+        if orm_ok(ins) == 0 {
+            return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+        }
+        d = orm_db_exec(ins)
+    }
+    let q = ws_members_of(d, ws_id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut i: i64 = 0
+    let mut found: i64 = -1
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "user_id") == user_id {
+            found = i
+        }
+        i = i + 1
+    }
+    if found < 0 {
+        return act_err(orm_db_q(q), 500, "member added but not found")
+    }
+    return act_created(orm_db_q(q), ws_member_json(q, found))
+}
+
+fn act_ws_member_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let ws_id = ws_qid(ctx, "workspace_id")
+    let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
+    if g.ok == 0 {
+        return g.out
+    }
+    let mid = ws_qid(ctx, "member_id")
+    if mid < 1 {
+        return act_err(g.db, 400, "member_id required")
+    }
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(g.db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(g.db, 400, b.err)
+    }
+    let role_f = jreq_str(b.doc, b.root, "role")
+    if role_f.ok == 0 {
+        return act_err(g.db, 400, role_f.err)
+    }
+    let role = str_trim(role_f.val)
+    if ws_role_valid(role) == 0 || role == ws_role_owner() {
+        // owner се дава само чрез добавяне: така не може случайно да се
+        // направи втори owner с два клика.
+        return act_err(g.db, 400, "role must be editor or viewer")
+    }
+    let mq = ws_member_by_id(g.db, mid)?
+    if orm_ok_q(mq) == 0 {
+        return act_err(orm_db_q(mq), 500, orm_err_q(mq))
+    }
+    if orm_nrows(mq) < 1 || orm_cell_by_i64(mq, 0, "workspace_id") != ws_id {
+        return act_404(orm_db_q(mq), "member not found")
+    }
+    let old = orm_cell_by(mq, 0, "role")
+    let mut d = orm_db_q(mq)
+    if old == ws_role_owner() && role != ws_role_owner() {
+        // понижаване на owner — проверяваме дали остава друг
+        let oc = ws_owner_count(d, ws_id)?
+        if orm_ok_c(oc) == 0 {
+            return act_err(orm_db_c(oc), 500, orm_err_c(oc))
+        }
+        if orm_count_n(oc) < 2 {
+            return act_err(orm_db_c(oc), 409, "cannot demote the last owner")
+        }
+        d = orm_db_c(oc)
+    }
+    let upd = ws_member_set_role(d, mid, role)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let q = ws_members_of(orm_db_exec(upd), ws_id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut i: i64 = 0
+    let mut found: i64 = -1
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "id") == mid {
+            found = i
+        }
+        i = i + 1
+    }
+    if found < 0 {
+        return act_err(orm_db_q(q), 500, "member updated but not found")
+    }
+    return act_ok(orm_db_q(q), ws_member_json(q, found))
+}
+
+// Премахване. Последният owner не може да бъде махнат (нито да се махне
+// сам, ако е сам) — иначе workspace-ът остава без никой, който да го управлява.
+fn act_ws_member_remove(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let ws_id = ws_qid(ctx, "workspace_id")
+    let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
+    if g.ok == 0 {
+        return g.out
+    }
+    let mid = ws_qid(ctx, "member_id")
+    if mid < 1 {
+        return act_err(g.db, 400, "member_id required")
+    }
+    let mq = ws_member_by_id(g.db, mid)?
+    if orm_ok_q(mq) == 0 {
+        return act_err(orm_db_q(mq), 500, orm_err_q(mq))
+    }
+    if orm_nrows(mq) < 1 || orm_cell_by_i64(mq, 0, "workspace_id") != ws_id {
+        return act_404(orm_db_q(mq), "member not found")
+    }
+    let mut d = orm_db_q(mq)
+    let role = orm_cell_by(mq, 0, "role")
+    if role == ws_role_owner() {
+        let oc = ws_owner_count(d, ws_id)?
+        if orm_ok_c(oc) == 0 {
+            return act_err(orm_db_c(oc), 500, orm_err_c(oc))
+        }
+        if orm_count_n(oc) < 2 {
+            return act_err(orm_db_c(oc), 409, "cannot remove the last owner")
+        }
+        d = orm_db_c(oc)
+    }
+    let del = ws_member_remove(d, mid)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    return act_no_content(orm_db_exec(del))
+}

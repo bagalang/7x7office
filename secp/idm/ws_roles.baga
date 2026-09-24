@@ -1,0 +1,109 @@
+// idm/ws_roles.baga — роли и нива на достъп (Фаза 2). ЧИСТ модул.
+//
+// Изнесен е отделно, за да се тества без база и без мрежа (както
+// mail_text.baga): това е логиката, която решава кой какво може, и е
+// по-добре грешката да се хване в tests/ws_test.baga, а не в продукция.
+//
+// Ролите са фиксирана тройка, подредени. Правата се проверяват като
+// „ниво поне N", а не като равенство на роля — така добавянето на нова
+// роля по средата (напр. „commenter") няма да отвори дупка.
+//
+// Непозната/празна роля дава ниво 0, което не минава нито една проверка.
+// Това е умишлено: сгрешен ред в базата (или бъдеща роля, забравена тук)
+// заключва, вместо да дава достъп.
+
+fn ws_role_owner() -> str { return "owner" }
+fn ws_role_editor() -> str { return "editor" }
+fn ws_role_viewer() -> str { return "viewer" }
+
+// Нива. Стойностите са подредени: по-голямо = повече права.
+fn ws_role_level_admin() -> i64 { return 99 }
+fn ws_role_level_owner() -> i64 { return 3 }
+fn ws_role_level_editor() -> i64 { return 2 }
+fn ws_role_level_viewer() -> i64 { return 1 }
+
+fn ws_role_level(role: str) -> i64 {
+    if role == ws_role_owner() {
+        return ws_role_level_owner()
+    }
+    if role == ws_role_editor() {
+        return ws_role_level_editor()
+    }
+    if role == ws_role_viewer() {
+        return ws_role_level_viewer()
+    }
+    return 0
+}
+
+fn ws_role_valid(role: str) -> i64 {
+    if ws_role_level(role) > 0 {
+        return 1
+    }
+    return 0
+}
+
+// Може ли ниво `have` да прави това, което иска `need`.
+// Ниво 0 (невалидна роля / не-член) не минава дори срещу 0 — защита в
+// дълбочина: дори някой ден проверката да се извика без предварителния
+// ws_access, тя сама заключва.
+fn ws_level_allows(have: i64, need: i64) -> i64 {
+    if have < 1 {
+        return 0
+    }
+    if have >= need {
+        return 1
+    }
+    return 0
+}
+
+// ---------- чисти помощни за workspace ----------
+
+// Личният slug се прави от id-то, не от имейла: имейлът се сменя, а slug-ът
+// влиза в URL-и (и по-късно в WebDAV пътища) — не бива да „мърда".
+fn ws_personal_slug(user_id: i64) -> str {
+    return concat("personal-", int_to_str(user_id))
+}
+
+// Slug от произволен текст: малки латински букви, цифри и единични тирета.
+// char_at връща байт (виж csvbaga), затова сравненията са с числа.
+// Кирилица не се транслитерира (v1) — такива думи просто се губят, а ако
+// не остане нищо, викащият дава резервен вариант.
+fn ws_slugify(s: str) -> str {
+    let mut out = ""
+    let mut dash = 0
+    let mut i: i64 = 0
+    let n = len(s)
+    while i < n {
+        let c = char_at(s, i)
+        if (c >= 97 && c <= 122) || (c >= 48 && c <= 57) {
+            out = concat(out, chr(c))
+            dash = 0
+        } else {
+            if c >= 65 && c <= 90 {
+                out = concat(out, chr(c + 32))
+                dash = 0
+            } else {
+                if dash == 0 && out != "" {
+                    out = concat(out, "-")
+                    dash = 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    // махаме завършващото тире
+    while len(out) > 0 && str_ends_with(out, "-") {
+        out = substr(out, 0, len(out) - 1)
+    }
+    return out
+}
+
+// Пълен slug: база + кратък суфикс от id, за да е уникален без проверка в
+// базата (два workspace-а с едно и също име не бива да се сблъскват).
+fn ws_slug_for(name: str, ws_id: i64) -> str {
+    let base = ws_slugify(name)
+    if base == "" {
+        return concat("ws-", int_to_str(ws_id))
+    }
+    return concat(concat(base, "-"), int_to_str(ws_id))
+}

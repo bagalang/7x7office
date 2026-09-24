@@ -106,6 +106,31 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_idm_resets_on_user_id ON idm_resets (user_id)",
         "DROP INDEX IF EXISTS index_idm_resets_on_user_id"
     )
+    // Фаза 2: workspaces + членство с роля. Personal workspace = един на
+    // потребител (is_personal=1, slug `personal-<user_id>`), за да има всеки
+    // „своя" контейнер още преди да е създал екипен. Ролята е фиксирана
+    // тройка (owner/editor/viewer) — собствени роли са отделна стъпка.
+    set = migrate_add(
+        set,
+        20260924014,
+        "create_idm_workspaces",
+        "CREATE TABLE idm_workspaces (id BIGSERIAL PRIMARY KEY, slug TEXT NOT NULL UNIQUE, label TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', is_personal BIGINT NOT NULL DEFAULT 0, owner_id BIGINT NOT NULL REFERENCES idm_users(id) ON DELETE CASCADE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS idm_workspaces"
+    )
+    set = migrate_add(
+        set,
+        20260924015,
+        "create_idm_workspace_members",
+        "CREATE TABLE idm_workspace_members (id BIGSERIAL PRIMARY KEY, workspace_id BIGINT NOT NULL REFERENCES idm_workspaces(id) ON DELETE CASCADE, user_id BIGINT NOT NULL REFERENCES idm_users(id) ON DELETE CASCADE, role TEXT NOT NULL DEFAULT 'viewer', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE (workspace_id, user_id))",
+        "DROP TABLE IF EXISTS idm_workspace_members"
+    )
+    set = migrate_add(
+        set,
+        20260924016,
+        "index_idm_workspace_members_user",
+        "CREATE INDEX index_idm_workspace_members_on_user ON idm_workspace_members (user_id)",
+        "DROP INDEX IF EXISTS index_idm_workspace_members_on_user"
+    )
     return set
 }
 
@@ -205,6 +230,28 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_idm_resets_user_id",
         "CREATE INDEX IF NOT EXISTS index_idm_resets_on_user_id ON idm_resets (user_id)",
         "DROP INDEX IF EXISTS index_idm_resets_on_user_id ON idm_resets"
+    )
+    // Фаза 2: workspaces + членство (boila: без SERIAL/FK/DEFAULT/UNIQUE).
+    set = migrate_add(
+        set,
+        20260924014,
+        "create_idm_workspaces",
+        "CREATE TABLE IF NOT EXISTS idm_workspaces (id BIGINT, slug TEXT, label TEXT, description TEXT, is_personal BIGINT, owner_id BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_workspaces"
+    )
+    set = migrate_add(
+        set,
+        20260924015,
+        "create_idm_workspace_members",
+        "CREATE TABLE IF NOT EXISTS idm_workspace_members (id BIGINT, workspace_id BIGINT, user_id BIGINT, role TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_workspace_members"
+    )
+    set = migrate_add(
+        set,
+        20260924016,
+        "index_idm_workspace_members_user",
+        "CREATE INDEX IF NOT EXISTS index_idm_workspace_members_on_user ON idm_workspace_members (user_id)",
+        "DROP INDEX IF EXISTS index_idm_workspace_members_on_user ON idm_workspace_members"
     )
     return set
 }

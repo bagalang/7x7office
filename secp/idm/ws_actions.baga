@@ -1,0 +1,251 @@
+// idm/ws_actions.baga — API за workspaces (Фаза 2): списък, създаване,
+// преименуване, триене. Членовете са в ws_members.baga.
+//
+// Правила (v1):
+//   - всеки влязъл вижда и създава свои workspace-и; админът вижда всички
+//   - личният workspace се създава лениво при първо отваряне на списъка,
+//     за да получат старите потребители свой контейнер без миграция
+//   - личният workspace не се трие (иначе потребителят остава без дом)
+//   - за преименуване/триене трябва роля owner (или админ)
+
+import "ws_model.baga"
+import "ws_roles.baga"
+import "user_actions.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+// workspace_id от заявката: липсващо/нечислово → 0 (никой реален workspace
+// не е 0, така че проверката за достъп ще го откаже).
+fn ws_qid(ctx: FmrCtx, name: str) -> i64 {
+    let raw = str_trim(fmr_query(ctx, name))
+    if raw == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
+// Достъпът се проверява винаги върху реален workspace — ако id-то е
+// невалидно, ws_access връща ok=0 и handler-ът дава 404/403.
+struct WsGate {
+    ok: i64,
+    caller_id: i64,
+    is_admin: i64,
+    ws_id: i64,
+    level: i64,
+    role: str,
+    db: OrmDb,
+    out: FmrOut
+}
+
+fn ws_gate(ctx: FmrCtx, db: OrmDb, ws_id: i64, need: i64) -> WsGate !IO !Net {
+    let c = idm_caller(ctx, db)?
+    if c.ok == 0 {
+        return WsGate { ok: 0, caller_id: 0, is_admin: 0, ws_id: 0, level: 0, role: "", db: db, out: c.out }
+    }
+    let q = ws_find(db, ws_id)?
+    if orm_ok_q(q) == 0 {
+        return WsGate { ok: 0, caller_id: c.id, is_admin: c.is_admin, ws_id: ws_id, level: 0, role: "", db: db, out: act_err(orm_db_q(q), 500, orm_err_q(q)) }
+    }
+    if orm_nrows(q) < 1 {
+        return WsGate { ok: 0, caller_id: c.id, is_admin: c.is_admin, ws_id: ws_id, level: 0, role: "", db: orm_db_q(q), out: act_404(orm_db_q(q), "workspace not found") }
+    }
+    let mut d = orm_db_q(q)
+    let a = ws_access(d, ws_id, c.id, c.is_admin)?
+    if a.ok == 0 {
+        // Не издаваме съществуването на чуждия workspace: 404, не 403.
+        return WsGate { ok: 0, caller_id: c.id, is_admin: c.is_admin, ws_id: ws_id, level: 0, role: "", db: a.db, out: act_404(a.db, "workspace not found") }
+    }
+    if ws_level_allows(a.level, need) == 0 {
+        return WsGate { ok: 0, caller_id: c.id, is_admin: c.is_admin, ws_id: ws_id, level: a.level, role: a.role, db: a.db, out: act_err(a.db, 403, "insufficient rights") }
+    }
+    return WsGate { ok: 1, caller_id: c.id, is_admin: c.is_admin, ws_id: ws_id, level: a.level, role: a.role, db: a.db, out: fmr_out(http_response(200, ""), a.db) }
+}
+
+// Списък: админът вижда всички, останалите — само своите. Всеки получава
+// личния си workspace дори да няма нищо друго.
+fn act_ws_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let c = idm_caller(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let ens = ws_personal_ensure(db, c.id)?
+    if ens.err != "" {
+        return act_err(ens.db, 500, ens.err)
+    }
+    let mut d = ens.db
+    let mut q = ws_list_for_user(d, c.id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if c.is_admin == 1 {
+        // админът освен своите вижда и всички останали
+        q = ws_list_all(d, c.id)?
+        if orm_ok_q(q) == 0 {
+            return act_err(orm_db_q(q), 500, orm_err_q(q))
+        }
+    }
+    d = orm_db_q(q)
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        // админ извън членството: правата му са като owner, но ролята не е
+        // „негова" — показваме admin, за да не е празна дупка в UI-а
+        let mut role = orm_cell_by(q, i, "role")
+        if role == "" && c.is_admin == 1 {
+            role = "admin"
+        }
+        arr = jarr_obj(arr, ws_to_json_role(q, i, role))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(d, o)
+}
+
+fn act_ws_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let c = idm_caller(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let label_f = jreq_str(b.doc, b.root, "label")
+    if label_f.ok == 0 {
+        return act_err(db, 400, label_f.err)
+    }
+    let label = str_trim(label_f.val)
+    if len(label) < 1 {
+        return act_err(db, 400, "label required")
+    }
+    if len(label) > 200 {
+        return act_err(db, 400, "label too long")
+    }
+    let desc_f = jopt_str(b.doc, b.root, "description", "")
+    if desc_f.ok == 0 {
+        return act_err(db, 400, desc_f.err)
+    }
+    let description = str_trim(desc_f.val)
+    if len(description) > 1000 {
+        return act_err(db, 400, "description too long")
+    }
+    // slug: база + пореден номер. Идемпотентност не търсим — двойно
+    // натискане прави два workspace-а с различен slug и това е видимо.
+    let nxt = ws_next_id(db, ws_table())?
+    if orm_ok_c(nxt) == 0 {
+        return act_err(orm_db_c(nxt), 500, orm_err_c(nxt))
+    }
+    let mut d = orm_db_c(nxt)
+    let slug = ws_slug_for(label, orm_count_n(nxt) + 1)
+    let dup = ws_find_by_slug(d, slug)?
+    if orm_ok_q(dup) == 0 {
+        return act_err(orm_db_q(dup), 500, orm_err_q(dup))
+    }
+    d = orm_db_q(dup)
+    if orm_nrows(dup) > 0 {
+        return act_err(d, 409, "workspace already exists")
+    }
+    let ins = ws_insert(d, slug, label, description, 0, c.id)?
+    if orm_ok(ins) == 0 {
+        return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+    }
+    d = orm_db_exec(ins)
+    let q = ws_find_by_slug(d, slug)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(d, 500, "create ok but workspace missing")
+    }
+    d = orm_db_q(q)
+    let ws_id = orm_cell_by_i64(q, 0, "id")
+    // създателят става owner — иначе никой не може да го управлява
+    let mem = ws_member_add(d, ws_id, c.id, ws_role_owner())?
+    if orm_ok(mem) == 0 {
+        return act_err(orm_db_exec(mem), 500, orm_err_exec(mem))
+    }
+    d = orm_db_exec(mem)
+    return act_created(d, ws_to_json_role(q, 0, ws_role_owner()))
+}
+
+fn act_ws_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let ws_id = ws_qid(ctx, "workspace_id")
+    let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
+    if g.ok == 0 {
+        return g.out
+    }
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(g.out.db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(g.out.db, 400, b.err)
+    }
+    let label_f = jreq_str(b.doc, b.root, "label")
+    if label_f.ok == 0 {
+        return act_err(g.out.db, 400, label_f.err)
+    }
+    let label = str_trim(label_f.val)
+    if len(label) < 1 || len(label) > 200 {
+        return act_err(g.out.db, 400, "label must be 1..200 characters")
+    }
+    let desc_f = jopt_str(b.doc, b.root, "description", "")
+    if desc_f.ok == 0 {
+        return act_err(g.out.db, 400, desc_f.err)
+    }
+    if len(desc_f.val) > 1000 {
+        return act_err(g.out.db, 400, "description too long")
+    }
+    let upd = ws_update_meta(g.out.db, ws_id, label, str_trim(desc_f.val))?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    let mut d = orm_db_exec(upd)
+    let q = ws_find(d, ws_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(d, 500, "update ok but workspace missing")
+    }
+    // ролята не идва от този SELECT — слагаме я от проверката за достъп
+    return act_ok(orm_db_q(q), ws_to_json_role(q, 0, g.role))
+}
+
+fn act_ws_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let ws_id = ws_qid(ctx, "workspace_id")
+    let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
+    if g.ok == 0 {
+        return g.out
+    }
+    let q = ws_find(g.out.db, ws_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_404(g.out.db, "workspace not found")
+    }
+    if orm_cell_by_i64(q, 0, "is_personal") == 1 {
+        return act_err(orm_db_q(q), 409, "cannot delete the personal workspace")
+    }
+    let mut d = orm_db_q(q)
+    let del = ws_delete(d, ws_id)?
+    if orm_ok(del) == 0 {
+        return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+    }
+    d = orm_db_exec(del)
+    // v1: възлите още не са вързани за workspace (Фаза 2, стъпка files).
+    // Когато стане, тук ще се трие и дървото на workspace-а.
+    return act_no_content(d)
+}

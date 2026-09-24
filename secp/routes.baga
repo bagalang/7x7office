@@ -5,6 +5,8 @@ import "system/actions.baga"
 import "idm/auth_actions.baga"
 import "idm/reset_actions.baga"
 import "idm/user_actions.baga"
+import "idm/ws_actions.baga"
+import "idm/ws_members.baga"
 import "tree/actions.baga"
 import "tree/docs.baga"
 import "tree/versions_files.baga"
@@ -50,6 +52,14 @@ fn RID_SEARCH() -> i64 { return 40 }
 fn RID_SEARCH_REINDEX() -> i64 { return 41 }
 fn RID_FORGOT() -> i64 { return 42 }
 fn RID_RESET() -> i64 { return 43 }
+fn RID_WS_LIST() -> i64 { return 44 }
+fn RID_WS_CREATE() -> i64 { return 45 }
+fn RID_WS_UPDATE() -> i64 { return 46 }
+fn RID_WS_DELETE() -> i64 { return 47 }
+fn RID_WS_MEMBERS() -> i64 { return 48 }
+fn RID_WS_MEMBER_ADD() -> i64 { return 49 }
+fn RID_WS_MEMBER_UPDATE() -> i64 { return 50 }
+fn RID_WS_MEMBER_REMOVE() -> i64 { return 51 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -70,6 +80,14 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/me", RID_ME(), "", "auth", 0, "", "Me", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/users", RID_USERS_LIST(), "", "idm", 0, "", "UserList", "200", "")
     app = fmr_route_meta(app, "POST", "/v1/users", RID_USERS_CREATE(), "", "idm", 0, "UserCreate", "User", "201", "")
+    app = fmr_route_meta(app, "GET", "/v1/workspaces", RID_WS_LIST(), "", "idm", 0, "", "WorkspaceList", "200", "")
+    app = fmr_route_meta(app, "POST", "/v1/workspaces", RID_WS_CREATE(), "", "idm", 0, "WorkspaceCreate", "Workspace", "201", "")
+    app = fmr_route_meta(app, "PATCH", "/v1/workspaces", RID_WS_UPDATE(), "", "idm", 0, "WorkspaceUpdate", "Workspace", "200", "workspace_id")
+    app = fmr_route_meta(app, "DELETE", "/v1/workspaces", RID_WS_DELETE(), "", "idm", 0, "", "-", "204", "workspace_id")
+    app = fmr_route_meta(app, "GET", "/v1/workspaces/members", RID_WS_MEMBERS(), "", "idm", 0, "", "MemberList", "200", "workspace_id")
+    app = fmr_route_meta(app, "POST", "/v1/workspaces/members", RID_WS_MEMBER_ADD(), "", "idm", 0, "MemberAdd", "Member", "201", "workspace_id")
+    app = fmr_route_meta(app, "PATCH", "/v1/workspaces/members", RID_WS_MEMBER_UPDATE(), "", "idm", 0, "MemberUpdate", "Member", "200", "workspace_id,member_id")
+    app = fmr_route_meta(app, "DELETE", "/v1/workspaces/members", RID_WS_MEMBER_REMOVE(), "", "idm", 0, "", "-", "204", "workspace_id,member_id")
     app = fmr_route_meta(app, "GET", "/v1/fs/list", RID_FS_LIST(), "", "fs", 0, "", "NodeList", "200", "path")
     app = fmr_route_meta(app, "GET", "/v1/fs/stat", RID_FS_STAT(), "", "fs", 0, "", "Node", "200", "path")
     app = fmr_route_meta(app, "POST", "/v1/fs/mkdir", RID_FS_MKDIR(), "", "fs", 0, "", "Node", "201", "path")
@@ -121,6 +139,14 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if id == RID_ME() { return act_me(ctx, db)? }
     if id == RID_USERS_LIST() { return act_users_list(ctx, db)? }
     if id == RID_USERS_CREATE() { return act_users_create(ctx, db)? }
+    if id == RID_WS_LIST() { return act_ws_list(ctx, db)? }
+    if id == RID_WS_CREATE() { return act_ws_create(ctx, db)? }
+    if id == RID_WS_UPDATE() { return act_ws_update(ctx, db)? }
+    if id == RID_WS_DELETE() { return act_ws_delete(ctx, db)? }
+    if id == RID_WS_MEMBERS() { return act_ws_members(ctx, db)? }
+    if id == RID_WS_MEMBER_ADD() { return act_ws_member_add(ctx, db)? }
+    if id == RID_WS_MEMBER_UPDATE() { return act_ws_member_update(ctx, db)? }
+    if id == RID_WS_MEMBER_REMOVE() { return act_ws_member_remove(ctx, db)? }
     if id == RID_FS_LIST() { return act_fs_list(ctx, db)? }
     if id == RID_FS_STAT() { return act_fs_stat(ctx, db)? }
     if id == RID_FS_MKDIR() { return act_fs_mkdir(ctx, db)? }

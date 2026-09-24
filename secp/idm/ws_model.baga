@@ -1,0 +1,350 @@
+// idm/ws_model.baga — workspaces + членство (Фаза 2).
+//
+// Workspace = контейнер за дърво от възли. Достъпът се дава само през
+// членство с роля; няма публични workspaces и няма „скрити" права.
+// Ролите и нивата са в ws_roles.baga (чист модул, тестван отделно).
+//
+// Личният workspace на потребителя се създава ЛЕНИВО (при първо отваряне на
+// списъка), за да получат старите потребители свой контейнер без миграция
+// на данни. Той е обикновен workspace — просто е маркиран is_personal.
+//
+// DB-ът не налага UNIQUE върху членството (boilaDB няма такъв constraint),
+// затова проверките „вече член ли е" са в кода, не в схемата.
+//
+// ВАЖНО за boila: id-тата се дават с MAX(id)+1, значи изтрит workspace
+// може да бъде „преизползван" от следващия. Затова се трият и членствата,
+// и не се разчита на id-то като на дълготраен ключ в URL-и навън.
+
+import "user_model.baga"
+import "ws_roles.baga"
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+fn ws_table() -> str {
+    return "idm_workspaces"
+}
+
+fn ws_members_table() -> str {
+    return "idm_workspace_members"
+}
+
+fn ws_cols() -> str {
+    return "id, slug, label, description, is_personal, owner_id, created_at"
+}
+
+// ---------- id (boila няма SERIAL) ----------
+
+fn ws_next_id(db: OrmDb, table: str) -> OrmCount !IO !Net {
+    return orm_count_sql(db, concat("SELECT MAX(id) AS count FROM ", table))?
+}
+
+// ---------- четене ----------
+
+fn ws_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", ws_cols()), " FROM idm_workspaces WHERE id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn ws_find_by_slug(db: OrmDb, slug: str) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", ws_cols()), " FROM idm_workspaces WHERE slug = $1")
+    let vals = vec_new()
+    vec_push(vals, slug)
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// Работните пространства на потребителя + ролята му (един JOIN, P28).
+// NULL role (админ без членство) се оправя в handler-а.
+fn ws_list_for_user(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT w.id, w.slug, w.label, w.description, w.is_personal, w.owner_id, w.created_at, m.role AS role FROM idm_workspaces w LEFT JOIN idm_workspace_members m ON m.workspace_id = w.id WHERE m.user_id = $1 ORDER BY w.is_personal DESC, w.label"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// За админ: всички workspace-и, с ролята на този потребител, ако е член.
+fn ws_list_all(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT w.id, w.slug, w.label, w.description, w.is_personal, w.owner_id, w.created_at, m.role AS role FROM idm_workspaces w LEFT JOIN idm_workspace_members m ON m.workspace_id = w.id AND m.user_id = $1 ORDER BY w.is_personal DESC, w.label"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn ws_members_of(db: OrmDb, ws_id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT m.id, m.user_id, m.role, u.email, u.name FROM idm_workspace_members m LEFT JOIN idm_users u ON u.id = m.user_id WHERE m.workspace_id = $1 ORDER BY m.id"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws_id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn ws_member_row(db: OrmDb, ws_id: i64, user_id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, workspace_id, user_id, role FROM idm_workspace_members WHERE workspace_id = $1 AND user_id = $2"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws_id))
+    vec_push(vals, int_to_str(user_id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn ws_member_by_id(db: OrmDb, member_id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, workspace_id, user_id, role FROM idm_workspace_members WHERE id = $1"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(member_id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// ---------- личен workspace ----------
+
+fn ws_personal_of(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat(concat("SELECT ", ws_cols()), " FROM idm_workspaces WHERE is_personal = 1 AND owner_id = $1")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+struct WsEnsure {
+    db: OrmDb,
+    id: i64,
+    err: str
+}
+
+// Идемпотентно: връща id-то на личния workspace, създава го при нужда
+// (заедно с owner членство). Извиква се от списъка — така всеки, който
+// отвори UI-а, получава своето пространство.
+fn ws_personal_ensure(db: OrmDb, user_id: i64) -> WsEnsure !IO !Net {
+    let q = ws_personal_of(db, user_id)?
+    if orm_ok_q(q) == 0 {
+        return WsEnsure { db: db, id: 0, err: orm_err_q(q) }
+    }
+    if orm_nrows(q) > 0 {
+        return WsEnsure { db: orm_db_q(q), id: orm_cell_by_i64(q, 0, "id"), err: "" }
+    }
+    let ins = ws_insert(orm_db_q(q), ws_personal_slug(user_id), concat("Лично пространство #", int_to_str(user_id)), "", 1, user_id)?
+    if orm_ok(ins) == 0 {
+        return WsEnsure { db: orm_db_q(q), id: 0, err: orm_err_exec(ins) }
+    }
+    let mut d = orm_db_exec(ins)
+    let q2 = ws_personal_of(d, user_id)?
+    if orm_ok_q(q2) == 0 || orm_nrows(q2) < 1 {
+        return WsEnsure { db: d, id: 0, err: "personal workspace created but not found" }
+    }
+    d = orm_db_q(q2)
+    let ws_id = orm_cell_by_i64(q2, 0, "id")
+    let mem = ws_member_add(d, ws_id, user_id, ws_role_owner())?
+    if orm_ok(mem) == 0 {
+        return WsEnsure { db: d, id: 0, err: orm_err_exec(mem) }
+    }
+    return WsEnsure { db: orm_db_exec(mem), id: ws_id, err: "" }
+}
+
+// ---------- писане ----------
+
+// Личните workspace-и получават label от потребителя, не от id-то (id-то
+// се вижда само в slug-а). owner_id винаги е създателят.
+fn ws_insert(db: OrmDb, slug: str, label: str, description: str, is_personal: i64, owner_id: i64) -> OrmExec !IO !Net {
+    if idm_backend_boila()? == 1 {
+        let c = ws_next_id(db, ws_table())?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "slug")
+        vec_push(cols, "label")
+        vec_push(cols, "description")
+        vec_push(cols, "is_personal")
+        vec_push(cols, "owner_id")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, slug)
+        vec_push(vals, label)
+        vec_push(vals, description)
+        vec_push(vals, int_to_str(is_personal))
+        vec_push(vals, int_to_str(owner_id))
+        return orm_insert_strs(orm_db_c(c), ws_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "slug")
+    vec_push(cols, "label")
+    vec_push(cols, "description")
+    vec_push(cols, "is_personal")
+    vec_push(cols, "owner_id")
+    let vals = vec_new()
+    vec_push(vals, slug)
+    vec_push(vals, label)
+    vec_push(vals, description)
+    vec_push(vals, int_to_str(is_personal))
+    vec_push(vals, int_to_str(owner_id))
+    return orm_insert_strs(db, ws_table(), cols, vals)?
+}
+
+fn ws_update_meta(db: OrmDb, id: i64, label: str, description: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "label")
+    vec_push(cols, "description")
+    let vals = vec_new()
+    vec_push(vals, label)
+    vec_push(vals, description)
+    return orm_update_by_id(db, ws_table(), id, cols, vals)?
+}
+
+fn ws_delete(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    // Членствата нямат FK на boila — трият се ръчно, за да не остане „дух".
+    let msql = "DELETE FROM idm_workspace_members WHERE workspace_id = $1"
+    let mvals = vec_new()
+    vec_push(mvals, int_to_str(id))
+    let m = orm_exec_params_str(db, msql, mvals)?
+    if orm_ok(m) == 0 {
+        return m
+    }
+    let mut d = orm_db_exec(m)
+    let sql = "DELETE FROM idm_workspaces WHERE id = $1"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_exec_params_str(d, sql, vals)?
+}
+
+fn ws_member_add(db: OrmDb, ws_id: i64, user_id: i64, role: str) -> OrmExec !IO !Net {
+    if idm_backend_boila()? == 1 {
+        let c = ws_next_id(db, ws_members_table())?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let nid = orm_count_n(c) + 1
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "workspace_id")
+        vec_push(cols, "user_id")
+        vec_push(cols, "role")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, int_to_str(ws_id))
+        vec_push(vals, int_to_str(user_id))
+        vec_push(vals, role)
+        return orm_insert_strs(orm_db_c(c), ws_members_table(), cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "workspace_id")
+    vec_push(cols, "user_id")
+    vec_push(cols, "role")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws_id))
+    vec_push(vals, int_to_str(user_id))
+    vec_push(vals, role)
+    return orm_insert_strs(db, ws_members_table(), cols, vals)?
+}
+
+fn ws_member_set_role(db: OrmDb, member_id: i64, role: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "role")
+    let vals = vec_new()
+    vec_push(vals, role)
+    return orm_update_by_id(db, ws_members_table(), member_id, cols, vals)?
+}
+
+fn ws_member_remove(db: OrmDb, member_id: i64) -> OrmExec !IO !Net {
+    let sql = "DELETE FROM idm_workspace_members WHERE id = $1"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(member_id))
+    return orm_exec_params_str(db, sql, vals)?
+}
+
+// Колко owner-а има workspace-ът (за да не остане без никого).
+fn ws_owner_count(db: OrmDb, ws_id: i64) -> OrmCount !IO !Net {
+    let sql = "SELECT COUNT(*) AS count FROM idm_workspace_members WHERE workspace_id = $1 AND role = 'owner'"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws_id))
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return OrmCErr(OrmCountFail { err: orm_err_q(q), db: orm_db_q(q) })
+    }
+    if orm_nrows(q) < 1 {
+        return OrmCOk(OrmCountOk { count: 0, db: orm_db_q(q) })
+    }
+    return OrmCOk(OrmCountOk { count: orm_cell_by_i64(q, 0, "count"), db: orm_db_q(q) })
+}
+
+// ---------- достъп ----------
+
+struct WsAccess {
+    ok: i64,
+    level: i64,
+    role: str,
+    workspace_id: i64,
+    db: OrmDb
+}
+
+fn ws_access_deny(db: OrmDb) -> WsAccess {
+    return WsAccess { ok: 0, level: 0, role: "", workspace_id: 0, db: db }
+}
+
+// Ефективното право на потребител върху workspace. Админът минава като
+// owner навсякъде — иначе при грешка в членствата никой не може да влезе
+// да оправи нещата.
+fn ws_access(db: OrmDb, ws_id: i64, user_id: i64, is_admin: i64) -> WsAccess !IO !Net {
+    if is_admin == 1 {
+        return WsAccess { ok: 1, level: ws_role_level_admin(), role: "admin", workspace_id: ws_id, db: db }
+    }
+    let q = ws_member_row(db, ws_id, user_id)?
+    if orm_ok_q(q) == 0 {
+        return ws_access_deny(db)
+    }
+    if orm_nrows(q) < 1 {
+        return ws_access_deny(orm_db_q(q))
+    }
+    let role = orm_cell_by(q, 0, "role")
+    let lvl = ws_role_level(role)
+    if lvl < 1 {
+        return ws_access_deny(orm_db_q(q))
+    }
+    return WsAccess { ok: 1, level: lvl, role: role, workspace_id: ws_id, db: orm_db_q(q) }
+}
+
+// ---------- JSON ----------
+
+// role идва от LEFT JOIN-а — празно значи „не е член" (само админ вижда
+// чужди workspace-и). Не подменяме с „admin" мълчаливо: handler-ът знае
+// каква е истинската роля и я слага, когато я няма в реда.
+fn ws_to_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = ws_json_base(q, row)
+    o = jobj_str(o, "role", orm_cell_by(q, row, "role"))
+    return o
+}
+
+// Същият JSON, но с изрична роля (за пътища, в които редът не идва от
+// JOIN с членството: създаване, обновяване).
+fn ws_to_json_role(q: OrmQuery, row: i64, role: str) -> JObj {
+    let mut o = ws_json_base(q, row)
+    o = jobj_str(o, "role", role)
+    return o
+}
+
+// Без role — така никой път не може да сложи ключа два пъти (jobj_str
+// добавя, не заменя, и дублираният ключ е невалиден JSON за клиента).
+fn ws_json_base(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "slug", orm_cell_by(q, row, "slug"))
+    o = jobj_str(o, "label", orm_cell_by(q, row, "label"))
+    o = jobj_str(o, "description", orm_cell_by(q, row, "description"))
+    o = jobj_i64(o, "is_personal", orm_cell_by_i64(q, row, "is_personal"))
+    o = jobj_i64(o, "owner_id", orm_cell_by_i64(q, row, "owner_id"))
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}
+
+fn ws_member_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "member_id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "user_id", orm_cell_by_i64(q, row, "user_id"))
+    o = jobj_str(o, "role", orm_cell_by(q, row, "role"))
+    o = jobj_str(o, "email", orm_cell_by(q, row, "email"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    return o
+}
