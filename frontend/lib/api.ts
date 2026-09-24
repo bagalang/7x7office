@@ -248,3 +248,62 @@ export type SearchResult = {
 export async function searchFiles(query: string, limit = 25): Promise<SearchResult> {
   return request<SearchResult>(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`, "GET");
 }
+
+// --- workspaces + членство (фаза 2) ---
+
+export type Workspace = {
+  id: number;
+  slug: string;
+  label: string;
+  description: string;
+  is_personal: number;
+  owner_id: number;
+  role: string;
+  created_at?: string;
+};
+
+export type WorkspaceList = { items: Workspace[]; count: number };
+export type Member = {
+  member_id: number;
+  user_id: number;
+  role: string;
+  email: string;
+  name: string;
+};
+export type MemberList = { items: Member[]; count: number };
+
+// Ролите са фиксирана тройка (вж. idm/ws_roles.baga). Показваме нивата, за
+// да не дава UI-ът повече, отколкото сървърът приема.
+export const WS_ROLES = ["owner", "editor", "viewer"] as const;
+
+export async function listWorkspaces(): Promise<WorkspaceList> {
+  return request<WorkspaceList>("/v1/workspaces", "GET");
+}
+
+export async function createWorkspace(label: string, description: string): Promise<Workspace> {
+  return request<Workspace>("/v1/workspaces", "POST", { label, description });
+}
+
+export async function updateWorkspace(id: number, label: string, description: string): Promise<Workspace> {
+  return request<Workspace>(`/v1/workspaces?workspace_id=${id}`, "PATCH", { label, description });
+}
+
+export async function deleteWorkspace(id: number): Promise<void> {
+  return request<void>(`/v1/workspaces?workspace_id=${id}`, "DELETE");
+}
+
+export async function listMembers(workspaceId: number): Promise<MemberList> {
+  return request<MemberList>(`/v1/workspaces/members?workspace_id=${workspaceId}`, "GET");
+}
+
+export async function addMember(workspaceId: number, email: string, role: string): Promise<Member> {
+  return request<Member>(`/v1/workspaces/members?workspace_id=${workspaceId}`, "POST", { email, role });
+}
+
+export async function updateMember(workspaceId: number, memberId: number, role: string): Promise<Member> {
+  return request<Member>(`/v1/workspaces/members?workspace_id=${workspaceId}&member_id=${memberId}`, "PATCH", { role });
+}
+
+export async function removeMember(workspaceId: number, memberId: number): Promise<void> {
+  return request<void>(`/v1/workspaces/members?workspace_id=${workspaceId}&member_id=${memberId}`, "DELETE");
+}

@@ -50,10 +50,20 @@
 
 **Резултат:** админ създава потребители/роли/workspaces; достъпът до възли се филтрира по ACL.
 
-- [ ] Модул `idm`: списък и създаване на потребители (API + Next, само админ). `roles`, `groups`, `workspaces` остават
-- [ ] ACL таблица: (subject: user/role, node, right: read/write/share, inherited)
+- [x] Модул `idm`: списък и създаване на потребители (API + Next, само админ) (2026-09-24)
+- [x] Workspaces + членство с роли (2026-09-24): `idm_workspaces` + `idm_workspace_members`;
+      роли `owner > editor > viewer` (нивата са в `idm/ws_roles.baga` — чист модул, тестван в
+      `tests/ws_test.baga`). Личният workspace се създава лениво при първо отваряне на списъка,
+      за да получат старите потребители свой контейнер без миграция на данни. API:
+      `GET/POST /v1/workspaces`, `PATCH/DELETE ?workspace_id=`, `GET/POST/PATCH/DELETE
+      /v1/workspaces/members`. Чуждият workspace дава 404 (не издава, че съществува); личният
+      не се трие и не приема членове; последният owner не може да бъде махнат/понижен.
+      UI: `/workspaces` (4 езика, светла/тъмна тема)
+- [ ] `roles`/`groups` като собствени (извън фиксираната тройка); ACL таблица: (subject: user/role, node, right: read/write/share, inherited)
+- [ ] `tree_nodes` още е с `owner_id`, не с `workspace_id` — връзването е следващата стъпка
+      (schema.baga migration), с пренасяне на съществуващите възли в личния workspace
 - [ ] Изчисляване на ефективни права по пътя (кеш; по-късно policy engine)
-- [ ] Админ UI (tplbaga): потребители, роли, workspaces
+- [ ] Админ UI за потребители/workspaces в tplbaga (сега е Next: `/users`, `/workspaces`)
 - [ ] otpbaga TOTP (по желание за админ), oauthbaga OIDC login (RS256/ES256 verify)
 - [ ] Аудит лог на auth събития (logbaga)
 

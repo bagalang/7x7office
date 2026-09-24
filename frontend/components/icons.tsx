@@ -145,8 +145,16 @@ export const IconUsers = (p: P) => (
   </svg>
 );
 
-export const IconHistory = (p: P) => (
+// Пространство: кутия с разделител (шаблон за „контейнер за файлове"),
+// различен от IconFolder (единична папка) — иначе в навигацията изглеждат еднакво.
+export const IconWorkspaces = (p: P) => (
   <svg {...base(p)}>
+    <path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2.5h7A1.5 1.5 0 0 1 19 10v7a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 17z" />
+    <path d="M3 12h16" />
+  </svg>
+);
+
+export const IconHistory = (p: P) => (  <svg {...base(p)}>
     <path d="M3.5 12a8.5 8.5 0 1 1 2.5 6" />
     <path d="M3.5 12H7M3.5 12V8.5" />
     <path d="M12 7.5V12l3 2" />

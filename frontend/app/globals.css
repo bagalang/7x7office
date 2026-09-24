@@ -18,6 +18,8 @@
   --warn: #b25e00;
   --danger: #d93025;
   --danger-soft: #fce8e6;
+  --ok: #137333;
+  --ok-soft: #e6f4ea;
   --radius: 8px;
   --radius-lg: 12px;
   --shadow-sm: 0 1px 2px rgba(60, 64, 67, 0.1);
@@ -55,6 +57,8 @@
   --warn: #e5a54b;
   --danger: #f28b82;
   --danger-soft: #3a2422;
+  --ok: #81c995;
+  --ok-soft: #1e3226;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.65);
@@ -77,9 +81,20 @@ a { color: var(--accent); text-decoration: none; }
 
 .muted { color: var(--muted); font-size: 13px; }
 .grow { flex: 1; }
+.block { display: block; }
 .err {
   color: var(--danger);
   background: var(--danger-soft);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+/* Потвърждение за извършено действие (напр. „пространството е създадено").
+   Същата форма като .err, но със зеления акцент — не piggyback-ваме върху
+   него, за да не изглежда грешка като успех при бъдеща промяна. */
+.ok {
+  color: var(--ok);
+  background: var(--ok-soft);
   border-radius: var(--radius);
   padding: 8px 12px;
   font-size: 13px;
@@ -118,6 +133,16 @@ a { color: var(--accent); text-decoration: none; }
   border: 1px solid var(--line);
 }
 .btn.danger-ghost:hover:not(:disabled) { background: var(--danger-soft); box-shadow: none; }
+
+/* Малък вариант за редови действия в таблици — не изяжда реда.
+   Има и .danger като кратък псевдоним на .danger-ghost (по-четимо в JSX-а). */
+.btn.sm { padding: 4px 9px; font-size: 12.5px; }
+.btn.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--line);
+}
+.btn.danger:hover:not(:disabled) { background: var(--danger-soft); box-shadow: none; }
 
 .icon-btn {
   display: inline-grid;
@@ -450,6 +475,11 @@ a { color: var(--accent); text-decoration: none; }
 .table tbody tr { cursor: pointer; }
 .table tbody tr:hover { background: var(--row-hover); }
 .table tbody tr.selected { background: var(--accent-soft); }
+/* В таблица в диалог (напр. членове на пространство) няма смисъл от
+   hover-акцент и показване на действия — курсорът не е навигация. */
+.table.compact tbody tr { cursor: default; }
+.table.compact tbody tr:hover { background: transparent; }
+.table.compact .row-actions { opacity: 1; }
 
 .cell-name {
   display: flex;

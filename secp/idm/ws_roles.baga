@@ -12,6 +12,8 @@
 // Това е умишлено: сгрешен ред в базата (или бъдеща роля, забравена тук)
 // заключва, вместо да дава достъп.
 
+import "std/str/str.baga"
+
 fn ws_role_owner() -> str { return "owner" }
 fn ws_role_editor() -> str { return "editor" }
 fn ws_role_viewer() -> str { return "viewer" }

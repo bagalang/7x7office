@@ -6,11 +6,15 @@
 Модулен монолит по шаблона `apps/*` от [BASE.md](../../BASE.md):
 `fmrbaga → httpdbaga · jwtbaga · ormbaga → pgbaga (Postgres) или boilaDB`.
 
-## Статус: Фаза 6.3 — търсене, scheduler, поща
+## Статус: Фаза 2 — workspaces + роли (в ход)
 
-- миграции: `idm_users`, `idm_sessions`, `idm_resets`, `tree_*`, `ops_jobs` (Postgres + boila двойни сетове)
+- миграции: `idm_users`, `idm_sessions`, `idm_resets`, `idm_workspaces`, `idm_workspace_members`, `tree_*`, `ops_jobs` (Postgres + boila двойни сетове)
 - вход: `POST /v1/auth/login` (JSON **или** форма) → JWT + HttpOnly cookie
 - забравена парола: `POST /v1/auth/forgot` + `POST /v1/auth/reset` (токен с TTL, еднократен; писмо през scheduler-а)
+- потребители (админ): `GET/POST /v1/users`; welcome писмо при създаване
+- работни пространства: `GET/POST /v1/workspaces`, `PATCH/DELETE ?workspace_id=`;
+  членове по имейл с роли `owner > editor > viewer` (личният се създава лениво,
+  не се трие; последният owner е защитен)
 - `POST /v1/auth/logout`, `GET /v1/me` (bearer)
 - системни: `/health`, `/ready`, `/v1/meta`, `/openapi.json`, `/metrics`
 - UI (tplbaga, SSR): `GET /login`, `GET /`
@@ -25,8 +29,12 @@ secp/
   schema.baga           миграции (собственост на приложението)
   lib/pass.baga         PBKDF2-HMAC-SHA256 (gaps G1 → passbaga)
   lib/mail_welcome.baga welcome писмо при създаване на потребител
-  idm/                  идентичности: users, auth, поща
+  idm/                  идентичности: users, workspaces, auth, поща
     user_model.baga     idm_users CRUD + authenticate
+    ws_model.baga       idm_workspaces + членство (CRUD, достъп, JSON)
+    ws_roles.baga       роли и нива (чист модул, тестван в tests/ws_test.baga)
+    ws_actions.baga     списък/създаване/преименуване/триене на пространства
+    ws_members.baga     членове (само owner/админ; последният owner е защитен)
     auth_actions.baga   login / logout / me
     reset_model.baga    idm_resets: токени за смяна на парола
     reset_actions.baga  forgot / reset

@@ -46,3 +46,14 @@
 | G22 | `idm_*` не бива да тегли `httpdbaga` само за `to_lower` (цикличност и тегло) | локален `mail_lower` в `idm/mail.baga` | `str_lower` в `std/str` (както `str_trim`) |
 | G23 | TTL на reset токена се смята с `NOW() + INTERVAL` — работи в PG, но boilaDB няма `INTERVAL` | пощата/reset-ът се ползват при PG backend; за boila е нужно преизчисление в приложението | подаване на абсолютен `expires_at` от приложението (ISO низ) вместо `INTERVAL` |
 | G24 | `chr(c)` за байт >127 дава невалиден символ, а `concat` спира на първия NUL — влагането на `chr()` в `concat` чупи всяка многоредова (UTF-8) буква | работя на ниво байтове: `Vec<i64>` → `bytes_from_vec` → `str_of_bytes` (виж `mail_lower` в `idm/mail.baga`) | `str_map_bytes`/`str_lower` в std; днес `httpdbaga.to_lower` има същия дефект |
+
+## Фаза 2 (workspaces + роли)
+
+| # | Дупка | Заобикаляне | Правилно решение |
+|---|-------|-------------|------------------|
+| G25 | `char_at` връща байт (int), не едносимволен низ — сравнение с `"a"`/`"z"` не се компилира | сравняваме с числа (97/122) и връщаме символ с `chr(c)`; за ASCII е коректно, но е нечетимо | `str_char_at(s, i) -> str` в std или `str_is_ascii_*` помощни; днес `csvbaga` също работи с байтове |
+| G26 | `idm_workspace_members` не може да има `UNIQUE(workspace_id, user_id)` — boilaDB няма такъв constraint | проверката „вече член ли е" е в кода (`ws_member_row`); повторно добавяне сменя ролята вместо да прави втори ред | `UNIQUE` в схемата (PG може днес, двоен сет вече съществува); при boila — уникален индекс, ако/MSERT поддържа |
+| G27 | `jdobj_str`/`jobj_str` **добавят** ключ, не заменят — подаване на `ws_to_json` (който вече слага `role`) към `jobj_str(o, "role", ...)` дава дублиран ключ и невалиден JSON за клиента | изнесен `ws_json_base` без `role`; ролята се слага точно веднъж (`ws_to_json` или `ws_to_json_role`) | `jobj_set_str` (замяна) в `fmrbaga/jsonx.baga` — сега всеки такъв случай се хваща чак в браузъра |
+| G28 | boilaDB дава id с `MAX(id)+1`, значи изтрит workspace може да „преизползва" id | не разчитаме на id-то като дълготраен ключ навън (slug-ът е този, който влиза в URL-и); членствата се трият ръчно | `SERIAL`/`IDENTITY` и в boila, или отделен брояч, който не се връща назад |
+| G29 | `orm_where_eq_str`/`orm_count_sql` нямат параметризиран вариант за две+ условия с `count` | `ws_owner_count` сглобява `orm_query_params_str` + `COUNT(*) AS count` и чете клетката (`orm_count_sql_params` липсва) | `orm_count_params(db, sql, vals)` в ormbaga |
+| G30 | няма `str_is_digits` в std — валидирането на `?workspace_id=` стана с ръчен цикъл по байтове | локален цикъл в `ws_qid` | `str_is_digits(s) -> i64` в `std/str` |
