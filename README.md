@@ -378,6 +378,37 @@ npm run dev
 
 Вход за локалния seed: `admin@secp.local` / `admin123`.
 
+### Realtime каналът (WS) — как се стига до него
+
+`secp` отваря втори слушател за WebSocket (`SECP_WS_PORT`, по подразбиране
+8086, `/ws`). Браузърът се удостоверява с Cookie-то `secp_token` — то е по
+**хост**, не по порт, затова стига и до 8086.
+
+- **Development:** `next dev` (3010) НЕ може да проксира WS upgrade
+  (`rewrites()` връща 404 — Next проксира само HTTP). Затова каналът се
+  отваря директно на 8086:
+  ```bash
+  NEXT_PUBLIC_WS_PORT=8086 npm run dev
+  ```
+  Клиентът (`lib/ws.ts`) сам сглобява `ws://<host>:<port>/ws`. Ако не се
+  зададе, отива на same-origin `/ws` → 404 в dev (в production е правилното).
+- **Production:** пред Next и secp стои едно прокси на 443/80 и подава
+  `/ws` към `SECP_WS_PORT`. Тогава same-origin `/ws` работи без нищо друго:
+  ```nginx
+  location /ws {
+    proxy_pass http://127.0.0.1:8086;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;  # map: upgrade
+    proxy_read_timeout 1h;   # иначе по-дълъг живот без кадри се къса
+  }
+  ```
+  Caddy го прави сам с `reverse_proxy 127.0.0.1:8086`.
+- **Друг хост за канала:** `NEXT_PUBLIC_WS_URL=wss://ws.example.com` (тогава
+  бисквитката няма да пътува, освен ако домейните не са под общ родител;
+  като резервен вариант има `NEXT_PUBLIC_WS_TOKEN_IN_URL=1`, но токен в URL
+  влиза в логовете на прокситата — ползва се само ако Cookie-то е невъзможно).
+
 ## Принципи (по BASE.md)
 
 1. secp е **самостоятелно приложение** — собствени routes, models, миграции.

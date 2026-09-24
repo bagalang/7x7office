@@ -1,0 +1,257 @@
+// system/ws_gateway.baga — WS gateway: СЪСТОЯНИЕ и протокол. Без цикъл.
+//
+// Ролята: един фонови нишка държи ВСИЧКИ отворени WebSocket връзки и им
+// излъчва новите действия в пространствата, за които са се абонирали.
+//
+// ЗАЩО ЕДНА НИШКА И НЕ СЕ СПОДЕЛЯ С HTTP: карти и байтови буфери не се
+// споделят безопасно между нишки в Baga (виж gaps G52: подаване на `map_h`
+// към споделена карта от два thread-а сегментира). Затова HTTP worker-ите
+// НЕ пипат това състояние — те само записват в таблицата `activity`.
+// Gateway-ът чете оттам. Няма споделена памет, значи няма и race.
+//
+// ЗАЩО ЧЕТЕМ ОТ `activity`, А НЕ ИЗЛЪЧВАМЕ ОТ HANDLER-ИТЕ: ако всяко
+// действие самó пращаше събитие, при провал в канала действието пак щеше да
+// е станало (файлът е качен), но събитието щеше да е загубено завинаги.
+// С одита като опашка пропуснато събитие се наваксва следващия tick по
+// `id > cursor`.
+//
+// Езикът на протокола (имена на съобщения, ключове) е в
+// `system/ws_events.baga` — ЧИСТ модул с тестове. Тук е само транспортът.
+
+import "ws_events.baga"
+import "wsbaga/ws.baga"
+import "std/bytes/bytes.baga"
+import "std/json/json.baga"
+import "std/json/json_write.baga"
+import "std/json/json_strict.baga"
+import "std/net/tcp.baga"
+import "std/str/str.baga"
+
+// ---------- състояние на една връзка ----------
+
+// `cursor` е id-то на последния одитен ред, който тази връзка е получила.
+// С него се наваксва пропуснато: клиентът не „изпуска" събитие, ако
+// gateway-ът е бил зает един tick.
+struct WsgConn {
+    fd: i64,
+    buf: bytes,      // недовършени байтове от мрежата
+    hs_done: i64,    // 1 = handshake-ът е приключил (вече пишем WS кадри)
+    user_id: i64,
+    is_admin: i64,
+    ws: i64,         // абонирано пространство (0 = още не е избрано)
+    cursor: i64,
+    last_ping: i64,  // monotonic ms на последния изпратен ping
+    closing: i64     // 1 = връзката се затваря (не се пипа повече)
+}
+
+fn wsg_conn_new(fd: i64) -> WsgConn {
+    return WsgConn {
+        fd: fd,
+        buf: ws_empty(),
+        hs_done: 0,
+        user_id: 0,
+        is_admin: 0,
+        ws: 0,
+        cursor: 0,
+        last_ping: 0,
+        closing: 0
+    }
+}
+
+// ---------- hub ----------
+
+// `conns` е Map<i64, WsgConn> и се държи само от тази нишка — това е
+// причината цялата карта да е тук, а не в HTTP handler-ите (виж G52).
+// `secret` е JWT тайната: идва от app конфига при старт, за да не се чете
+// от средата при всяка нова връзка.
+struct WsgHub {
+    listener: i64,
+    secret: str,
+    fds: Vec<i64>,
+    conns: Map<i64, WsgConn>
+}
+
+fn wsg_hub_new(listener: i64, secret: str) -> WsgHub {
+    let m: Map<i64, WsgConn> = map_new()
+    let v: Vec<i64> = vec_new()
+    return WsgHub { listener: listener, secret: secret, fds: v, conns: m }
+}
+
+fn wsg_conn_get(h: WsgHub, fd: i64) -> WsgConn {
+    return map_get(h.conns, fd)
+}
+
+fn wsg_conn_put(h: WsgHub, c: WsgConn) -> WsgHub {
+    map_set(h.conns, c.fd, c)
+    return h
+}
+
+fn wsg_fds_add(h: WsgHub, fd: i64) -> WsgHub {
+    let nv: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(h.fds) {
+        vec_push(nv, vec_get(h.fds, i))
+        i = i + 1
+    }
+    vec_push(nv, fd)
+    return WsgHub { listener: h.listener, secret: h.secret, fds: nv, conns: h.conns }
+}
+
+// Скъсва връзка: затваря fd-то и я маха от картата и от poll списъка.
+// Идемпотентно — „close на затворено" не е грешка, защото handler-ите
+// могат да стигнат до тук по няколко пътя (грешка при четене, грешка при
+// запис, изричен close кадър).
+fn wsg_conn_drop(h: WsgHub, fd: i64) -> WsgHub !IO !Net {
+    tcp_close(fd)?
+    map_del(h.conns, fd)
+    let keep: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(h.fds) {
+        let f = vec_get(h.fds, i)
+        if f != fd {
+            vec_push(keep, f)
+        }
+        i = i + 1
+    }
+    return WsgHub { listener: h.listener, secret: h.secret, fds: keep, conns: h.conns }
+}
+
+// Копие на fd списъка. Handler-ите затварят връзки, т.е. сменят h.fds —
+// без копие итерацията би пропуснала или повторила fd.
+fn wsg_fds_copy(h: WsgHub) -> Vec<i64> {
+    let nv: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(h.fds) {
+        vec_push(nv, vec_get(h.fds, i))
+        i = i + 1
+    }
+    return nv
+}
+
+// Броят вече абонирани връзки за дадено пространство. Ползва се за тавана
+// `ws_subs_max` — един абонат струва fd и по една заявка на tick.
+fn wsg_subs_count(h: WsgHub, ws: i64) -> i64 {
+    let ks = map_keys(h.conns)
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < vec_len(ks) {
+        let c = map_get(h.conns, vec_get(ks, i))
+        if c.ws == ws && c.closing == 0 {
+            n = n + 1
+        }
+        i = i + 1
+    }
+    return n
+}
+
+// ---------- рамки ----------
+
+// Едно текстово съобщение към клиента. Грешка при запис не се хвърля:
+// мъртъв peer е нормален случай (затворен таб) и викащият просто маха
+// връзката. Ако хвърляхме, една умряла връзка би спряла целия gateway.
+fn wsg_send_text(fd: i64, s: str) -> i64 !Net !IO {
+    return tcp_write_bytes(fd, ws_build_frame(1, WS_TEXT(), bytes_of_str(s), 0))?
+}
+
+// Затварящ кадър преди close(2): без него клиентът вижда „преносът се
+// скъса", а не „сървърът ме затвори" (RFC 6455 §7.1.1).
+fn wsg_send_close(fd: i64, code: i64, reason: str) -> i64 !Net !IO {
+    let v: Vec<i64> = vec_new()
+    vec_push(v, (code >> 8) & 255)
+    vec_push(v, code & 255)
+    let rb = bytes_of_str(reason)
+    let mut i: i64 = 0
+    while i < bytes_len(rb) {
+        vec_push(v, bytes_at(rb, i))
+        i = i + 1
+    }
+    return tcp_write_bytes(fd, ws_build_frame(1, WS_CLOSE(), bytes_from_vec(v), 0))?
+}
+
+// ---------- HTTP отказ ПРЕДИ upgrade ----------
+
+// Ако клиентът още не е станал WebSocket, отговаряме с обикновен HTTP
+// статус и затваряме — така браузърът вижда 401/404, а не „connection
+// reset". Важно е и за тестовете: `curl` без upgrade дава смислен отговор.
+fn wsg_http_status(status: i64, msg: str) -> str {
+    let mut b = concat(concat(concat("HTTP/1.1 ", int_to_str(status)), " "), msg)
+    b = concat(b, "\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    return b
+}
+
+// Резултат от handshake-а. `state`: 1 = готово (101 изпратен), -1 = отказано
+// (HTTP статус изпратен, връзката е за затваряне), 0 = още байтове.
+struct WsgHs {
+    state: i64,
+    buf: bytes,      // остатък след header-а (първите WS кадри може вече да са дошли)
+    user_id: i64,
+    is_admin: i64
+}
+
+fn wsg_hs_wait(buf: bytes) -> WsgHs {
+    return WsgHs { state: 0, buf: buf, user_id: 0, is_admin: 0 }
+}
+
+fn wsg_hs_deny() -> WsgHs {
+    return WsgHs { state: -1, buf: ws_empty(), user_id: 0, is_admin: 0 }
+}
+
+// ---------- клиентски съобщения ----------
+
+// Клиент → сървър. Типът се валидира; непознат тип е грешка на протокола,
+// не „игнорирай" — иначе сгрешен клиент мълчи и е невъзможно за диагностика.
+struct WsgMsg {
+    ok: i64,
+    typ: str,
+    ws: i64,
+    proto: i64,
+    err: str
+}
+
+fn wsg_msg_bad(err: str) -> WsgMsg {
+    return WsgMsg { ok: 0, typ: "", ws: 0, proto: 0, err: err }
+}
+
+// Числово поле от обект. `json_serialize` на числов възел дава точното число
+// като текст (проверено), а `parse_int` го вкарва в i64 без заобикаляне през
+// f64 — id-тата на пространства са i64 и не бива да минават през дробно
+// число, където губят точност при големи стойности.
+fn wsg_msg_int(d: JsonDoc, root: i64, key: str) -> i64 {
+    let n = json_get(d, root, key)
+    if n < 0 || json_tag(d, n) != 3 {
+        return 0
+    }
+    return parse_int(json_serialize(d, n))
+}
+
+// Текстовото съобщение трябва да е JSON обект. Строгата проверка е преди
+// парсването: `json_parse` на счупен вход дава doc с root -1 и всички
+// последващи `json_get` тихо връщат -1 — тоест грешката се „разтваря" в
+// празни стойности вместо в отказ.
+fn wsg_msg_parse(text: str) -> WsgMsg {
+    if json_strict_valid(text) == 0 {
+        return wsg_msg_bad("invalid json")
+    }
+    let d = json_parse(text)
+    let root = json_root(d)
+    if json_tag(d, root) != 6 {
+        return wsg_msg_bad("message must be an object")
+    }
+    let tn = json_get(d, root, "type")
+    if tn < 0 || json_tag(d, tn) != 4 {
+        return wsg_msg_bad("type required")
+    }
+    let typ = json_str(d, tn)
+    if typ != ws_type_subscribe() && typ != ws_type_unsubscribe() && typ != ws_type_ping() {
+        return wsg_msg_bad(concat("unknown type: ", typ))
+    }
+    // workspace_id и protocol са числа; липсващо = 0 (не „грешка" — subscribe
+    // без workspace_id значи личното пространство, както в HTTP API-то).
+    return WsgMsg {
+        ok: 1,
+        typ: typ,
+        ws: wsg_msg_int(d, root, "workspace_id"),
+        proto: wsg_msg_int(d, root, "protocol"),
+        err: ""
+    }
+}

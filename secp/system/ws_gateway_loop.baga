@@ -1,0 +1,70 @@
+// system/ws_gateway_loop.baga — poll(2) цикълът на WS gateway-а.
+//
+// Едно място за „как вървим напред във времето": accept → poll → четене →
+// излъчване. Handler-ите за една връзка са в ws_gateway_pump.baga;
+// състоянието и протоколът — в ws_gateway.baga.
+//
+// ЗАЩО ЕДНА НИШКА (същият аргумент като chatbaga, kvbaga K1): сървър с
+// thread-per-connection на 200 отворени таба е 200 нишки. Един poll +
+// карти стига — и картите не се споделят между нишки (виж G52).
+
+import "ws_gateway_pump.baga"
+import "ws_gateway_auth.baga"
+import "std/net/poll.baga"
+import "std/net/tcp.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn wsg_poll_ms() -> i64 !IO {
+    let raw = env("SECP_WS_POLL_MS")?
+    if raw == "" {
+        return ws_poll_ms_default()
+    }
+    return ws_poll_ms_clamp(parse_int(raw))
+}
+
+// Приема нова връзка. НЕ прави handshake тук: той идва по мрежата на
+// парчета и се дочита в poll цикъла (иначе accept-ът блокира целия gateway
+// на бавен клиент — точно това, което poll моделът избягва).
+fn wsg_accept(h: WsgHub, fd: i64) -> WsgHub !IO !Net {
+    if fd < 0 {
+        return h
+    }
+    tcp_set_timeouts(fd, 5)?
+    tcp_set_nodelay(fd)?
+    let h2 = wsg_fds_add(h, fd)
+    return wsg_conn_put(h2, wsg_conn_new(fd))
+}
+
+// Стъпка от цикъла: poll, accept, четене на готовите. Изнесена, за да е
+// цикълът в main-а три реда и да се чете като „какво се случва".
+fn wsg_step(h: WsgHub, poll_ms: i64) -> WsgHub !IO !Net !Time !Random {
+    let pollfds: Vec<i64> = vec_new()
+    vec_push(pollfds, h.listener)
+    let fds = wsg_fds_copy(h)
+    let mut i: i64 = 0
+    while i < vec_len(fds) {
+        vec_push(pollfds, vec_get(fds, i))
+        i = i + 1
+    }
+    let pr = poll_wait(pollfds, poll_ms)?
+    let mut hub = h
+    if pr.ok != 1 {
+        return hub
+    }
+    if poll_has(pr.ready, h.listener) == 1 {
+        let fd = tcp_accept(h.listener)?
+        hub = wsg_accept(hub, fd)?
+    }
+    // Копие: кейсът с четенето може да махне връзка и да смени hub.fds.
+    let snap = wsg_fds_copy(hub)
+    let mut k: i64 = 0
+    while k < vec_len(snap) {
+        let fd = vec_get(snap, k)
+        if poll_has(pr.ready, fd) == 1 && map_has(hub.conns, fd) == 1 {
+            hub = wsg_on_readable(hub, wsg_conn_get(hub, fd))?
+        }
+        k = k + 1
+    }
+    return hub
+}

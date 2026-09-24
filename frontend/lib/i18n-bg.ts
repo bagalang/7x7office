@@ -279,4 +279,9 @@ export const bg: Record<string, string> = {
   "activity.verb_member_removed": "премахна член",
   "activity.verb_member_updated": "смени ролята на",
   "activity.verb_workspace_created": "създаде пространството",
+  // --- Фаза 3: realtime канал (WS) ---
+  "ws.status_open": "Връзката на живо е активна",
+  "ws.status_connecting": "Свързване на живо…",
+  "ws.protocol_mismatch": "Връзката на живо е от стар клиент. Презаредете страницата.",
+  "ws.reload": "Презареди",
 };

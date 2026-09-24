@@ -1,0 +1,276 @@
+// system/ws_events.baga — събитията по WebSocket канала (Фаза 3). ЧИСТ модул.
+//
+// Защо чист: тук се решава КАКВО излиза към браузъра и с какви ключове. Ако
+// verb-ът се обърка (напр. `deleted` излезе като `created`), UI-ът тихо
+// презарежда грешно или показва „нов файл" за изтрит — и никой интеграционен
+// тест на HTTP-а няма да го хване, защото HTTP-ът не е счупен. Затова
+// преводът verb→event, класификацията и ВСИЧКИ изходящи съобщения (JSON!)
+// са тук и се тестват без мрежа в tests/ws_events_test.baga.
+//
+// ЗАЩО НЕ НОВИ ВИДОВЕ: източникът на събития е таблицата `activity` —
+// append-only одитът, който вече се пише от всяко действие (Фаза 3). Така
+// WS-ът и лентата „Активност" не могат да се разминат: едно и също действие
+// ражда и реда, и събитието. Няма втори write path, който да забравим.
+//
+// ЕЗИКЪТ на събитието е машинен (`node.created`), както verb-овете в
+// activity_kinds.baga: преводът е на фронтенда (`ws.event_*`). Така смяната
+// на език не пипа нито базата, нито канала.
+
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+// ---------- протокол ----------
+
+// Номер на протокола. Клиентът го праща в `subscribe` и получава обратно в
+// `hello`. Смяната на формата на съобщенията вдига номера, за да може стар
+// (кеширан) клиент да бъде отказан ЯВНО, вместо да получава съобщения,
+// които не разбира.
+fn ws_proto() -> i64 {
+    return 1
+}
+
+fn ws_proto_ok(n: i64) -> i64 {
+    if n == ws_proto() {
+        return 1
+    }
+    return 0
+}
+
+// ---------- видове съобщения ----------
+
+// Клиент → сървър.
+fn ws_type_subscribe() -> str { return "subscribe" }
+fn ws_type_unsubscribe() -> str { return "unsubscribe" }
+fn ws_type_ping() -> str { return "ping" }
+
+// Сървър → клиент.
+fn ws_type_hello() -> str { return "hello" }
+fn ws_type_subscribed() -> str { return "subscribed" }
+fn ws_type_event() -> str { return "event" }
+fn ws_type_pong() -> str { return "pong" }
+fn ws_type_error() -> str { return "error" }
+
+// ---------- verb → event ----------
+
+fn ws_ev_node_created() -> str { return "node.created" }
+fn ws_ev_node_updated() -> str { return "node.updated" }
+fn ws_ev_node_deleted() -> str { return "node.deleted" }
+fn ws_ev_node_moved() -> str { return "node.moved" }
+fn ws_ev_node_restored() -> str { return "node.restored" }
+fn ws_ev_node_shared() -> str { return "node.shared" }
+fn ws_ev_node_unshared() -> str { return "node.unshared" }
+fn ws_ev_member_added() -> str { return "ws.member_added" }
+fn ws_ev_member_removed() -> str { return "ws.member_removed" }
+fn ws_ev_member_updated() -> str { return "ws.member_updated" }
+fn ws_ev_ws_created() -> str { return "ws.created" }
+
+// Vсички излъчвани имена. Редът е азбучен — не носи смисъл.
+fn ws_event_names() -> Vec<str> {
+    let v = vec_new()
+    vec_push(v, ws_ev_member_added())
+    vec_push(v, ws_ev_member_removed())
+    vec_push(v, ws_ev_member_updated())
+    vec_push(v, ws_ev_node_created())
+    vec_push(v, ws_ev_node_deleted())
+    vec_push(v, ws_ev_node_moved())
+    vec_push(v, ws_ev_node_restored())
+    vec_push(v, ws_ev_node_shared())
+    vec_push(v, ws_ev_node_unshared())
+    vec_push(v, ws_ev_node_updated())
+    vec_push(v, ws_ev_ws_created())
+    return v
+}
+
+// Правилото е ЕДНО: всеки познат verb от activity_kinds.baga има точно едно
+// име на събитие. Непознат verb НЕ се излъчва (връща "") — същото решение
+// като в activity feed-а: по-добре нищо, отколкото суров ключ, който UI-ът
+// би показал или би счел за обикновено действие.
+fn ws_event_of_verb(verb: str) -> str {
+    if verb == "created" { return ws_ev_node_created() }
+    if verb == "updated" { return ws_ev_node_updated() }
+    if verb == "deleted" { return ws_ev_node_deleted() }
+    if verb == "moved" { return ws_ev_node_moved() }
+    if verb == "restored" { return ws_ev_node_restored() }
+    if verb == "shared" { return ws_ev_node_shared() }
+    if verb == "unshared" { return ws_ev_node_unshared() }
+    if verb == "member_added" { return ws_ev_member_added() }
+    if verb == "member_removed" { return ws_ev_member_removed() }
+    if verb == "member_updated" { return ws_ev_member_updated() }
+    if verb == "workspace_created" { return ws_ev_ws_created() }
+    return ""
+}
+
+fn ws_event_valid(ev: str) -> i64 {
+    let all = ws_event_names()
+    let n = vec_len(all)
+    let mut i: i64 = 0
+    while i < n {
+        if vec_get(all, i) == ev {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Събитие върху ВЪЗЕЛ (файл/папка). UI-ът презарежда списъка само за тях —
+// смяната на роля не променя файловете и не бива да кара браузъра да
+// презарежда на всеки одит ред.
+fn ws_event_is_node(ev: str) -> i64 {
+    if str_starts_with(ev, "node.") == 1 {
+        return 1
+    }
+    return 0
+}
+
+// Събитие по членството/самото пространство.
+fn ws_event_is_member(ev: str) -> i64 {
+    if str_starts_with(ev, "ws.member_") == 1 {
+        return 1
+    }
+    return 0
+}
+
+// Вдига ли брояча „има ново". `ws.created` НЕ вдига: за вече влезлите
+// потребители създаването на пространство не е новост за тяхното (те са в
+// него, то е ново за други). Всичко останало е действие, което си струва да
+// се види, ако не си го направил ти (собствените се филтрират на клиента по
+// `actor_id` — сървърът не знае кой гледа, ако не е казал).
+fn ws_event_is_badge(ev: str) -> i64 {
+    if ws_event_valid(ev) == 0 {
+        return 0
+    }
+    if ev == ws_ev_ws_created() {
+        return 0
+    }
+    return 1
+}
+
+// ---------- лимити (числа от средата се притискат) ----------
+
+fn ws_poll_ms_default() -> i64 {
+    return 500
+}
+
+// Интервалът на опашката: колко бързо нов одит ред стига до клиента. Под
+// 100 ms е безсмислено (всеки tick отваря заявки към базата), над 60 s кара
+// UI-ът да изглежда счупен.
+fn ws_poll_ms_clamp(n: i64) -> i64 {
+    if n < 100 {
+        return ws_poll_ms_default()
+    }
+    if n > 60000 {
+        return 60000
+    }
+    return n
+}
+
+fn ws_msg_max_default() -> i64 {
+    return 4096
+}
+
+// Клиентските съобщения са дребни (subscribe/ping). Таванът пази паметта и
+// едновременно е защита: клиент не бива да праща мегабайти в канал, който
+// само слуша.
+fn ws_msg_max_clamp(n: i64) -> i64 {
+    if n < 256 {
+        return ws_msg_max_default()
+    }
+    if n > 65536 {
+        return 65536
+    }
+    return n
+}
+
+fn ws_subs_max_default() -> i64 {
+    return 50
+}
+
+// Колко едновременни абонамента за ЕДНО пространство. Таванът е нарочно
+// нисък: каналът е за екип, не за ферма от табове, а един абонат струва fd.
+fn ws_subs_max_clamp(n: i64) -> i64 {
+    if n < 1 {
+        return ws_subs_max_default()
+    }
+    if n > 1000 {
+        return 1000
+    }
+    return n
+}
+
+fn ws_ping_ms_default() -> i64 {
+    return 30000
+}
+
+// Колко често сървърът праща WS ping. Той е и единственият начин да се
+// открие мъртъв peer: браузърът отговаря pong, а ако връзката е мъртва,
+// записът се проваля и абонатът се маха.
+fn ws_ping_ms_clamp(n: i64) -> i64 {
+    if n < 5000 {
+        return ws_ping_ms_default()
+    }
+    if n > 300000 {
+        return 300000
+    }
+    return n
+}
+
+// Таван на събитията, изтеглени в един tick. Backlog по-голям от това значи
+// или че gateway-ът е бил спрян, или че някой товари системата; и в двата
+// случая е по-добре да прочетем част и да продължим, отколкото да замразим
+// event loop-а.
+fn ws_tail_limit() -> i64 {
+    return 200
+}
+
+// ---------- изходящи съобщения ----------
+
+// Първото съобщение след успешен subscribe. Носи протокола и „докъде сме я
+// докарали" (`cursor` = id на последния одитен ред, който сме видели), за да
+// може клиентът да разбере, че е пропуснал събития, докато е бил офлайн, и
+// да презареди веднъж, вместо да чака следващото.
+fn ws_msg_hello(ws: i64, cursor: i64, proto: i64) -> str {
+    let mut o = jobj_new()
+    o = jobj_str(o, "type", ws_type_hello())
+    o = jobj_i64(o, "protocol", proto)
+    o = jobj_i64(o, "workspace_id", ws)
+    o = jobj_i64(o, "cursor", cursor)
+    return jobj_encode(o)
+}
+
+fn ws_msg_subscribed(ws: i64) -> str {
+    let mut o = jobj_new()
+    o = jobj_str(o, "type", ws_type_subscribed())
+    o = jobj_i64(o, "workspace_id", ws)
+    return jobj_encode(o)
+}
+
+// `reason` е машинен ключ (напр. "expired"), за да го преведе клиентът —
+// същият принцип като verb-овете.
+fn ws_msg_error(reason: str, msg: str) -> str {
+    let mut o = jobj_new()
+    o = jobj_str(o, "type", ws_type_error())
+    o = jobj_str(o, "reason", reason)
+    o = jobj_str(o, "msg", msg)
+    return jobj_encode(o)
+}
+
+fn ws_msg_pong() -> str {
+    let mut o = jobj_new()
+    o = jobj_str(o, "type", ws_type_pong())
+    o = jobj_i64(o, "ts", 0)
+    return jobj_encode(o)
+}
+
+// Събитието. `item` е редът от activity feed-а в СЪЩИЯ вид като в
+// GET /v1/activity — така клиентът има един модел за ред, независимо дали
+// е дошъл по HTTP или по канал. `type` и `event` са разделени: първото казва
+// „това е събитие", второто КАКВО е (за превод и за филтър).
+fn ws_msg_event(ws: i64, ev: str, item_json: str) -> str {
+    let mut o = jobj_new()
+    o = jobj_str(o, "type", ws_type_event())
+    o = jobj_str(o, "event", ev)
+    o = jobj_i64(o, "workspace_id", ws)
+    o = jobj_raw(o, "item", item_json)
+    return jobj_encode(o)
+}

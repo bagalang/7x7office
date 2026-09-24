@@ -17,3 +17,4 @@ officebaga = { path = "../../officebaga" }
 zipbaga = { path = "../../zipbaga" }
 bufbaga = { path = "../../bufbaga" }
 smtpbaga = { path = "../../smtpbaga" }
+wsbaga = { path = "../../wsbaga" }

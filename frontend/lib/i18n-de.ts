@@ -278,4 +278,9 @@ export const de: Record<string, string> = {
   "activity.verb_member_removed": "entfernte Mitglied",
   "activity.verb_member_updated": "änderte die Rolle von",
   "activity.verb_workspace_created": "erstellte den Arbeitsbereich",
+  // --- Фаза 3: realtime канал (WS) ---
+  "ws.status_open": "Live-Verbindung ist aktiv",
+  "ws.status_connecting": "Live-Verbindung wird hergestellt…",
+  "ws.protocol_mismatch": "Die Live-Verbindung stammt von einem alten Client. Bitte die Seite neu laden.",
+  "ws.reload": "Neu laden",
 };

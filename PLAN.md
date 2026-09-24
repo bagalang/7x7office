@@ -162,9 +162,9 @@
     на език не пипа базата, стари редове не „изчезват" при нов превод.
 
 - [ ] „Cells" = споделен workspace с членове и роли (по `idm/share` модела)
-- [ ] wsbaga gateway: канали per workspace; събития node.created/updated/deleted
+- [x] wsbaga gateway: канали per workspace; събития node.created/updated/deleted (2026-09-24)
 - [ ] chatbaga интеграция: чат стая per cell
-- [ ] Нотификации в UI (badge през WS)
+- [x] Нотификации в UI (badge през WS) (2026-09-24)
 
 **Зависимости:** uuidbaga, chronobaga, wsbaga, chatbaga
 

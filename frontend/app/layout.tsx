@@ -4,6 +4,7 @@ import { AuthProvider } from "../components/AuthProvider";
 import { ThemeProvider } from "../components/ThemeProvider";
 import { I18nProvider } from "../components/I18nProvider";
 import { WorkspaceProvider } from "../components/WorkspaceProvider";
+import { RealtimeProvider } from "../components/RealtimeProvider";
 import { THEME_SCRIPT } from "../lib/theme";
 
 export const metadata: Metadata = {
@@ -24,7 +25,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <ThemeProvider>
           <I18nProvider>
             <AuthProvider>
-              <WorkspaceProvider>{children}</WorkspaceProvider>
+              {/* RealtimeProvider е ПОД WorkspaceProvider: той чете
+                  активното пространство, за да се абонира за него. */}
+              <WorkspaceProvider>
+                <RealtimeProvider>{children}</RealtimeProvider>
+              </WorkspaceProvider>
             </AuthProvider>
           </I18nProvider>
         </ThemeProvider>

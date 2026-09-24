@@ -5,6 +5,7 @@ import { AppShell } from "./AppShell";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
 import { useWorkspace, canWrite, canShare } from "./WorkspaceProvider";
+import { useNodeEvents } from "./RealtimeProvider";
 import { FilePreview, VersionsDialog } from "./FilePreview";
 import { ShareDialog } from "./ShareDialog";
 import {
@@ -136,6 +137,14 @@ export function FileBrowser() {
       cancel = true;
     };
   }, [path, reload, t, wsId]);
+
+  // Realtime (Фаза 3): чуждо действие по възел в това пространство
+  // презарежда списъка. Без това двама души в една папка виждат различно
+  // съдържание, докато някой не натисне F5 — точно проблемът, който каналът
+  // съществува да реши. Собствените действия също идват, но те вече са
+  // презаредили през `run()`; вторият fetch е евтин и не мига (busy не се
+  // вдига, защото `reload` не пипа `busy`).
+  useNodeEvents(() => setReload((n) => n + 1));
 
   const filtered = items.filter((n) =>
     query ? n.name.toLowerCase().includes(query.toLowerCase()) : true

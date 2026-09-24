@@ -6,6 +6,7 @@ import "schema.baga"
 import "lib/pass.baga"
 import "idm/user_model.baga"
 import "system/scheduler.baga"
+import "system/ws_gateway_serve.baga"
 import "tree/backfill.baga"
 import "fmrbaga/app.baga"
 import "ormbaga/orm.baga"
@@ -97,5 +98,8 @@ fn main() -> i64 !Net !IO !Par !Random !Time {
     if tick > 0 {
         ops_start(tick)?
     }
+    // Realtime канал (Фаза 3): един poll worker за WS. SECP_WS_PORT=0 го
+    // изключва (тестове, `--check`); без променлива слуша на HTTP порт + 1.
+    wsg_start()?
     return fmr_run()?
 }

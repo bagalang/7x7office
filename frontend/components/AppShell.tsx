@@ -7,6 +7,7 @@ import { useAuth } from "./AuthProvider";
 import { useI18n } from "./I18nProvider";
 import { PreferencesButton } from "./PreferencesButton";
 import { useWorkspace } from "./WorkspaceProvider";
+import { useActivityBadge, useRealtime } from "./RealtimeProvider";
 import { api, FsUsage } from "../lib/api";
 import { IconActivity, IconClose, IconFolder, IconLogout, IconSearch, IconUsers, IconWorkspaces } from "./icons";
 import { ActivityFeed } from "./ActivityFeed";
@@ -71,6 +72,11 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
   const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
   const email = me?.sub ?? "";
 
+  // Realtime (Фаза 3): брояч „има ново" и състояние на канала. Броячът се
+  // изчиства при отваряне на лентата — както badge-ът на нотификациите.
+  const { status, protocolMismatch } = useRealtime();
+  const badge = useActivityBadge(email || undefined);
+
   return (
     <div className="shell">
       <header className="topbar">
@@ -114,9 +120,27 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
           title={t("activity.title")}
           aria-label={t("activity.title")}
           aria-pressed={activityOpen}
-          onClick={() => setActivityOpen((v) => !v)}
+          onClick={() => {
+            setActivityOpen((v) => {
+              // Отварянето на лентата „изчиства" новото: потребителят вижда
+              // редовете, значи badge-ът е свършил работата си.
+              if (!v) badge.clear();
+              return !v;
+            });
+          }}
         >
           <IconActivity />
+          {/* Броячът е машинен: сървърът не знае кой гледа, затова клиентът
+              филтрира собствените действия (виж useActivityBadge). */}
+          {badge.count > 0 && !activityOpen ? (
+            <span className="icon-count" aria-hidden="true">
+              {badge.count > 99 ? "99+" : badge.count}
+            </span>
+          ) : null}
+          {status === "open" ? <span className="sr-only">{t("ws.status_open")}</span> : null}
+          {status === "connecting" ? (
+            <span className="ws-dot connecting" title={t("ws.status_connecting")} />
+          ) : null}
         </button>
         <div className="menu-wrap" ref={menuRef}>
           <button
@@ -173,6 +197,18 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
 
       <div className="content">
         {children}
+        {protocolMismatch ? (
+          // Стар (кеширан) клиент срещу нов протокол: сървърът ни отказва
+          // ЯВНО. Без този банер табът изглежда „отворен", но не получава
+          // нищо — точно тихата повреда, която версията на протокола
+          // съществува да предотврати.
+          <div className="protocol-banner" role="alert">
+            <span>{t("ws.protocol_mismatch")}</span>
+            <button type="button" className="btn small" onClick={() => window.location.reload()}>
+              {t("ws.reload")}
+            </button>
+          </div>
+        ) : null}
         {activityOpen ? (
           <aside className="activity-pane" aria-label={t("activity.title")}>
             <div className="activity-bar">

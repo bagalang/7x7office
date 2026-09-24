@@ -276,4 +276,9 @@ export const en: Record<string, string> = {
   "activity.verb_member_removed": "removed member",
   "activity.verb_member_updated": "changed the role of",
   "activity.verb_workspace_created": "created the workspace",
+  // --- Фаза 3: realtime канал (WS) ---
+  "ws.status_open": "Live connection is active",
+  "ws.status_connecting": "Connecting live…",
+  "ws.protocol_mismatch": "The live connection is from an old client. Reload the page.",
+  "ws.reload": "Reload",
 };

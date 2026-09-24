@@ -1,0 +1,408 @@
+// system/ws_gateway_pump.baga — кадри на една връзка + излъчване на събития.
+//
+// Тук е „какво правим с една връзка": изяждане на цели кадри от буфера,
+// subscribe/unsubscribe/ping и изпращане на новите одити като събития.
+//
+// Цикълът (accept/poll) е в ws_gateway_loop.baga. Разделянето е по шрих, за
+// да остане всеки файл под 600 реда (виж scripts/filesize-global.sh).
+
+import "ws_gateway.baga"
+import "ws_gateway_auth.baga"
+import "ws_events.baga"
+import "idm/ws_model.baga"
+import "idm/ws_roles.baga"
+import "tree/activity_model.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/bytes/bytes.baga"
+import "std/net/tcp.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+
+// ---------- лимити от средата ----------
+//
+// Едно място за всяка променлива: и pump-ът, и цикълът ги искат, а четенето
+// на средата е !IO — държим го извън чистите проверки за право.
+
+fn wsg_msg_max() -> i64 !IO {
+    let raw = env("SECP_WS_MSG_MAX")?
+    if raw == "" {
+        return ws_msg_max_default()
+    }
+    return ws_msg_max_clamp(parse_int(raw))
+}
+
+fn wsg_subs_max() -> i64 !IO {
+    let raw = env("SECP_WS_SUBS_MAX")?
+    if raw == "" {
+        return ws_subs_max_default()
+    }
+    return ws_subs_max_clamp(parse_int(raw))
+}
+
+fn wsg_ping_ms() -> i64 !IO {
+    let raw = env("SECP_WS_PING_MS")?
+    if raw == "" {
+        return ws_ping_ms_default()
+    }
+    return ws_ping_ms_clamp(parse_int(raw))
+}
+
+// ---------- абониране ----------
+
+// Проверка на правото и запис на абонамента. Достъпът се проверява ТУК, а не
+// само при handshake-а: между двете потребителят може да е махнат от
+// пространството и абонаментът трябва да се откаже.
+//
+// ГРЕШКАТА Е СЪЩАТА КАТО HTTP: чуждо/несъществуващо пространство дава
+// „not_found", а не „нямаш право" — иначе по кода се разбира, че съществува.
+struct WsgSub {
+    ok: i64,
+    ws: i64,
+    cursor: i64,
+    reason: str,
+    msg: str
+}
+
+fn wsg_sub_err(reason: str, msg: str) -> WsgSub {
+    return WsgSub { ok: 0, ws: 0, cursor: 0, reason: reason, msg: msg }
+}
+
+fn wsg_subscribe(h: WsgHub, c: WsgConn, want: i64) -> WsgSub !IO !Net !Random !Time {
+    // Чете се преди връзката: при грешка в средата не отваряме сокет към базата.
+    let max = wsg_subs_max()?
+    let db = fmr_open_db(fmr_build_app()?)?
+    if orm_ok_db(db) == 0 {
+        orm_close(db)?
+        return wsg_sub_err("server", "базата не отговаря")
+    }
+    let mut d = db
+    // 0 = личното пространство (същото правило като HTTP API-то). Личното
+    // съществува само за собственика, значи е безопасно да го резолвнем
+    // оттук — чуждият ще даде not_found при проверката за членство.
+    let mut ws = want
+    if ws == 0 {
+        let ens = ws_personal_ensure(d, c.user_id)?
+        d = ens.db
+        if ens.err != "" {
+            orm_close(d)?
+            return wsg_sub_err("server", ens.err)
+        }
+        ws = ens.id
+    }
+    if ws < 1 {
+        orm_close(d)?
+        return wsg_sub_err("not_found", "няма такова пространство")
+    }
+    // Съществуването се проверява ПРЕДИ правата — същата причина като в
+    // `tree/auth.baga`: `ws_access` връща admin за ВСЕКИ id, значи админ би
+    // отворил канал към несъществуващо пространство и би чакал събития,
+    // които никога няма да дойдат. HTTP-ът дава 404 в този случай; каналът
+    // трябва да даде същото, иначе двете страни се разминават.
+    let wq = ws_find(d, ws)?
+    d = orm_db_q(wq)
+    if orm_ok_q(wq) == 0 {
+        let err = orm_err_q(wq)
+        orm_close(d)?
+        return wsg_sub_err("server", err)
+    }
+    if orm_nrows(wq) < 1 {
+        orm_close(d)?
+        return wsg_sub_err("not_found", "няма такова пространство")
+    }
+    let acc = ws_access(d, ws, c.user_id, c.is_admin)?
+    d = acc.db
+    if acc.ok == 0 || ws_level_allows(acc.level, 1) == 0 {
+        orm_close(d)?
+        return wsg_sub_err("not_found", "няма такова пространство")
+    }
+    if wsg_subs_count(h, ws) >= max {
+        orm_close(d)?
+        return wsg_sub_err("busy", concat("твърде много връзки (", concat(int_to_str(max), ")")))
+    }
+    // Курсорът е НАЙ-НОВИЯТ ред: нов абонат не получава историята, а почва
+    // от „сега". Иначе отварянето на таб = 200 събития и 200 презареждания.
+    let mx = tree_activity_max_id(d, ws)?
+    d = orm_db_c(mx)
+    if orm_ok_c(mx) == 0 {
+        let err = orm_err_c(mx)
+        orm_close(d)?
+        return wsg_sub_err("server", err)
+    }
+    let cursor = orm_count_n(mx)
+    orm_close(d)?
+    return WsgSub { ok: 1, ws: ws, cursor: cursor, reason: "", msg: "" }
+}
+
+// ---------- кадри ----------
+
+// Един изчетен кадър. Връща обновения хъб и обновеното състояние на
+// връзката, защото control кадрите могат да скъсат връзката (close) или да
+// родят отговор (ping).
+struct WsgFrameOut {
+    hub: WsgHub,
+    conn: WsgConn,
+    gone: i64    // 1 = връзката е затворена, не пипай conn
+}
+
+fn wsg_on_frame(h: WsgHub, c: WsgConn, f: WsFrame) -> WsgFrameOut !IO !Net !Time !Random {
+    let op = f.opcode
+    if op == WS_CLOSE() {
+        wsg_send_close(c.fd, 1000, "bye")?
+        return WsgFrameOut { hub: wsg_conn_drop(h, c.fd)?, conn: c, gone: 1 }
+    }
+    if op == WS_PING() {
+        // Отговаряме веднага: това е начинът клиентът да разбере, че връзката
+        // е жива. Ако записът се провали, връзката се маха.
+        let w = tcp_write_bytes(c.fd, ws_build_frame(1, WS_PONG(), f.payload, 0))?
+        if w != 0 {
+            return WsgFrameOut { hub: wsg_conn_drop(h, c.fd)?, conn: c, gone: 1 }
+        }
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    if op == WS_PONG() {
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    if op != WS_TEXT() {
+        // Бинарни кадри не носим по този канал — протоколът е JSON текст.
+        // Тихото игнориране е нарочно: клиент може да прати бъдещо
+        // разширение, което не ни интересува.
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    return wsg_on_text(h, c, str_of_bytes(f.payload))?
+}
+
+// Клиентско съобщение. Тук е цялата „бизнес логика" на протокола:
+// subscribe / unsubscribe / ping.
+fn wsg_on_text(h: WsgHub, c: WsgConn, text: str) -> WsgFrameOut !IO !Net !Time !Random {
+    let max = wsg_msg_max()?
+    if len(text) > max {
+        wsg_send_text(c.fd, ws_msg_error("too_large", concat("лимит ", int_to_str(max))))?
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    let m = wsg_msg_parse(text)
+    if m.ok == 0 {
+        wsg_send_text(c.fd, ws_msg_error("bad_request", m.err))?
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    if m.typ == ws_type_ping() {
+        // Отговаряме с ТЕКСТОВ `pong`, не с control кадър. Причината е
+        // клиентът: браузърното WebSocket API НЕ дава на JS достъп до
+        // control pong кадрите, т.е. сърдечният ритъм на фронтенда не би
+        // могъл да потвърди жив канал. `ws_msg_pong()` е точно за това и
+        // вече е покрит от tests/ws_events_test.baga.
+        wsg_send_text(c.fd, ws_msg_pong())?
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    if m.typ == ws_type_unsubscribe() {
+        let mut c2 = c
+        c2.ws = 0
+        return WsgFrameOut { hub: wsg_conn_put(h, c2), conn: c2, gone: 0 }
+    }
+    // subscribe
+    if ws_proto_ok(m.proto) == 0 {
+        // Стар (кеширан) клиент: казваме му ЯВНО да се презареди, вместо да
+        // получава съобщения, които не разбира.
+        wsg_send_text(c.fd, ws_msg_error("protocol", "презареди страницата"))?
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    let sub = wsg_subscribe(h, c, m.ws)?
+    if sub.ok == 0 {
+        wsg_send_text(c.fd, ws_msg_error(sub.reason, sub.msg))?
+        return WsgFrameOut { hub: h, conn: c, gone: 0 }
+    }
+    let mut c2 = c
+    c2.ws = sub.ws
+    c2.cursor = sub.cursor
+    let h2 = wsg_conn_put(h, c2)
+    wsg_send_text(c.fd, ws_msg_subscribed(sub.ws))?
+    wsg_send_text(c.fd, ws_msg_hello(sub.ws, sub.cursor, ws_proto()))?
+    return WsgFrameOut { hub: h2, conn: c2, gone: 0 }
+}
+
+// ---------- четене от fd ----------
+
+// Дочита байтовете, минава през handshake-а (ако още не е) и изяжда всички
+// цели кадри в буфера. Един `read` може да донесе няколко съобщения — затова
+// цикълът върти, докато няма цял кадър.
+//
+// ВАЖНО: `tcp_read_bytes` връща празно и при EOF, и при грешка — и двете
+// значат „връзката умря" за нас, затова и двете водят до wsg_conn_drop.
+fn wsg_on_readable(h: WsgHub, c0: WsgConn) -> WsgHub !IO !Net !Time !Random {
+    let chunk = tcp_read_bytes(c0.fd, 4096)?
+    if bytes_len(chunk) == 0 {
+        return wsg_conn_drop(h, c0.fd)?
+    }
+    let mut c = c0
+    c.buf = bytes_concat(c.buf, chunk)
+    let mut hub = h
+    if c.hs_done != 1 {
+        let hs = wsg_handshake(c.fd, c.buf, hub.secret)?
+        if hs.state < 0 {
+            return wsg_conn_drop(hub, c.fd)?
+        }
+        if hs.state == 0 {
+            c.buf = hs.buf
+            return wsg_conn_put(hub, c)
+        }
+        c.hs_done = 1
+        c.user_id = hs.user_id
+        c.is_admin = hs.is_admin
+        c.buf = hs.buf
+    }
+    // ЗАДЪЛЖИТЕЛНО: новите байтове се записват в хъба ПРЕДИ разбора на
+    // кадри. Ако се пропусне (както беше — записваше се само по пътя на
+    // handshake-а), `wsg_conn_get` по-долу връща СТАРИЯ буфер и всяко
+    // съобщение след handshake-а се губи: каналът мълчи, а poll вижда
+    // готовност. Точно този дефект хвана `ws_events_smoke.sh`.
+    hub = wsg_conn_put(hub, c)
+    let mut running: i64 = 1
+    while running == 1 {
+        let cur = wsg_conn_get(hub, c.fd)
+        let t = ws_try_parse_frame(cur.buf)
+        if t.bad == 1 {
+            return wsg_conn_drop(hub, c.fd)?
+        }
+        if t.ok == 0 {
+            running = 0
+        } else {
+            let mut cv = wsg_conn_get(hub, c.fd)
+            cv.buf = bytes_slice(cur.buf, t.consumed, bytes_len(cur.buf))
+            let out = wsg_on_frame(hub, cv, t.frame)?
+            hub = out.hub
+            if out.gone == 1 {
+                return hub
+            }
+            // Връзката може да е сменена от handler-а (напр. subscribe).
+            hub = wsg_conn_put(hub, out.conn)
+        }
+    }
+    return wsg_conn_put(hub, wsg_conn_get(hub, c.fd))
+}
+
+// ---------- излъчване ----------
+
+struct WsgPump {
+    hub: WsgHub,
+    sent: i64
+}
+
+fn wsg_pump_conn_done(h: WsgHub, sent: i64) -> WsgPump {
+    return WsgPump { hub: h, sent: sent }
+}
+
+// Новите редове от одита → събития към абонираните. Връща обновения хъб
+// (мъртвите връзки се махат) и броя изпратени съобщения.
+//
+// ЗАЩО НЕ „изпрати на всички едно и също": всеки абонат има СВОЙ курсор,
+// защото е абониран в различен момент. Така един бавен клиент не забавя
+// другите и не губи ред.
+fn wsg_pump(h: WsgHub) -> WsgPump !IO !Net !Time !Random {
+    let db = fmr_open_db(fmr_build_app()?)?
+    if orm_ok_db(db) == 0 {
+        orm_close(db)?
+        return wsg_pump_conn_done(h, 0)
+    }
+    let mut hub = h
+    let mut d = db
+    let mut sent: i64 = 0
+    // Копие: wsg_pump_conn може да махне връзка (мъртва), т.е. да смени hub.fds.
+    let fds = wsg_fds_copy(hub)
+    let mut i: i64 = 0
+    while i < vec_len(fds) {
+        let fd = vec_get(fds, i)
+        if map_has(hub.conns, fd) == 1 {
+            let c = wsg_conn_get(hub, fd)
+            if c.ws > 0 && c.closing == 0 {
+                let r = wsg_pump_conn(d, hub, c)?
+                hub = r.hub
+                d = r.db
+                sent = sent + r.sent
+            }
+        }
+        i = i + 1
+    }
+    orm_close(d)?
+    return wsg_pump_conn_done(hub, sent)
+}
+
+struct WsgPumpConn {
+    hub: WsgHub,
+    db: OrmDb,
+    sent: i64
+}
+
+// Един абонат: вземи новото след курсора му и изпрати. Изпращането е
+// „най-добро усилие" — ако записът се провали (затворен таб), връзката се
+// маха и останалите продължават.
+fn wsg_pump_conn(db: OrmDb, h: WsgHub, c: WsgConn) -> WsgPumpConn !IO !Net !Time {
+    let q = tree_activity_tail(db, c.ws, c.cursor, ws_tail_limit())?
+    let d = orm_db_q(q)
+    if orm_ok_q(q) == 0 {
+        return WsgPumpConn { hub: h, db: d, sent: 0 }
+    }
+    let mut hub = h
+    let mut cur = c
+    let total = orm_nrows(q)
+    let mut i: i64 = 0
+    let mut sent: i64 = 0
+    while i < total {
+        let verb = orm_cell_by(q, i, "verb")
+        let ev = ws_event_of_verb(verb)
+        // Непознат verb не се излъчва (виж ws_events.baga) — но курсорът се
+        // мести и през него, иначе един лош ред би „заседнал" канала завинаги.
+        let id = orm_cell_by_i64(q, i, "id")
+        if ev != "" {
+            let item = jobj_encode(tree_activity_to_json(q, i))
+            let msg = ws_msg_event(c.ws, ev, item)
+            let w = wsg_send_text(c.fd, msg)?
+            if w != 0 {
+                return WsgPumpConn { hub: wsg_conn_drop(hub, c.fd)?, db: d, sent: sent }
+            }
+            sent = sent + 1
+        }
+        cur.cursor = id
+        i = i + 1
+    }
+    hub = wsg_conn_put(hub, cur)
+    return WsgPumpConn { hub: hub, db: d, sent: sent }
+}
+
+// ---------- ping ----------
+
+// Сървър → клиент ping. Открива мъртви връзки, които poll не вижда
+// (половината отворен сокет: peer-ът не праща нищо, но и не затваря).
+fn wsg_ping_due(h: WsgHub) -> WsgHub !IO !Net !Time {
+    let every = wsg_ping_ms()?
+    let now = monotonic_ms()
+    let mut hub = h
+    let fds = wsg_fds_copy(hub)
+    let mut i: i64 = 0
+    while i < vec_len(fds) {
+        let fd = vec_get(fds, i)
+        if map_has(hub.conns, fd) == 1 {
+            let c = wsg_conn_get(hub, fd)
+            if c.hs_done == 1 && c.closing == 0 {
+                if c.last_ping == 0 {
+                    let mut c2 = c
+                    c2.last_ping = now
+                    hub = wsg_conn_put(hub, c2)
+                } else {
+                    if now - c.last_ping >= every {
+                        let w = tcp_write_bytes(c.fd, ws_build_frame(1, WS_PING(), ws_empty(), 0))?
+                        if w != 0 {
+                            hub = wsg_conn_drop(hub, c.fd)?
+                        } else {
+                            let mut c2 = c
+                            c2.last_ping = now
+                            hub = wsg_conn_put(hub, c2)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return hub
+}

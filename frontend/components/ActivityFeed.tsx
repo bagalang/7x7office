@@ -15,10 +15,11 @@
 // Непознат verb (бъдещ вид, сгрешен ред) не се показва — виж бележката в
 // `tree/activity_kinds.baga`.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityItem, ApiError, listActivity } from "../lib/api";
 import { useI18n } from "./I18nProvider";
 import { useWorkspace } from "./WorkspaceProvider";
+import { useRealtime } from "./RealtimeProvider";
 import { IconHistory } from "./icons";
 
 function messageOf(err: unknown, fallback: string): string {
@@ -97,6 +98,46 @@ export function ActivityFeed({
   useEffect(() => {
     void load();
   }, [load, wsId]);
+
+  // Realtime (Фаза 3): новите редове идват по канала и се добавят ОТГОРЕ,
+  // вместо да се презарежда целият списък. Така лентата не „мига" (скролът
+  // и позицията се пазят) и не прави HTTP заявка на всяко действие, което е
+  // точно смисълът на канала.
+  //
+  // `resync` е изключението: след прекъсване събитията от паузата ги няма,
+  // затова там ЕДИНСТВЕНО презареждаме.
+  const { subscribe } = useRealtime();
+  const seen = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    // Запомняме id-тата, които вече сме показали — иначе собственото ни
+    // действие идва и от HTTP (при `load`), и по канала, и редът се дублира
+    // (React ключът е `id` и би дал „два еднакви key" в конзолата).
+    seen.current = new Set(items.map((it) => it.id));
+  }, [items]);
+
+  useEffect(() => {
+    return subscribe((ev) => {
+      if (ev.event === "resync") {
+        void load();
+        return;
+      }
+      const item = ev.item as unknown as ActivityItem;
+      if (!item || typeof item.id !== "number") return;
+      if (seen.current.has(item.id)) return;
+      // Филтърът по път (панелът „История" на файл) се пази и тук: каналът
+      // праща за ЦЯЛОТО пространство, а панелът показва само поддървото.
+      if (path && item.path !== path && !item.path.startsWith(path.endsWith("/") ? path : path + "/")) {
+        return;
+      }
+      seen.current.add(item.id);
+      setItems((prev) => {
+        // Таванът е `limit`: лентата не бива да расте неограничено, докато
+        // табът е отворен (ден на работа = хиляди редове в DOM).
+        const next = [item, ...prev];
+        return next.slice(0, Math.max(limit, 1));
+      });
+    });
+  }, [subscribe, load, path, limit]);
 
   if (busy && items.length === 0) return <p className="muted small">{t("common.loading")}</p>;
   if (err) return <p className="err">{err}</p>;

@@ -165,6 +165,49 @@ fn tree_activity_list_actor(db: OrmDb, ws: i64, actor: i64, limit: i64) -> OrmQu
     return orm_query_params_str(db, sql, vals)?
 }
 
+// ---------- опашка (WS gateway, Фаза 3) ----------
+
+// Най-големият id в пространството. Това е „курсорът" за нов клиент: като го
+// върнем, клиентът знае, че оттам нататък чака нови събития, и не получава
+// цялата история при свързване (иначе отварянето на таб = 200 реда и 200
+// презареждания в UI-а).
+//
+// БЕЗ COALESCE: boilaDB няма COALESCE около агрегат (виж бележката в
+// PLAN.md за `tree_usage`) — `pg_cell_i64` вече мапва NULL → 0, т.е. празната
+// таблица дава 0, което е точно „нищо още".
+fn tree_activity_max_id(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
+    let sql = concat("SELECT MAX(id) AS count FROM activity WHERE workspace_id = ", int_to_str(ws))
+    return orm_count_sql(db, sql)?
+}
+
+// Редовете с id > `after`, най-старите първи (събитията вървят в реда, в
+// който са се случили), най-много `limit`. После клиентът мести курсора на
+// последния id — така едно пропуснато събитие не се губи, а се наваксва.
+//
+// Защо възходящо, а не низходящо като списъка: списъкът показва „последното",
+// а опашката „какво ново". Обръщането на реда в една посока само ще накара
+// клиента да го обърне обратно.
+fn tree_activity_tail(db: OrmDb, ws: i64, after: i64, limit: i64) -> OrmQuery !IO !Net {
+    // Таванът е activity_limit_max (200), същият като ws_tail_limit().
+    // tree не тегли system/ws_events — иначе модулът зависи от gateway-а.
+    let n = activity_limit_clamp(limit)
+    let sql = concat(concat(tree_activity_select(), " FROM activity a LEFT JOIN idm_users u ON u.id = a.actor_id WHERE a.workspace_id = $1 AND a.id > $2 ORDER BY a.id ASC LIMIT "), int_to_str(n))
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, int_to_str(after))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+// id-то на последния ред в резултата (0 при празно). Клиентът мести курсора
+// с него — не с брой редове, за да е идемпотентно при едновременни записи.
+fn tree_activity_last_id(q: OrmQuery) -> i64 {
+    let n = orm_nrows(q)
+    if n < 1 {
+        return 0
+    }
+    return orm_cell_by_i64(q, n - 1, "id")
+}
+
 // ---------- чистене ----------
 
 // При изтриване на пространство (idm/ws_actions → tree_ws_purge). Редовете

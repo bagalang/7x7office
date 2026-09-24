@@ -1,0 +1,156 @@
+// system/ws_gateway_auth.baga — handshake + автентикация на WS канала.
+//
+// Тук е ГРАНИЦАТА НА СИГУРНОСТТА на канала: кой изобщо стига до WS. Каналът
+// носи имена на файлове, пътища и имейли на колеги, затова upgrade НЕ е
+// публичен — проверката е преди 101, не след него.
+//
+// Редът е важен:
+//   1. изобщо WS upgrade ли е (иначе 400);
+//   2. за НАШИЯ път ли е (/ws, не /v1/... на същия порт);
+//   3. валиден ли е токенът.
+// Само след трите се праща 101.
+
+import "ws_gateway.baga"
+import "ws_events.baga"
+import "wsbaga/ws.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/deps.baga"
+import "idm/user_model.baga"
+import "jwtbaga/jwt.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "std/bytes/bytes.baga"
+import "std/net/tcp.baga"
+import "std/str/str.baga"
+
+// Пътят на канала. Едно място: и проверката, и проксито на фронта
+// (`next.config.ts` праща `/ws` към API-то) трябва да сочат към едно и също.
+fn wsg_ws_path() -> str {
+    return "/ws"
+}
+
+// ---------- токен ----------
+
+fn wsg_token_of(p: WsHandshakeParse) -> str {
+    // 1. `?token=` — за не-браузър клиенти (тестове, CLI).
+    let q = ws_target_query(p.target, "token")
+    if q != "" {
+        return q
+    }
+    // 2. `Cookie: secp_token=` — браузърът го праща сам на same-origin
+    // upgrade. Това е основният път: WebSocket API-то в браузъра НЕ позволява
+    // свои header-и, т.е. Authorization е недостъпен, а токен в URL-а влиза
+    // в логовете на прокситата.
+    let ck = ws_head_header(p.head, "Cookie")
+    if ck == "" {
+        return ""
+    }
+    return wsg_cookie_of(ck, "secp_token")
+}
+
+// Стойност на cookie по име от `Cookie` header-а. Разделителят обикновено е
+// "; ", но не е гарантиран — режем по ";" и тримваме от двете страни.
+fn wsg_cookie_of(raw: str, name: str) -> str {
+    let parts: Vec<str> = str_split(raw, ";")
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        let kv = str_trim(vec_get(parts, i))
+        let eq = str_find(kv, "=")
+        if eq > 0 && substr(kv, 0, eq) == name {
+            return substr(kv, eq + 1, len(kv))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// ---------- самоличност ----------
+
+struct WsgAuth {
+    ok: i64,
+    user_id: i64,
+    is_admin: i64,
+    reason: str
+}
+
+// Проверява токена и връща самоличността. Прави се ВЕДНЪЖ, при handshake-а:
+// после връзката е „утвърдена" и повече не пипа JWT-то (иначе всеки кадър
+// щеше да декодира токена).
+//
+// ВАЖНО: `is_admin` се чете от БАЗАТА, не от claim-а. Токен, издаден преди
+// потребителят да е загубил админ права, не бива да дава админ достъп до
+// края на живота си.
+fn wsg_authenticate(p: WsHandshakeParse, secret: str) -> WsgAuth !IO !Net !Random {
+    let token = wsg_token_of(p)
+    if token == "" {
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "no token" }
+    }
+    let payload = jwt_decode(secret, token)
+    if payload == "" {
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "bad token" }
+    }
+    let b = jbody_parse_str(payload)
+    if b.ok == 0 {
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "bad claims" }
+    }
+    let bo = jbody_require_object(b)
+    if bo.ok == 0 {
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "bad claims" }
+    }
+    let f = jreq_str(bo.doc, bo.root, "sub")
+    if f.ok == 0 || f.val == "" {
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "no sub" }
+    }
+    let db = fmr_open_db(fmr_build_app()?)?
+    if orm_ok_db(db) == 0 {
+        orm_close(db)?
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "db" }
+    }
+    let uq = idm_user_find_by_email(db, to_lower(str_trim(f.val)))?
+    let d = orm_db_q(uq)
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        orm_close(d)?
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "unknown user" }
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    let admin = orm_cell_by_i64(uq, 0, "is_admin")
+    orm_close(d)?
+    return WsgAuth { ok: 1, user_id: uid, is_admin: admin, reason: "" }
+}
+
+// ---------- handshake ----------
+
+fn wsg_handshake(fd: i64, buf: bytes, secret: str) -> WsgHs !IO !Net !Random {
+    let p = ws_parse_handshake_buf(buf)
+    if p.bad == 1 {
+        // Не е upgrade за нас: отговаряме с истински HTTP статус, за да не
+        // виси браузърът (и за да е ясно на `curl`).
+        tcp_write_bytes(fd, bytes_of_str(wsg_http_status(400, "Bad Request")))?
+        return wsg_hs_deny()
+    }
+    if p.ok == 0 {
+        return wsg_hs_wait(buf)
+    }
+    if ws_target_path(p.target) != wsg_ws_path() {
+        tcp_write_bytes(fd, bytes_of_str(wsg_http_status(404, "Not Found")))?
+        return wsg_hs_deny()
+    }
+    let a = wsg_authenticate(p, secret)?
+    if a.ok == 0 {
+        // 401 и затваряме: браузърът вижда провален upgrade, а не отворен
+        // канал без самоличност. Причината НЕ се праща в отговора — иначе по
+        // текста се разбира дали токенът е изтекъл или потребителят липсва.
+        tcp_write_bytes(fd, bytes_of_str(wsg_http_status(401, "Unauthorized")))?
+        return wsg_hs_deny()
+    }
+    let w = tcp_write_bytes(fd, bytes_of_str(p.response))?
+    if w != 0 {
+        return wsg_hs_deny()
+    }
+    return WsgHs {
+        state: 1,
+        buf: bytes_slice(buf, p.consumed, bytes_len(buf)),
+        user_id: a.user_id,
+        is_admin: a.is_admin
+    }
+}

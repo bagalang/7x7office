@@ -25,9 +25,10 @@ PORT="${WS_SMOKE_PORT:-8102}"
 PGURL="${PGURL:-postgresql://bagatest:pas+123@127.0.0.1:5432}"
 DATA_ROOT="${WS_SMOKE_DATA:-/tmp/secp_ws_files_storage}"
 # ВАЖНО: psql чете база само от URI-то. Подадеш ли "URI без база" + позиционен
-# аргумент $DB, аргументът СЕ ИГНОРИРА и psql пада към PGDATABASE от средата —
-# т.е. проверките четат чужда база и лъжат. Затова винаги слагаме $DB в URI-то.
-PSQL_SRV="psql -qAt $PGURL"   # сървър/админ (за create/drop на базата)
+# аргумент $DB, psql го брои за ПОТРЕБИТЕЛ (не за база) и пада към PGDATABASE
+# от средата — т.е. проверките четат чужда база и лъжат. Затова винаги слагаме
+# базата в URI-то: `$PGURL/postgres` за админ, `$PGURL/$DB` за целевата.
+PSQL_SRV="psql -qAt $PGURL/postgres"   # сървър/админ (за create/drop на базата)
 PSQL="psql -qAt $PGURL/$DB"   # вече в целевата база
 
 FAILED=0
@@ -58,18 +59,18 @@ boot() {
 
 stop() { pkill -f 'target/[s]ecp' 2>/dev/null; sleep 1; }
 
-trap 'stop; $PSQL_SRV postgres -c "DROP DATABASE IF EXISTS $DB" >/dev/null 2>&1' EXIT
+trap 'stop; $PSQL_SRV -c "DROP DATABASE IF EXISTS $DB" >/dev/null 2>&1' EXIT
 
 [[ -x "$BIN" ]] || { echo "липсва $BIN — пусни sandak build"; exit 2; }
 
 stop
 # Форсирано: висяща връзка от предишен boot кара DROP да се провали тихо и
 # тестът тръгва върху стара база (грешки тип „6 потребителя при 3 създадени").
-$PSQL_SRV postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB'" >/dev/null 2>&1
-$PSQL_SRV postgres -c "DROP DATABASE IF EXISTS $DB" 2>&1 | grep -v '^$' || true
-$PSQL_SRV postgres -c "CREATE DATABASE $DB TEMPLATE template0" >/dev/null 2>&1 || {
+$PSQL_SRV -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB'" >/dev/null 2>&1
+$PSQL_SRV -c "DROP DATABASE IF EXISTS $DB" 2>&1 | grep -v '^$' || true
+$PSQL_SRV -c "CREATE DATABASE $DB TEMPLATE template0" >/dev/null 2>&1 || {
   echo "не мога да вдигна $DB (PGURL=$PGURL)"; exit 2; }
-N=$($PSQL_SRV postgres -c "SELECT COUNT(*) FROM pg_database WHERE datname = '$DB'")
+N=$($PSQL_SRV -c "SELECT COUNT(*) FROM pg_database WHERE datname = '$DB'")
 [[ "$N" == "1" ]] || { echo "базата $DB не е създадена"; exit 2; }
 rm -rf "$DATA_ROOT"
 
