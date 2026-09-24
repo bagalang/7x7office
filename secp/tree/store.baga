@@ -7,6 +7,7 @@
 
 import "model.baga"
 import "versions.baga"
+import "activity_model.baga"
 import "text.baga"
 import "../data/blobs.baga"
 import "ormbaga/orm.baga"
@@ -139,7 +140,7 @@ fn tree_mkdir_p(db: OrmDb, ws: i64, owner: i64, path: str) -> str !IO !Net {
 
 // Shared store flow (PUT file, doc save): quota → mkdir -p → blob →
 // node upsert → GC of replaced blobs. thumbs=1 probes for image thumbs.
-fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumbs: i64) -> FmrOut !IO !Net {
+fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumbs: i64) -> FmrOut !IO !Net !Time {
     let size = bytes_len(body)
     let mut d = db
     // quota: usage + new - replaced <= quota
@@ -225,7 +226,16 @@ fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumb
     let ext = tree_ext(path)
     let xt = tree_extract_text(ext, body)?
     tree_text_put(orm_db_q(q), nid, ws, xt)?
+    // Одит (Фаза 3): създаден или презаписан файл. `created`/`updated` се
+    // различава по това дали редът е съществувал — това е точният факт,
+    // който feed-ът трябва да покаже (не „upload").
+    let mut verb = activity_verb_created()
+    if existing_id > 0 {
+        verb = activity_verb_updated()
+    }
+    let logged = tree_activity_log(orm_db_q(q), ws, owner, verb, nid, path, "")?
+    d = logged.db
     let mut o = tree_node_json(q, 0)
     o = jobj_str(o, "etag", hash)
-    return act_ok(orm_db_q(q), o)
+    return act_ok(d, o)
 }

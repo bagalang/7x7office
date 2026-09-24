@@ -255,4 +255,27 @@ export const de: Record<string, string> = {
   "share.error": "Der Link kann nicht geöffnet werden.",
   "share.expires": "Gültig bis {date}.",
   "share.quota": "{left} Downloads übrig.",
+
+  // --- Phase 3: activity feed ---
+  "nav.activity": "Aktivität",
+  "activity.title": "Aktivität im Arbeitsbereich",
+  "activity.hint": "Die letzten Aktionen des Teams: wer was erstellt, geändert, gelöscht oder geteilt hat.",
+  "activity.empty": "Noch keine Aktivität.",
+  "activity.system": "System",
+  "activity.moved_from": "von {from}",
+  "activity.member": "{email}",
+  "activity.history": "Verlauf",
+  "activity.history_title": "Verlauf von {name}",
+
+  "activity.verb_created": "erstellte",
+  "activity.verb_updated": "aktualisierte",
+  "activity.verb_deleted": "löschte",
+  "activity.verb_moved": "verschob",
+  "activity.verb_restored": "stellte wieder her",
+  "activity.verb_shared": "teilte",
+  "activity.verb_unshared": "entzog den Link zu",
+  "activity.verb_member_added": "fügte Mitglied hinzu",
+  "activity.verb_member_removed": "entfernte Mitglied",
+  "activity.verb_member_updated": "änderte die Rolle von",
+  "activity.verb_workspace_created": "erstellte den Arbeitsbereich",
 };

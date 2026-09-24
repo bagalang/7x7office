@@ -15,6 +15,8 @@ import "ws_roles.baga"
 import "ws_actions.baga"
 import "user_model.baga"
 import "user_actions.baga"
+import "../tree/activity_kinds.baga"
+import "../tree/activity_model.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -46,7 +48,7 @@ fn act_ws_members(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
 
 // Тялото носи email (на потребителя) и role. Личният workspace не приема
 // нови членове през този endpoint — той е само на собственика.
-fn act_ws_member_add(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+fn act_ws_member_add(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let ws_id = ws_qid(ctx, "workspace_id")
     let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
     if g.ok == 0 {
@@ -127,10 +129,14 @@ fn act_ws_member_add(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if found < 0 {
         return act_err(orm_db_q(q), 500, "member added but not found")
     }
-    return act_created(orm_db_q(q), ws_member_json(q, found))
+    // Одит: кой е влязъл в пространството. meta носи имейла на новия член —
+    // иначе feed-ът показва само „Иван добави член", а не кого.
+    let meta = concat(concat("{\"email\":\"", orm_cell_by(q, found, "email")), "\"}")
+    let logged = tree_activity_log(orm_db_q(q), ws_id, g.caller_id, activity_verb_member_added(), 0, "", meta)?
+    return act_created(logged.db, ws_member_json(q, found))
 }
 
-fn act_ws_member_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_ws_member_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let ws_id = ws_qid(ctx, "workspace_id")
     let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
     if g.ok == 0 {
@@ -197,12 +203,16 @@ fn act_ws_member_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if found < 0 {
         return act_err(orm_db_q(q), 500, "member updated but not found")
     }
-    return act_ok(orm_db_q(q), ws_member_json(q, found))
+    // Одит: смяна на роля. meta носи старата и новата — „editor → viewer"
+    // е смисълът, не „обновен член".
+    let meta = concat(concat(concat(concat("{\"email\":\"", orm_cell_by(q, found, "email")), concat("\",\"from\":\"", old)), concat("\",\"to\":\"", role)), "\"}")
+    let logged = tree_activity_log(orm_db_q(q), ws_id, g.caller_id, activity_verb_member_updated(), 0, "", meta)?
+    return act_ok(logged.db, ws_member_json(q, found))
 }
 
 // Премахване. Последният owner не може да бъде махнат (нито да се махне
 // сам, ако е сам) — иначе workspace-ът остава без никой, който да го управлява.
-fn act_ws_member_remove(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_ws_member_remove(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let ws_id = ws_qid(ctx, "workspace_id")
     let g = ws_gate(ctx, db, ws_id, ws_role_level_owner())?
     if g.ok == 0 {
@@ -221,6 +231,15 @@ fn act_ws_member_remove(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let mut d = orm_db_q(mq)
     let role = orm_cell_by(mq, 0, "role")
+    // Имейлът трябва да се прочете ПРЕДИ триенето — след него редът няма
+    // откъде да се вземе (имейлът е смисълът на одит реда).
+    let user_id = orm_cell_by_i64(mq, 0, "user_id")
+    let uq = idm_user_find(d, user_id)?
+    let mut who = ""
+    if orm_ok_q(uq) == 1 && orm_nrows(uq) > 0 {
+        who = orm_cell_by(uq, 0, "email")
+        d = orm_db_q(uq)
+    }
     if role == ws_role_owner() {
         let oc = ws_owner_count(d, ws_id)?
         if orm_ok_c(oc) == 0 {
@@ -235,5 +254,8 @@ fn act_ws_member_remove(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok(del) == 0 {
         return act_err(orm_db_exec(del), 500, orm_err_exec(del))
     }
-    return act_no_content(orm_db_exec(del))
+    // Одит: кой е излязъл.
+    let meta = concat(concat("{\"email\":\"", who), "\"}")
+    let logged = tree_activity_log(orm_db_exec(del), ws_id, g.caller_id, activity_verb_member_removed(), 0, "", meta)?
+    return act_no_content(logged.db)
 }

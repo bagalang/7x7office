@@ -13,6 +13,7 @@
 
 import "model.baga"
 import "acl_model.baga"
+import "activity_model.baga"
 import "share_model.baga"
 import "versions.baga"
 import "../data/blobs.baga"
@@ -85,6 +86,11 @@ fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net !Time {
     let nd = tree_ws_purge_nodes(d, ws)
     if nd < 0 {
         return TreeWsPurge { db: d, nodes: 0, err: "delete nodes failed" }
+    }
+    // Одитът върви с пространството: ред, който сочи към изтрит workspace,
+    // е недостъпен и само обърква (няма FK на boila — трие се ръчно).
+    if tree_activity_purge_ws(d, ws) < 0 {
+        return TreeWsPurge { db: d, nodes: 0, err: "delete activity failed" }
     }
     // GC: има ли още някой друг (друг workspace/версия), или blob-ът е за триене
     let mut i: i64 = 0

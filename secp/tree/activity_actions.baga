@@ -1,0 +1,130 @@
+// tree/activity_actions.baga — REST за activity feed (Фаза 3).
+//
+//   GET /v1/activity?limit=&path=&actor_id=   → последните действия
+//
+// Четенето иска ниво read (1) в пространството: feed-ът показва пътища и
+// имейли на колеги, значи не е за външни. Не филтрираме по ACL на всеки
+// ред: редът пази път, а не възел (възелът може вече да не съществува), и
+// изричното право по път се мени с времето — историята би „изчезвала"
+// ретроактивно. Затова е правило за цялото пространство, а ако някой ден
+// трябва по-фин контрол, той влиза като ACL филтър тук.
+//
+// ВАЖНО: handler-ът е read-only. Записването на действия става от мястото,
+// което върши действието (store/docs/actions/ws_members/share_actions), за
+// да не се разминава „записаното" с „случилото се".
+
+import "auth.baga"
+import "activity_kinds.baga"
+import "activity_model.baga"
+import "model.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+
+// limit от заявката: липсващо/нечислово → 0 (подразбираното).
+fn activity_qlimit(ctx: FmrCtx) -> i64 {
+    let raw = str_trim(fmr_query(ctx, "limit"))
+    if raw == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
+// actor_id от заявката: 0 = без филтър (системата също има actor_id 0, но
+// филтър „само системата" не е полезен ъгъл за v1).
+fn activity_qactor(ctx: FmrCtx) -> i64 {
+    let raw = str_trim(fmr_query(ctx, "actor_id"))
+    if raw == "" {
+        return 0
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return 0
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
+fn activity_rows_json(q: OrmQuery) -> str {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, tree_activity_to_json(q, i))
+        i = i + 1
+    }
+    return jarr_encode(arr)
+}
+
+// Една заявка според филтъра — не „вземи всичко, после презапиши". Пътят
+// печели пред актьора, защото е по-тесен (виж бележката в activity_model.baga).
+fn activity_query(db: OrmDb, ws: i64, path: str, actor: i64, limit: i64) -> OrmQuery !IO !Net {
+    if path != "" {
+        return tree_activity_list_path(db, ws, path, limit)?
+    }
+    if actor > 0 {
+        return tree_activity_list_actor(db, ws, actor, limit)?
+    }
+    return tree_activity_list(db, ws, limit)?
+}
+
+// Празен/липсващ път значи „цялото пространство", не коренът. Иначе
+// филтърът по път би хванал само действия в "/", а не всички — тоест
+// лентата изглежда празна, защото файловете са в подпапки.
+fn activity_normalize_path(raw: str) -> str {
+    if str_trim(raw) == "" {
+        return ""
+    }
+    return tree_norm(raw)
+}
+
+fn activity_scope(path: str, actor: i64) -> str {
+    if path != "" {
+        return "path"
+    }
+    if actor > 0 {
+        return "actor"
+    }
+    return "workspace"
+}
+
+fn act_activity_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let t = tree_auth(ctx, db, 1, "")?
+    if t.ok == 0 {
+        return t.out
+    }
+    let limit = activity_limit_clamp(activity_qlimit(ctx))
+    // Пътят се нормализира като всички други файлови пътища — иначе
+    // "/a//b" не би съвпаднал с нищо и панелът „История" е празен.
+    let path = activity_normalize_path(query_decode_val(fmr_query(ctx, "path")))
+    let actor = activity_qactor(ctx)
+    let mut q = activity_query(t.out.db, t.ws, path, actor, limit)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "workspace_id", t.ws)
+    o = jobj_str(o, "scope", activity_scope(path, actor))
+    o = jobj_i64(o, "limit", limit)
+    o = jobj_str(o, "path", path)
+    o = jobj_i64(o, "actor_id", actor)
+    o = jobj_raw(o, "items", activity_rows_json(q))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(orm_db_q(q), o)
+}

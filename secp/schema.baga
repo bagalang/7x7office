@@ -238,6 +238,36 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_share_links_on_ws_path ON share_links (workspace_id, path)",
         "DROP INDEX IF EXISTS index_share_links_on_ws_path"
     )
+    // Фаза 3 (activity feed): едно действие = един ред. APPEND-ONLY —
+    // изтрит възел не трие историята си, иначе „кой изтри файла" изчезва
+    // точно когато е най-нужно. Чисти се само с пространството.
+    //
+    // `ts` е epoch СЕКУНДИ (BIGINT), не TIMESTAMPTZ: подредбата трябва да е
+    // еднаква на Postgres и BoilaDB, а последният няма NOW() в заявка (G23).
+    // `path` е ДЕНОРМАЛИЗИРАН (не FK към tree_nodes): редът трябва да оцелее
+    // след изтриването на възела, а преместването не бива да пренаписва
+    // историята („беше в /a, сега е в /b" — това е смисълът на лога).
+    set = migrate_add(
+        set,
+        20260924028,
+        "create_activity",
+        "CREATE TABLE activity (id BIGSERIAL PRIMARY KEY, workspace_id BIGINT NOT NULL, actor_id BIGINT NOT NULL DEFAULT 0, verb TEXT NOT NULL, node_id BIGINT NOT NULL DEFAULT 0, path TEXT NOT NULL DEFAULT '', meta TEXT NOT NULL DEFAULT '', ts BIGINT NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS activity"
+    )
+    set = migrate_add(
+        set,
+        20260924029,
+        "index_activity_ws_ts",
+        "CREATE INDEX index_activity_on_ws_ts ON activity (workspace_id, ts)",
+        "DROP INDEX IF EXISTS index_activity_on_ws_ts"
+    )
+    set = migrate_add(
+        set,
+        20260924030,
+        "index_activity_ws_path",
+        "CREATE INDEX index_activity_on_ws_path ON activity (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_activity_on_ws_path"
+    )
     return set
 }
 
@@ -440,6 +470,29 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_share_links_ws_path",
         "CREATE INDEX IF NOT EXISTS index_share_links_on_ws_path ON share_links (workspace_id, path)",
         "DROP INDEX IF EXISTS index_share_links_on_ws_path"
+    )
+    // Фаза 3 (activity feed): boila вариант — без SERIAL/DEFAULT/NOT NULL,
+    // id-то се дава с MAX(id)+1 (виж activity_model.baga).
+    set = migrate_add(
+        set,
+        20260924028,
+        "create_activity",
+        "CREATE TABLE IF NOT EXISTS activity (id BIGINT, workspace_id BIGINT, actor_id BIGINT, verb TEXT, node_id BIGINT, path TEXT, meta TEXT, ts BIGINT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS activity"
+    )
+    set = migrate_add(
+        set,
+        20260924029,
+        "index_activity_ws_ts",
+        "CREATE INDEX IF NOT EXISTS index_activity_on_ws_ts ON activity (workspace_id, ts)",
+        "DROP INDEX IF EXISTS index_activity_on_ws_ts"
+    )
+    set = migrate_add(
+        set,
+        20260924030,
+        "index_activity_ws_path",
+        "CREATE INDEX IF NOT EXISTS index_activity_on_ws_path ON activity (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_activity_on_ws_path"
     )
     return set
 }

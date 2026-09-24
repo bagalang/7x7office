@@ -18,6 +18,8 @@
 import "auth.baga"
 import "share_model.baga"
 import "share_roles.baga"
+import "activity_kinds.baga"
+import "activity_model.baga"
 import "../lib/pass.baga"
 import "../idm/mail.baga"
 import "fmrbaga/app.baga"
@@ -206,7 +208,10 @@ fn act_fs_share_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time 
     let mut o = share_to_json(q, 0)
     o = jobj_str(o, "token", token)
     o = jobj_str(o, "url", share_public_link(token)?)
-    return act_created(orm_db_q(q), o)
+    // Одит: издаден линк. node_id не се знае оттук (линкът е по път) —
+    // затова е 0 и feed-ът разчита на path-а, който е пълният смисъл.
+    let logged = tree_activity_log(orm_db_q(q), t.ws, t.owner, activity_verb_shared(), 0, path, "")?
+    return act_created(logged.db, o)
 }
 
 fn act_fs_share_revoke(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
@@ -241,5 +246,8 @@ fn act_fs_share_revoke(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if orm_ok(e) == 0 {
         return act_err(orm_db_exec(e), 500, orm_err_exec(e))
     }
-    return act_no_content(orm_db_exec(e))
+    // Одит: отнет линк. Само първото отнемане влиза във feed-а; повторното
+    // е идемпотентно и не бива да трупа еднакви редове.
+    let logged = tree_activity_log(orm_db_exec(e), t.ws, t.owner, activity_verb_unshared(), 0, path, "")?
+    return act_no_content(logged.db)
 }

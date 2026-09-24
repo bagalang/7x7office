@@ -1,0 +1,162 @@
+// tree/activity_kinds.baga — видове действия в activity feed (Фаза 3). ЧИСТ модул.
+//
+// Защо чист: feed-ът се показва на ЦЕЛИЯ екип. Ако verb-ът не е познат
+// (сгрешен ред в базата, бъдещ вид, забравен тук), UI-ът би показал суров
+// ключ или — по-лошо — би счел реда за „безобиден" и би го показал на
+// потребител, който няма право да знае за действието. Затова валидацията и
+// класификацията (променя ли състоянието) са тук и се тестват без база
+// (tests/activity_kinds_test.baga), както ws_roles/acl_roles/share_roles.
+//
+// Езикът на feed-а е „кутията е счупена" — verb-овете са машинни низове
+// (created, updated, …), а преводът е на фронтенда по ключ `activity.verb_*`.
+// Така добавянето на език не пипа базата, а стари редове не „изчезват",
+// когато се появи нов превод.
+
+import "std/str/str.baga"
+
+// ---------- verb-ове ----------
+
+// Възлите (файлове/папки). „uploaded" не се ползва: записът през API-то
+// минава през tree_store_file, който различава created/updated.
+fn activity_verb_created() -> str { return "created" }
+fn activity_verb_updated() -> str { return "updated" }
+fn activity_verb_deleted() -> str { return "deleted" }
+fn activity_verb_moved() -> str { return "moved" }
+fn activity_verb_restored() -> str { return "restored" }
+
+// Публичните линкове: „shared" = издаден линк, „unshared" = отнет.
+fn activity_verb_shared() -> str { return "shared" }
+fn activity_verb_unshared() -> str { return "unshared" }
+
+// Членството в пространството: кой е влязъл/излязъл и кой е сменен.
+fn activity_verb_member_added() -> str { return "member_added" }
+fn activity_verb_member_removed() -> str { return "member_removed" }
+fn activity_verb_member_updated() -> str { return "member_updated" }
+
+// Самото пространство.
+fn activity_verb_workspace_created() -> str { return "workspace_created" }
+
+// Всички познати verb-ове. Редът е азбучен — не носи смисъл.
+fn activity_verbs() -> Vec<str> {
+    let v = vec_new()
+    vec_push(v, activity_verb_created())
+    vec_push(v, activity_verb_deleted())
+    vec_push(v, activity_verb_member_added())
+    vec_push(v, activity_verb_member_removed())
+    vec_push(v, activity_verb_member_updated())
+    vec_push(v, activity_verb_moved())
+    vec_push(v, activity_verb_restored())
+    vec_push(v, activity_verb_shared())
+    vec_push(v, activity_verb_unshared())
+    vec_push(v, activity_verb_updated())
+    vec_push(v, activity_verb_workspace_created())
+    return v
+}
+
+// Познат ли е verb-ът. Непознат ред НЕ се показва (виж заглавния коментар).
+fn activity_verb_valid(verb: str) -> i64 {
+    let all = activity_verbs()
+    let mut i: i64 = 0
+    let n = vec_len(all)
+    while i < n {
+        if vec_get(all, i) == verb {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Променя ли verb-ът СЪСТОЯНИЕТО (има ли смисъл да се показва като
+// „действие", а не като факт). Ползва се за бъдещи филтри и за да е ясно
+// кои действия заслужават нотификация.
+fn activity_verb_is_write(verb: str) -> i64 {
+    if verb == activity_verb_created() {
+        return 1
+    }
+    if verb == activity_verb_updated() {
+        return 1
+    }
+    if verb == activity_verb_deleted() {
+        return 1
+    }
+    if verb == activity_verb_moved() {
+        return 1
+    }
+    if verb == activity_verb_restored() {
+        return 1
+    }
+    if verb == activity_verb_shared() {
+        return 1
+    }
+    if verb == activity_verb_unshared() {
+        return 1
+    }
+    if verb == activity_verb_member_added() {
+        return 1
+    }
+    if verb == activity_verb_member_removed() {
+        return 1
+    }
+    if verb == activity_verb_member_updated() {
+        return 1
+    }
+    if verb == activity_verb_workspace_created() {
+        return 1
+    }
+    return 0
+}
+
+// ---------- meta ----------
+
+// Таванът на `meta` (допълнителни данни: нов път при move, ниво на линк…).
+// Малък е нарочно: feed-ът не е хранилище за съдържание, а ред от действия.
+// Без таван един ред с цял JSON би раздул списъка и би дал място за изтичане
+// на данни, които не са предвидени за показване.
+fn activity_meta_max() -> i64 {
+    return 300
+}
+
+fn activity_meta_cap(s: str) -> str {
+    if len(s) <= activity_meta_max() {
+        return s
+    }
+    return substr(s, 0, activity_meta_max())
+}
+
+// ---------- брой редове на страница ----------
+
+fn activity_limit_default() -> i64 {
+    return 50
+}
+
+fn activity_limit_max() -> i64 {
+    return 200
+}
+
+// Заявеният брой се притиска в [1, max]. 0/отрицателно → подразбираното,
+// за да не върне клиент празен feed „защото забрави limit".
+fn activity_limit_clamp(n: i64) -> i64 {
+    if n < 1 {
+        return activity_limit_default()
+    }
+    if n > activity_limit_max() {
+        return activity_limit_max()
+    }
+    return n
+}
+
+// ---------- кой е актьорът ----------
+
+// Актьор 0 = системата (напр. фонова задача). Не е потребител и UI-ът го
+// показва като „Система", а не като празен имейл.
+fn activity_actor_system() -> i64 {
+    return 0
+}
+
+fn activity_actor_is_system(actor: i64) -> i64 {
+    if actor == activity_actor_system() {
+        return 1
+    }
+    return 0
+}

@@ -126,6 +126,7 @@ a { color: var(--accent); text-decoration: none; }
   border: 1px solid var(--line);
 }
 .btn.ghost:hover:not(:disabled) { background: var(--accent-soft); box-shadow: none; }
+.btn.ghost.active { background: var(--accent-soft); box-shadow: none; }
 
 .btn.danger-ghost {
   background: transparent;
@@ -157,6 +158,8 @@ a { color: var(--accent); text-decoration: none; }
   cursor: pointer;
 }
 .icon-btn:hover { background: var(--accent-soft); color: var(--accent); }
+.icon-btn.active,
+.icon-btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .icon-btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
 
 /* ---------- inputs ---------- */
@@ -626,6 +629,16 @@ a { color: var(--accent); text-decoration: none; }
   white-space: nowrap;
 }
 .preview-body { padding: 14px; }
+.preview-history {
+  margin: 12px 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.preview-history > .label { display: block; margin-bottom: 6px; font-weight: 600; }
 .preview-body pre {
   margin: 0;
   white-space: pre-wrap;
@@ -996,8 +1009,80 @@ a { color: var(--accent); text-decoration: none; }
   outline-offset: -2px;
 }
 
-/* ---------- versions dialog ---------- */
+/* ---------- activity feed (Фаза 3) ---------- */
 
+/* Панел вдясно, като preview-pane: лентата е контекст до съдържанието, не
+   отделна страница — затова не маха файловия изглед. */
+.activity-pane {
+  width: 320px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  padding: 12px 14px 20px;
+  overflow-y: auto;
+}
+.activity-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.activity-pane > .muted { margin: 0 0 12px; }
+
+.activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.activity-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+}
+.activity-row:last-child { border-bottom: 0; }
+.activity-row .activity-avatar {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+.activity-row .activity-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.activity-row .activity-actor { font-weight: 600; }
+.activity-row .activity-verb { color: var(--muted); }
+/* Пътят може да е дълъг — режем с многоточие, пълният е в title. */
+.activity-row .activity-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.activity-row .activity-meta { overflow-wrap: anywhere; }
+.activity-row .activity-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.activity.compact .activity-row { padding: 5px 0; }
+
+/* ---------- versions dialog ---------- */
 .versions-list {
   display: flex;
   flex-direction: column;
@@ -1028,6 +1113,12 @@ a { color: var(--accent); text-decoration: none; }
   .sidebar { display: none; }
   .logo { min-width: 0; }
   .preview-pane {
+    position: fixed;
+    inset: var(--topbar-h) 0 0 0;
+    width: auto;
+    z-index: 40;
+  }
+  .activity-pane {
     position: fixed;
     inset: var(--topbar-h) 0 0 0;
     width: auto;

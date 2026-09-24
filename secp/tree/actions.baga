@@ -8,6 +8,8 @@
 
 import "auth.baga"
 import "acl_model.baga"
+import "activity_kinds.baga"
+import "activity_model.baga"
 import "share_model.baga"
 import "share_roles.baga"
 import "store.baga"
@@ -102,7 +104,7 @@ fn act_fs_stat(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), tree_node_json(q, 0))
 }
 
-fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 2, path)?
     if t.ok == 0 {
@@ -119,10 +121,13 @@ fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(db, 500, "mkdir ok but node missing")
     }
-    return act_created(orm_db_q(q), tree_node_json(q, 0))
+    // Одит: създадена папка (node_id, за да я намери панелът „История").
+    let nid = orm_cell_by_i64(q, 0, "id")
+    let logged = tree_activity_log(orm_db_q(q), t.ws, t.owner, activity_verb_created(), nid, path, "")?
+    return act_created(logged.db, tree_node_json(q, 0))
 }
 
-fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 2, path)?
     if t.ok == 0 {
@@ -367,6 +372,12 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(sr.db, 500, sr.err)
     }
     d = sr.db
+    // Одит: един ред за корена на изтритото поддърво, не ред на възел —
+    // иначе едно изтриване на папка „погребва" целия feed. `node_id` вече
+    // не сочи съществуващ възел, затова разчитаме на path-а.
+    let delroot_id = orm_cell_by_i64(sub, 0, "id")
+    let logged = tree_activity_log(d, t.ws, t.owner, activity_verb_deleted(), delroot_id, path, "")?
+    d = logged.db
     i = 0
     while i < vec_len(hashes) {
         tree_ver_gc(d, vec_get(hashes, i))?
@@ -375,7 +386,7 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     return act_no_content(d)
 }
 
-fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let from = tree_qpath(ctx, "from")
     let to = tree_qpath(ctx, "to")
     // Две проверки: можеш ли да махнеш от `from` И да създадеш в `to`.
@@ -392,8 +403,7 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let mut d = t2.out.db
     if from == "/" || to == "/" {
         return act_err(d, 400, "cannot move root")
-    }
-    if from == to {
+    }    if from == to {
         return act_err(d, 400, "same path")
     }
     // no moving a dir into itself
@@ -452,7 +462,11 @@ fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(db, 500, "move ok but node missing")
     }
-    return act_ok(orm_db_q(q), tree_node_json(q, 0))
+    // Одит: meta носи стария път — feed-ът показва „от /a в /b", а не само
+    // новото име (иначе преместването изглежда като създаване).
+    let meta = concat(concat("{\"from\":\"", from), "\"}")
+    let logged = tree_activity_log(d, t.ws, t.owner, activity_verb_moved(), orm_cell_by_i64(q, 0, "id"), to, meta)?
+    return act_ok(logged.db, tree_node_json(q, 0))
 }
 
 fn act_fs_usage(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {

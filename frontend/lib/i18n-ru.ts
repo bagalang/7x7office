@@ -254,4 +254,27 @@ export const ru: Record<string, string> = {
   "share.error": "Ссылка не открывается.",
   "share.expires": "Действует до {date}.",
   "share.quota": "Осталось скачиваний: {left}.",
+
+  // --- Фаза 3: activity feed ---
+  "nav.activity": "Активность",
+  "activity.title": "Активность пространства",
+  "activity.hint": "Последние действия команды: кто что создал, изменил, удалил или открыл доступ.",
+  "activity.empty": "Действий пока нет.",
+  "activity.system": "Система",
+  "activity.moved_from": "из {from}",
+  "activity.member": "{email}",
+  "activity.history": "История",
+  "activity.history_title": "История {name}",
+
+  "activity.verb_created": "создал",
+  "activity.verb_updated": "обновил",
+  "activity.verb_deleted": "удалил",
+  "activity.verb_moved": "переместил",
+  "activity.verb_restored": "восстановил",
+  "activity.verb_shared": "поделился",
+  "activity.verb_unshared": "отозвал ссылку на",
+  "activity.verb_member_added": "добавил участника",
+  "activity.verb_member_removed": "удалил участника",
+  "activity.verb_member_updated": "изменил роль",
+  "activity.verb_workspace_created": "создал пространство",
 };

@@ -8,7 +8,8 @@ import { useI18n } from "./I18nProvider";
 import { PreferencesButton } from "./PreferencesButton";
 import { useWorkspace } from "./WorkspaceProvider";
 import { api, FsUsage } from "../lib/api";
-import { IconFolder, IconLogout, IconSearch, IconUsers, IconWorkspaces } from "./icons";
+import { IconActivity, IconClose, IconFolder, IconLogout, IconSearch, IconUsers, IconWorkspaces } from "./icons";
+import { ActivityFeed } from "./ActivityFeed";
 
 export type Me = { sub?: string; name?: string; is_admin?: number };
 
@@ -35,6 +36,7 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
   const [me, setMe] = useState<Me | null>(null);
   const [usage, setUsage] = useState<FsUsage | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Квотата е на потребител, не на workspace, но се преизчислява при смяна на
@@ -106,6 +108,16 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
           </label>
         ) : null}
         <PreferencesButton />
+        <button
+          type="button"
+          className={`icon-btn${activityOpen ? " active" : ""}`}
+          title={t("activity.title")}
+          aria-label={t("activity.title")}
+          aria-pressed={activityOpen}
+          onClick={() => setActivityOpen((v) => !v)}
+        >
+          <IconActivity />
+        </button>
         <div className="menu-wrap" ref={menuRef}>
           <button
             type="button"
@@ -159,7 +171,30 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
         </div>
       </nav>
 
-      <div className="content">{children}</div>
+      <div className="content">
+        {children}
+        {activityOpen ? (
+          <aside className="activity-pane" aria-label={t("activity.title")}>
+            <div className="activity-bar">
+              <span className="label">{t("activity.title")}</span>
+              <span className="grow" />
+              <button
+                type="button"
+                className="icon-btn"
+                title={t("common.close")}
+                aria-label={t("common.close")}
+                onClick={() => setActivityOpen(false)}
+              >
+                <IconClose />
+              </button>
+            </div>
+            <p className="muted small">{t("activity.hint")}</p>
+            {/* key={wsId}: смяната на пространството трябва да презареди лентата,
+                а не да остави действията на предишното. */}
+            <ActivityFeed key={wsId} />
+          </aside>
+        ) : null}
+      </div>
     </div>
   );
 }

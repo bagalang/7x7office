@@ -253,4 +253,30 @@ export const bg: Record<string, string> = {
   "share.error": "Линкът не може да се отвори.",
   "share.expires": "Валиден до {date}.",
   "share.quota": "Остават {left} сваляния.",
+
+  // --- Фаза 3: activity feed ---
+  "nav.activity": "Активност",
+  "activity.title": "Активност в пространството",
+  "activity.hint": "Последните действия на екипа: кой какво е създал, променил, изтрил или споделил.",
+  "activity.empty": "Още няма действия.",
+  "activity.system": "Система",
+  "activity.moved_from": "от {from}",
+  "activity.member": "{email}",
+  "activity.history": "История",
+  "activity.history_title": "История на {name}",
+
+  // „{actor} <verb> <path>“ — verb-овете са кратки глаголи в 3 л. ед. ч.
+  // (кой какво е направил), за да се чете като ред от дневник, а не като
+  // етикет. Машинният ключ идва от `tree/activity_kinds.baga`.
+  "activity.verb_created": "създаде",
+  "activity.verb_updated": "обнови",
+  "activity.verb_deleted": "изтри",
+  "activity.verb_moved": "премести",
+  "activity.verb_restored": "възстанови",
+  "activity.verb_shared": "сподели",
+  "activity.verb_unshared": "отне линка към",
+  "activity.verb_member_added": "добави член",
+  "activity.verb_member_removed": "премахна член",
+  "activity.verb_member_updated": "смени ролята на",
+  "activity.verb_workspace_created": "създаде пространството",
 };

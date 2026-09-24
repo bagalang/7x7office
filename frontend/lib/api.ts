@@ -68,7 +68,12 @@ async function readBody(res: Response): Promise<unknown> {
 // във всеки извикващ: иначе рано или късно някой `api.get("/v1/fs/...")`
 // остава без скоуп и чете личния workspace, докато UI-ът показва екипен.
 function scoped(path: string): string {
-  if (path.startsWith("/v1/fs/") || path.startsWith("/v1/doc/") || path.startsWith("/v1/search")) {
+  if (
+    path.startsWith("/v1/fs/") ||
+    path.startsWith("/v1/doc/") ||
+    path.startsWith("/v1/search") ||
+    path.startsWith("/v1/activity")
+  ) {
     return withWs(path);
   }
   return path;
@@ -519,4 +524,45 @@ export async function shareUpload(
     const data = await readBody(res);
     throw new ApiError(res.status, detailOf(data, res.statusText));
   }
+}
+
+// --- activity feed (фаза 3) ---
+// Append-only одит на пространството. `verb` е машинен низ (created/updated/…),
+// а преводът е на фронтенда по ключ `activity.verb_*` — така нов език не пипа
+// базата, а стари редове не „изчезват" при нов превод. `at` е ISO, изчислен
+// на сървъра (клиентът не бива да гадае часовата зона на записа).
+export type ActivityItem = {
+  id: number;
+  workspace_id: number;
+  actor_id: number;
+  actor_email: string;
+  actor_name: string;
+  verb: string;
+  node_id: number;
+  path: string;
+  meta?: unknown;
+  ts: number;
+  at?: string;
+};
+
+export type ActivityList = {
+  workspace_id: number;
+  scope: "workspace" | "path" | "actor";
+  limit: number;
+  path: string;
+  actor_id: number;
+  items: ActivityItem[];
+  count: number;
+};
+
+// `path` филтрира към възел и поддървото му (панелът „История" на файл);
+// `actor_id` — „какво е правил Иван". Двете са взаимно изключващи се в API-то
+// (пътят печели), затова подаваме само едното.
+export async function listActivity(opts: { path?: string; actorId?: number; limit?: number } = {}): Promise<ActivityList> {
+  const parts: string[] = [];
+  if (opts.limit) parts.push(`limit=${opts.limit}`);
+  if (opts.path) parts.push(`path=${qpath(opts.path)}`);
+  if (opts.actorId && opts.actorId > 0) parts.push(`actor_id=${opts.actorId}`);
+  const q = parts.length > 0 ? `?${parts.join("&")}` : "";
+  return request<ActivityList>(`/v1/activity${q}`, "GET");
 }

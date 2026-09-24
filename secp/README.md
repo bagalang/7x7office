@@ -6,9 +6,9 @@
 Модулен монолит по шаблона `apps/*` от [BASE.md](../../BASE.md):
 `fmrbaga → httpdbaga · jwtbaga · ormbaga → pgbaga (Postgres) или boilaDB`.
 
-## Статус: Фаза 2 — workspaces + роли (почти готова)
+## Статус: Фаза 3 — споделяне (линкове) + activity feed; Фаза 2 — готова
 
-- миграции: `idm_users`, `idm_sessions`, `idm_resets`, `idm_workspaces`, `idm_workspace_members`, `tree_*`, `ops_jobs` (Postgres + boila двойни сетове)
+- миграции: `idm_users`, `idm_sessions`, `idm_resets`, `idm_workspaces`, `idm_workspace_members`, `tree_*`, `tree_acl`, `share_links`, `activity`, `ops_jobs` (Postgres + boila двойни сетове)
 - вход: `POST /v1/auth/login` (JSON **или** форма) → JWT + HttpOnly cookie
 - забравена парола: `POST /v1/auth/forgot` + `POST /v1/auth/reset` (токен с TTL, еднократен; писмо през scheduler-а)
 - потребители (админ): `GET/POST /v1/users`; welcome писмо при създаване
@@ -19,12 +19,25 @@
   и `/v1/search` приемат `?workspace_id=`; без него → личното пространство. Достъпът се
   резолвва през ролята (`tree/auth.baga`, нива read(1)/write(2)). Старите възли се
   връзват към личното пространство на собственика при boot (`tree/backfill.baga`).
-  Изтриване на пространство маха цялото дърво — възли, версии, текст и blob-ове
-  (`tree/ws_cleanup.baga`).
+  Изтриване на пространство маха цялото дърво — възли, версии, текст, blob-ове и
+  одита (`tree/ws_cleanup.baga`).
+- **ACL по възел**: `GET/POST/DELETE /v1/fs/acl` — изрични права за потребител/роля
+  върху път, с наследяване към поддървото; най-специфичният ред печели
+  (`tree/acl_roles.baga` — чист модул, тестван в `tests/acl_roles_test.baga`).
+- **публични линкове**: `GET/POST/DELETE /v1/fs/share` (само owner/admin) + публично
+  (без Bearer) `GET /s/{token}`, `POST /s/{token}/unlock` (парола → краткотраен JWT),
+  `GET /s/{token}/view|download`, `PUT /s/{token}/upload`. Пази се само хешът на
+  токена и на паролата (PBKDF2); срок, таван на свалянията, изтрит възел/пространство
+  отнема линковете (`tree/share_roles.baga` — чист модул в `tests/share_roles_test.baga`).
+- **activity feed**: `GET /v1/activity?limit=&path=&actor_id=` — append-only одит на
+  пространството (кой какво е създал/променил/изтрил/споделил). Записва се от самите
+  действия; `ts` е epoch секунди за PG/boila еднакво, `path` е денормализиран
+  (`tree/activity_kinds.baga` — чист модул в `tests/activity_kinds_test.baga`).
 - избор на пространство в UI (горна лента); при роля `viewer` действията за запис са скрити
 - `POST /v1/auth/logout`, `GET /v1/me` (bearer)
 - системни: `/health`, `/ready`, `/v1/meta`, `/openapi.json`, `/metrics`
-- UI (tplbaga, SSR): `GET /login`, `GET /`
+- UI (Next): `/login`, `/` (файлове), `/search`, `/workspaces`, `/users`, `/edit`,
+  `/share/<token>`; панели „Споделяне" (хора + линкове), „Версии" и „История" (activity)
 - seed на админ при първо стартиране (`SECP_ADMIN_EMAIL` + `SECP_ADMIN_PASSWORD`)
 
 ## Структура
@@ -55,6 +68,16 @@ secp/
     text.baga           текстов индекс; search.baga/search_actions.baga — търсене
     backfill.baga       boot: стари възли → личното пространство на собственика
     ws_cleanup.baga     триене на пространство маха дървото и blob-овете
+    acl_roles.baga      права по възел: наследяване, най-специфичен печели (чист)
+    acl_model.baga      tree_acl: CRUD + изчисляване на ефективно ниво
+    acl_actions.baga    GET/POST/DELETE /v1/fs/acl
+    share_roles.baga    линкове: поддърво, срок, таван, PBKDF2 парола (чист)
+    share_model.baga    share_links: insert/find/revoke/GC
+    share_actions.baga  owner API: GET/POST/DELETE /v1/fs/share
+    share_open.baga     публичен API: /s/{token} (без Bearer)
+    activity_kinds.baga  видове действия + тавани/странициране (чист)
+    activity_model.baga  activity: append-only запис/списък/чистене
+    activity_actions.baga GET /v1/activity (per workspace/path/actor)
     actions.baga docs.baga   API заяви (fs/* и doc/*)
   system/scheduler.baga фонови задачи (ops_jobs): extract-text, mail-send
   system/mail_jobs.baga mail-send: разчита payload и праща

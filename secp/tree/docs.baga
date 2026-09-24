@@ -116,7 +116,7 @@ fn act_doc_load(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), o)
 }
 
-fn act_doc_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_doc_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 2, path)?
     if t.ok == 0 {

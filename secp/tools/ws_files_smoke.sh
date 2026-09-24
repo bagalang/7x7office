@@ -408,14 +408,96 @@ DTOK=$(curl -s -X POST -H "Authorization: Bearer $ALICE" -H 'Content-Type: appli
 curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/fs/file?path=/public.txt&workspace_id=$AWS"
 [[ "$(code "$B/s/$DTOK")" == "404" ]] && pass "изтрит възел убива линка" || fail "линкът към изтрит възел работи"
 
+echo "=== activity feed (Фаза 3) ==="
+# Одитът се пише от самите действия. Проверява се:
+#   - че всяко действие оставя ред (иначе панелът „История" е празен);
+#   - че филтърът по път НЕ хваща съсед с общ префикс (/drop ≠ /dropx);
+#   - че редът пази името/имейла на актьора (иначе feed-ът е „#7 направи X");
+#   - че чужд (не-член) не чете feed-а (404, а не 403 — не издава, че съществува);
+#   - че триенето на пространство изчиства и одита (няма ред към мъртъв ws).
+#
+# feed-ът има и „системен" актьор (0), но тук не се тества — всички действия
+# са на потребител.
+AF=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/activity?workspace_id=$AWS&limit=200")
+AFC=$(echo "$AF" | jqv "['count']")
+[[ "$AFC" -gt 0 ]] && pass "feed-ът не е празен ($AFC действия)" || fail "feed-ът е празен"
+[[ "$(echo "$AF" | jqv "['scope']")" == "workspace" ]] && pass "без филтър обхватът е цялото пространство" \
+  || fail "scope=$(echo "$AF" | jqv "['scope']")"
+
+# видът на действието се разпознава: mkdir → created, изтриването → deleted
+# (пътят /public.txt вече е изтрит точно преди този блок).
+echo "$AF" | python3 -c "
+import sys,json
+items=json.load(sys.stdin)['items']
+verbs={i['verb'] for i in items}
+paths={i['path'] for i in items}
+need={'created','deleted'}
+miss=need-verbs
+if miss: print('missing verbs:',miss); sys.exit(1)
+if '/public.txt' not in paths: print('no /public.txt in paths'); sys.exit(2)
+" 2>/dev/null && pass "created/deleted са записани" || fail "действията не са записани"
+
+# актьорът се разпознава по имейл/име — иначе feed-ът е безсмислен.
+AWHO=$(echo "$AF" | python3 -c "
+import sys,json
+for i in json.load(sys.stdin)['items']:
+    if i['verb']=='created' and i['path']=='/drop/d.txt':
+        print(i['actor_email']); break
+" 2>/dev/null)
+[[ "$AWHO" == "alice@secp.local" ]] && pass "актьорът е alice (имейл в реда)" \
+  || fail "actor_email='$AWHO' (очаквах alice@secp.local)"
+
+# Филтър по път: /drop трябва да хване /drop и поддървото, но НЕ /dropx.
+curl -s -o /dev/null -X POST -H "Authorization: Bearer $ALICE" \
+  "$B/v1/fs/mkdir?path=/dropx&workspace_id=$AWS"
+PF=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/activity?workspace_id=$AWS&path=/drop&limit=200")
+[[ "$(echo "$PF" | jqv "['scope']")" == "path" ]] && pass "филтърът по път се отчита" \
+  || fail "scope=$(echo "$PF" | jqv "['scope']")"
+echo "$PF" | python3 -c "
+import sys,json
+items=json.load(sys.stdin)['items']
+bad=[i['path'] for i in items if i['path']=='/dropx']
+if bad: print('prefix leak:',bad); sys.exit(1)
+if not any(i['path']=='/drop' or i['path'].startswith('/drop/') for i in items):
+    print('no /drop rows'); sys.exit(2)
+" 2>/dev/null && pass "пътят хваща поддървото, но не съседа /dropx" \
+  || fail "филтърът по път протече към /dropx"
+
+# Член на пространството чете feed-а (bob е editor), но не-член — не.
+[[ "$(code -H "Authorization: Bearer $BOB" "$B/v1/activity?workspace_id=$AWS")" == "200" ]] \
+  && pass "членът чете feed-а" || fail "членът не чете feed-а"
+CHARLIE=$(curl -s -X POST "$B/v1/users" -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"email":"charlie@secp.local","password":"pass12345","name":"charlie"}' >/dev/null; \
+  login charlie@secp.local pass12345)
+[[ "$(code -H "Authorization: Bearer $CHARLIE" "$B/v1/activity?workspace_id=$AWS")" == "404" ]] \
+  && pass "не-член не чете feed-а (404)" || fail "не-член прочете feed-а"
+
+# Без вход изобщо → 401 (лентата не е публична).
+[[ "$(code "$B/v1/activity?workspace_id=$AWS")" == "401" ]] && pass "без вход → 401" \
+  || fail "feed-ът е публичен"
+
+# Действията по членството влизат в одита (member_updated при ролята на bob).
+curl -s -X PATCH -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
+  -d '{"role":"editor"}' "$B/v1/workspaces/members?workspace_id=$AWS&member_id=$MID" >/dev/null
+MF=$(curl -s -H "Authorization: Bearer $ALICE" "$B/v1/activity?workspace_id=$AWS&limit=200")
+echo "$MF" | python3 -c "
+import sys,json
+items=json.load(sys.stdin)['items']
+m=[i for i in items if i['verb']=='member_updated']
+if not m: print('no member_updated'); sys.exit(1)
+if not all(i.get('meta') for i in m): print('meta missing'); sys.exit(2)
+" 2>/dev/null && pass "смяната на роля влиза в одита с meta" \
+  || fail "действията по членството не влизат в одита"
+
 echo "=== триене на пространство изчиства дървото ==="
 curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $ALICE" "$B/v1/workspaces?workspace_id=$AWS"
 A=$($PSQL -c "SELECT COUNT(*) FROM tree_acl WHERE workspace_id=$AWS")
 N=$($PSQL -c "SELECT COUNT(*) FROM tree_nodes WHERE workspace_id=$AWS")
 V=$($PSQL -c "SELECT COUNT(*) FROM tree_versions WHERE workspace_id=$AWS")
 T=$($PSQL -c "SELECT COUNT(*) FROM tree_text WHERE workspace_id=$AWS")
-[[ "$A$N$V$T" == "0000" ]] && pass "acl/възли/версии/текст = 0" \
-  || fail "остатъци: acl=$A nodes=$N versions=$V text=$T"
+ACT=$($PSQL -c "SELECT COUNT(*) FROM activity WHERE workspace_id=$AWS")
+[[ "$A$N$V$T$ACT" == "00000" ]] && pass "acl/възли/версии/текст/одит = 0" \
+  || fail "остатъци: acl=$A nodes=$N versions=$V text=$T activity=$ACT"
 
 echo "=== backfill: стари възли (ws=0) → личното на собственика ==="
 stop

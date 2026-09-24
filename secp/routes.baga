@@ -12,6 +12,7 @@ import "tree/docs.baga"
 import "tree/versions_files.baga"
 import "tree/search_actions.baga"
 import "tree/acl_actions.baga"
+import "tree/activity_actions.baga"
 import "tree/share_actions.baga"
 import "tree/share_open.baga"
 import "ui/actions.baga"
@@ -74,6 +75,7 @@ fn RID_SHARE_UNLOCK() -> i64 { return 59 }
 fn RID_SHARE_VIEW() -> i64 { return 60 }
 fn RID_SHARE_DOWNLOAD() -> i64 { return 61 }
 fn RID_SHARE_UPLOAD() -> i64 { return 62 }
+fn RID_ACTIVITY() -> i64 { return 63 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -124,6 +126,8 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/fs/acl", RID_FS_ACL_LIST(), "", "fs", 0, "", "AclList", "200", "path")
     app = fmr_route_meta(app, "POST", "/v1/fs/acl", RID_FS_ACL_SET(), "", "fs", 0, "AclSet", "AclRow", "200", "workspace_id")
     app = fmr_route_meta(app, "DELETE", "/v1/fs/acl", RID_FS_ACL_DELETE(), "", "fs", 0, "", "-", "204", "acl_id")
+    // Фаза 3: activity feed (само четене; пишат го самите действия).
+    app = fmr_route_meta(app, "GET", "/v1/activity", RID_ACTIVITY(), "", "fs", 0, "", "ActivityList", "200", "limit,path,actor_id")
     // Фаза 3: собственик управлява линковете; публичните /s/* са без Bearer.
     app = fmr_route_meta(app, "GET", "/v1/fs/share", RID_FS_SHARE_LIST(), "", "fs", 0, "", "ShareList", "200", "path")
     app = fmr_route_meta(app, "POST", "/v1/fs/share", RID_FS_SHARE_CREATE(), "", "fs", 0, "ShareCreate", "ShareLink", "201", "workspace_id")
@@ -195,6 +199,7 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_FS_ACL_LIST() { return act_fs_acl_list(ctx, db)? }
     if id == RID_FS_ACL_SET() { return act_fs_acl_set(ctx, db)? }
     if id == RID_FS_ACL_DELETE() { return act_fs_acl_delete(ctx, db)? }
+    if id == RID_ACTIVITY() { return act_activity_list(ctx, db)? }
     if id == RID_FS_SHARE_LIST() { return act_fs_share_list(ctx, db)? }
     if id == RID_FS_SHARE_CREATE() { return act_fs_share_create(ctx, db)? }
     if id == RID_FS_SHARE_REVOKE() { return act_fs_share_revoke(ctx, db)? }

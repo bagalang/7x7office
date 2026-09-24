@@ -8,7 +8,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
-import { IconClose, IconDownload, IconHistory, IconPencil, IconShare, IconTrash } from "./icons";
+import { IconActivity, IconClose, IconDownload, IconHistory, IconPencil, IconShare, IconTrash } from "./icons";
+import { ActivityFeed } from "./ActivityFeed";
 import {
   FsNode,
   FsVersion,
@@ -53,7 +54,17 @@ export function FilePreview({
   const [text, setText] = useState("");
   const [img, setImg] = useState("");
   const [err, setErr] = useState("");
+  // Историята е скрита по подразбиране: тя е контекст, не основното действие
+  // (преглед). Отваря се с един бутон и се презарежда при смяна на файла —
+  // затова е state тук, а не отделен диалог.
+  const [showHistory, setShowHistory] = useState(false);
   const editable = /\.(docx|odt|txt|md|xlsx|ods|csv)$/i.test(node.name);
+
+  // Нов файл → историята се затваря. Иначе редът „кой промени файла" остава
+  // от предишния файл, докато панелът вече показва друг.
+  useEffect(() => {
+    setShowHistory(false);
+  }, [node.path]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -133,6 +144,15 @@ export function FilePreview({
           </div>
         </dl>
 
+        {/* История на възела и поддървото му: същата лента като в горния бар,
+            но стеснена до този път. Показва се само при поискване. */}
+        {showHistory ? (
+          <div className="preview-history">
+            <p className="label">{t("activity.history_title", { name: node.name })}</p>
+            <ActivityFeed path={node.path} limit={30} compact />
+          </div>
+        ) : null}
+
         <div className="preview-actions">
           {editable && writable ? (
             <button
@@ -152,6 +172,14 @@ export function FilePreview({
           </button>
           <button type="button" className="btn ghost" onClick={onShowVersions}>
             <IconHistory width={16} height={16} /> {t("preview.versions")}
+          </button>
+          <button
+            type="button"
+            className={`btn ghost${showHistory ? " active" : ""}`}
+            aria-pressed={showHistory}
+            onClick={() => setShowHistory((v) => !v)}
+          >
+            <IconActivity width={16} height={16} /> {t("activity.history")}
           </button>
           {writable ? (
             <>

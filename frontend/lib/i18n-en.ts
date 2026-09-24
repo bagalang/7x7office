@@ -253,4 +253,27 @@ export const en: Record<string, string> = {
   "share.error": "The link cannot be opened.",
   "share.expires": "Valid until {date}.",
   "share.quota": "{left} downloads left.",
+
+  // --- Phase 3: activity feed ---
+  "nav.activity": "Activity",
+  "activity.title": "Workspace activity",
+  "activity.hint": "The team's latest actions: who created, changed, deleted or shared what.",
+  "activity.empty": "No activity yet.",
+  "activity.system": "System",
+  "activity.moved_from": "from {from}",
+  "activity.member": "{email}",
+  "activity.history": "History",
+  "activity.history_title": "History of {name}",
+
+  "activity.verb_created": "created",
+  "activity.verb_updated": "updated",
+  "activity.verb_deleted": "deleted",
+  "activity.verb_moved": "moved",
+  "activity.verb_restored": "restored",
+  "activity.verb_shared": "shared",
+  "activity.verb_unshared": "revoked the link to",
+  "activity.verb_member_added": "added member",
+  "activity.verb_member_removed": "removed member",
+  "activity.verb_member_updated": "changed the role of",
+  "activity.verb_workspace_created": "created the workspace",
 };

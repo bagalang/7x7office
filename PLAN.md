@@ -139,8 +139,29 @@
     сваляне, качване. `next.config.ts` проксира и `/s/*` към API-то.
   - Интеграционен тест: `tools/ws_files_smoke.sh` (34 проверки за линкове: поддърво,
     `../`, нива, парола, изолация на `pass_token`, таван, отнемане, изтрит възел).
+- [x] Activity feed: таблица `activity` (actor, verb, node, ts — chronobaga), изглед per node/user (2026-09-24)
+  - `tree/activity_kinds.baga` — ЧИСТ модул: verb-ове (created/updated/deleted/moved/
+    restored/shared/unshared/member_added/member_removed/member_updated/workspace_created),
+    валидация, класификация „променя състоянието", таван на `meta` (300), странициране
+    (`activity_limit_clamp`). Покрит от `tests/activity_kinds_test.baga` (в CI).
+  - `activity` — append-only одит. `ts` и тук е epoch СЕКУНДИ (BIGINT) за PG и boilaDB
+    еднакво; `path` е денормализиран, за да оцелее историята след изтрит/преместен възел.
+    Няма FK на boila — чисти се ръчно с пространството (`tree_activity_purge_ws`).
+  - `tree/activity_model.baga` — запис/списък. `LEFT JOIN idm_users` в самата заявка,
+    за да не прави списък от 50 реда 50 заявки за имейл. Одитът е **best-effort**:
+    провал в лога не връща каченото/издаденото назад.
+  - `GET /v1/activity?limit=&path=&actor_id=` — иска ниво read (1) в пространството:
+    feed-ът показва пътища и имейли на колеги. Филтрите са взаимно изключващи се (път
+    печели пред актьор) — v1 покрива „история на файл" и „какво е правил Иван".
+  - Записва се там, където действието се случва: `store.baga` (created/updated),
+    `actions.baga` (mkdir/delete/move), `versions_files.baga` (restore),
+    `share_actions.baga` (shared/unshared), `ws_members.baga` (member_*),
+    `ws_actions.baga` (workspace_created).
+  - UI: раздел „Активност" в `AppShell` (лента на пространството) + бутон „История"
+    в `FileBrowser` за панела на файл. 4 езика. `activity.verb_*` ключове — добавянето
+    на език не пипа базата, стари редове не „изчезват" при нов превод.
+
 - [ ] „Cells" = споделен workspace с членове и роли (по `idm/share` модела)
-- [ ] Activity feed: таблица `activity` (actor, verb, node, ts — chronobaga), изглед per node/user
 - [ ] wsbaga gateway: канали per workspace; събития node.created/updated/deleted
 - [ ] chatbaga интеграция: чат стая per cell
 - [ ] Нотификации в UI (badge през WS)

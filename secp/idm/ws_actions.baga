@@ -11,6 +11,8 @@
 import "ws_model.baga"
 import "ws_roles.baga"
 import "user_actions.baga"
+import "../tree/activity_kinds.baga"
+import "../tree/activity_model.baga"
 import "../tree/ws_cleanup.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -117,7 +119,7 @@ fn act_ws_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(d, o)
 }
 
-fn act_ws_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_ws_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let c = idm_caller(ctx, db)?
     if c.ok == 0 {
         return c.out
@@ -182,7 +184,10 @@ fn act_ws_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_exec(mem), 500, orm_err_exec(mem))
     }
     d = orm_db_exec(mem)
-    return act_created(d, ws_to_json_role(q, 0, ws_role_owner()))
+    // Одит: създадено пространство. Актьорът е създателят; логът влиза вече
+    // в новото пространство, за да го вижда екипът от първия ден.
+    let logged = tree_activity_log(d, ws_id, c.id, activity_verb_workspace_created(), 0, "/", "")?
+    return act_created(logged.db, ws_to_json_role(q, 0, ws_role_owner()))
 }
 
 fn act_ws_update(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
