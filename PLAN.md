@@ -161,7 +161,7 @@
 
 **Зависимости:** officebaga, ormbaga, fmrbaga
 
-### 6.3 Поща (smtpbaga) ⏳
+### 6.3 Поща (smtpbaga) ✅ (2026-09-24)
 
 - [x] **Нов пакет `smtpbaga`** — SMTP клиент върху `std/net` (TCP + TLS 1.3):
       EHLO, STARTTLS (RFC 3207), AUTH LOGIN, multipart/alternative, RFC 5322
