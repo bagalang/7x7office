@@ -1,0 +1,297 @@
+// tree/dav_lock.baga — изключителни WebDAV заключвания (клас 2).
+//
+// Токенът е тайната. Който го прати в `If` или `Lock-Token`, минава.
+// Изтича най-късно след едно денонощие (dav_timeout_s).
+
+import "dav_scope.baga"
+import "davbaga/dav.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "httpdbaga/http.baga"
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+
+fn dav_lock_table() -> str {
+    return "dav_locks"
+}
+
+fn dav_lock_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn dav_now() -> i64 !Time {
+    return time_now_ms() / 1000
+}
+
+fn dav_mint_token() -> str !Random {
+    let b = random_bytes(16)?
+    let mut hex = ""
+    let mut i: i64 = 0
+    while i < vec_len(b) {
+        hex = concat(hex, dav_hex(vec_get(b, i)))
+        i = i + 1
+    }
+    return concat("opaquelocktoken:", hex)
+}
+
+fn dav_lock_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM dav_locks")?
+}
+
+fn dav_lock_drop_expired(db: OrmDb, ws: i64, now: i64) -> OrmDb !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, int_to_str(now))
+    let e = orm_exec_params_str(db, "DELETE FROM dav_locks WHERE workspace_id = $1 AND expires_at <= $2", vals)?
+    return orm_db_exec(e)
+}
+
+fn dav_lock_list(db: OrmDb, ws: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, path, token, depth, expires_at, owner_xml FROM dav_locks WHERE workspace_id = $1"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn dav_submitted(ctx: FmrCtx, token: str) -> i64 {
+    if dav_if_has_token(fmr_header(ctx, "If"), token) == 1 {
+        return 1
+    }
+    if dav_if_has_token(fmr_header(ctx, "Lock-Token"), token) == 1 {
+        return 1
+    }
+    return 0
+}
+
+// 1 = пътят е заключен и заявката не носи токена.
+fn dav_blocked(ctx: FmrCtx, q: OrmQuery, path: str) -> i64 {
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let lp = orm_cell_by(q, i, "path")
+        let depth = orm_cell_by_i64(q, i, "depth")
+        if dav_lock_covers(lp, depth, path) == 1 {
+            if dav_submitted(ctx, orm_cell_by(q, i, "token")) == 0 {
+                return 1
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+struct DavGate {
+    ok: i64,
+    db: OrmDb,
+    out: FmrOut
+}
+
+fn dav_guard(ctx: FmrCtx, db: OrmDb, ws: i64, path: str) -> DavGate !IO !Net !Time {
+    let now = dav_now()
+    let d0 = dav_lock_drop_expired(db, ws, now)?
+    let q = dav_lock_list(d0, ws)?
+    if orm_ok_q(q) == 0 {
+        return DavGate { ok: 0, db: orm_db_q(q), out: act_err(orm_db_q(q), 500, orm_err_q(q)) }
+    }
+    if dav_blocked(ctx, q, path) == 1 {
+        return DavGate { ok: 0, db: orm_db_q(q), out: dav_plain(orm_db_q(q), 423, "locked") }
+    }
+    return DavGate { ok: 1, db: orm_db_q(q), out: fmr_out(http_response(200, ""), orm_db_q(q)) }
+}
+
+fn dav_lock_insert(db: OrmDb, ws: i64, path: str, token: str, owner: i64, depth: i64, expires: i64, who: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "workspace_id")
+    vec_push(cols, "path")
+    vec_push(cols, "token")
+    vec_push(cols, "owner_id")
+    vec_push(cols, "depth")
+    vec_push(cols, "expires_at")
+    vec_push(cols, "owner_xml")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, path)
+    vec_push(vals, token)
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, int_to_str(depth))
+    vec_push(vals, int_to_str(expires))
+    vec_push(vals, who)
+    if dav_lock_boila()? == 1 {
+        let c = dav_lock_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let cols2 = vec_new()
+        vec_push(cols2, "id")
+        let mut vals2 = vec_new()
+        vec_push(vals2, int_to_str(orm_count_n(c) + 1))
+        let mut i: i64 = 0
+        while i < vec_len(cols) {
+            vec_push(cols2, vec_get(cols, i))
+            vec_push(vals2, vec_get(vals, i))
+            i = i + 1
+        }
+        return orm_insert_strs(orm_db_c(c), dav_lock_table(), cols2, vals2)?
+    }
+    return orm_insert_strs(db, dav_lock_table(), cols, vals)?
+}
+
+fn dav_lock_touch(db: OrmDb, id: i64, expires: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "expires_at")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(expires))
+    return orm_update_str(db, dav_lock_table(), cols, vals, "id", int_to_str(id))?
+}
+
+fn dav_lock_by_token(db: OrmDb, token: str) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, workspace_id, path, token, owner_id, depth, expires_at, owner_xml FROM dav_locks WHERE token = $1"
+    let vals = vec_new()
+    vec_push(vals, token)
+    return orm_query_params_str(db, sql, vals)?
+}
+
+fn dav_lock_delete_id(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_exec_params_str(db, "DELETE FROM dav_locks WHERE id = $1", vals)?
+}
+
+fn dav_lock_purge_ws(db: OrmDb, ws: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_exec_params_str(db, "DELETE FROM dav_locks WHERE workspace_id = $1", vals)?
+}
+
+fn dav_lock_reply(db: OrmDb, href: str, token: str, seconds: i64, owner: str, depth_inf: i64) -> FmrOut {
+    let mut r = http_response(200, dav_lock_xml(href, token, seconds, owner, depth_inf))
+    r = http_set_header(r, "Content-Type", "application/xml; charset=utf-8")
+    r = http_set_header(r, "Lock-Token", concat("<", concat(token, ">")))
+    return fmr_out(r, db)
+}
+
+fn dav_lock_held(q: OrmQuery, path: str) -> i64 {
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if dav_lock_covers(orm_cell_by(q, i, "path"), orm_cell_by_i64(q, i, "depth"), path) == 1 {
+            if orm_cell_by(q, i, "path") == path {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn act_dav_lock(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let body = fmr_body(ctx)
+    if dav_wants_shared(body) == 1 {
+        return dav_plain(t.out.db, 412, "shared locks are not supported")
+    }
+    let seconds = dav_timeout_s(fmr_header(ctx, "Timeout"))
+    let now = dav_now()
+    let d0 = dav_lock_drop_expired(t.out.db, t.ws, now)?
+    let q = dav_lock_list(d0, t.ws)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if dav_blocked(ctx, q, t.path) == 1 {
+        return dav_plain(orm_db_q(q), 423, "locked")
+    }
+    let held = dav_lock_held(q, t.path)
+    let href = dav_href(t.ws, t.path)
+    let mut depth_inf: i64 = 0
+    if dav_depth(fmr_header(ctx, "Depth")) < 0 {
+        depth_inf = 1
+    }
+    if held >= 0 {
+        let id = orm_cell_by_i64(q, held, "id")
+        let token = orm_cell_by(q, held, "token")
+        let who = orm_cell_by(q, held, "owner_xml")
+        let up = dav_lock_touch(orm_db_q(q), id, now + seconds)?
+        if orm_ok(up) == 0 {
+            return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+        }
+        let inf: i64 = 0
+        if orm_cell_by_i64(q, held, "depth") < 0 {
+            return dav_lock_reply(orm_db_exec(up), href, token, seconds, who, 1)
+        }
+        return dav_lock_reply(orm_db_exec(up), href, token, seconds, who, inf)
+    }
+    if str_trim(body) == "" {
+        return dav_plain(orm_db_q(q), 400, "lock body required")
+    }
+    let token = dav_mint_token()?
+    let mut depth: i64 = 0
+    if depth_inf == 1 {
+        depth = 0 - 1
+    }
+    let who = t.role
+    let ins = dav_lock_insert(orm_db_q(q), t.ws, t.path, token, t.owner, depth, now + seconds, who)?
+    if orm_ok(ins) == 0 {
+        return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+    }
+    return dav_lock_reply(orm_db_exec(ins), href, token, seconds, who, depth_inf)
+}
+
+fn act_dav_unlock(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let raw = fmr_header(ctx, "Lock-Token")
+    if str_trim(raw) == "" {
+        return dav_plain(t.out.db, 400, "Lock-Token required")
+    }
+    let q = dav_lock_list(t.out.db, t.ws)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let token = orm_cell_by(q, i, "token")
+        if dav_if_has_token(raw, token) == 1 {
+            if orm_cell_by(q, i, "path") == t.path {
+                let del = dav_lock_delete_id(orm_db_q(q), orm_cell_by_i64(q, i, "id"))?
+                if orm_ok(del) == 0 {
+                    return act_err(orm_db_exec(del), 500, orm_err_exec(del))
+                }
+                return dav_plain(orm_db_exec(del), 204, "")
+            }
+        }
+        i = i + 1
+    }
+    return dav_plain(orm_db_q(q), 409, "lock token does not match")
+}
+
+fn act_dav_proppatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let t = dav_enter(ctx, db, 2)?
+    if t.ok == 0 {
+        return t.out
+    }
+    let g = dav_guard(ctx, t.out.db, t.ws, t.path)?
+    if g.ok == 0 {
+        return g.out
+    }
+    let stats = dav_proppatch_stats(fmr_body(ctx))
+    if stats == "" {
+        return dav_plain(g.db, 400, "no properties")
+    }
+    let href = xml_escape_text(dav_href_escape(dav_href(t.ws, t.path)))
+    let mut inner = "<D:response><D:href>"
+    inner = concat(inner, href)
+    inner = concat(inner, "</D:href>")
+    inner = concat(inner, stats)
+    inner = concat(inner, "</D:response>")
+    return dav_xml(g.db, 207, dav_multistatus(inner))
+}

@@ -2,9 +2,10 @@
 //
 // Адрес: /dav/<workspace id>/<път> . 0 е личното пространство.
 // Клас 1: OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE.
-// LOCK и PROPPATCH отговарят 405 (виж davbaga gaps D1).
+// LOCK/UNLOCK и PROPPATCH са в dav_lock.baga.
 
 import "dav_scope.baga"
+import "dav_lock.baga"
 import "mutate.baga"
 import "store.baga"
 import "model.baga"
@@ -22,36 +23,16 @@ import "ormbaga/orm.baga"
 import "std/bytes/bytes.baga"
 import "std/str/str.baga"
 
-fn dav_plain(db: OrmDb, status: i64, msg: str) -> FmrOut {
-    let mut r = http_response(status, msg)
-    r = http_set_header(r, "Content-Type", "text/plain; charset=utf-8")
-    return fmr_out(r, db)
-}
-
-fn dav_xml(db: OrmDb, status: i64, body: str) -> FmrOut {
-    let mut r = http_response(status, body)
-    r = http_set_header(r, "Content-Type", "application/xml; charset=utf-8")
-    return fmr_out(r, db)
-}
-
 fn dav_allow() -> str {
-    return "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE"
+    return "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE, LOCK, UNLOCK, PROPPATCH"
 }
 
 fn dav_options(db: OrmDb) -> FmrOut {
     let mut r = http_response(200, "")
-    r = http_set_header(r, "DAV", "1")
+    r = http_set_header(r, "DAV", "1, 2")
     r = http_set_header(r, "Allow", dav_allow())
     r = http_set_header(r, "MS-Author-Via", "DAV")
     return fmr_out(r, db)
-}
-
-fn dav_href(ws: i64, path: str) -> str {
-    let base = concat("/dav/", int_to_str(ws))
-    if path == "/" {
-        return concat(base, "/")
-    }
-    return concat(base, path)
 }
 
 fn dav_row_xml(q: OrmQuery, row: i64, ws: i64) -> str {
@@ -61,11 +42,11 @@ fn dav_row_xml(q: OrmQuery, row: i64, ws: i64) -> str {
     if is_dir == 0 {
         mime = tree_mime(path)
     }
-    return dav_response(dav_href(ws, path), tree_name_of(path), is_dir, orm_cell_by_i64(q, row, "size"), mime, orm_cell_by(q, row, "hash"), "")
+    return dav_response(dav_href(ws, path), tree_name_of(path), is_dir, orm_cell_by_i64(q, row, "size"), mime, orm_cell_by(q, row, "hash"), "", "")
 }
 
 fn dav_root_xml(ws: i64) -> str {
-    return dav_response(dav_href(ws, "/"), "workspace", 1, 0, "", "", "")
+    return dav_response(dav_href(ws, "/"), "workspace", 1, 0, "", "", "", "")
 }
 
 fn dav_propfind(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
@@ -169,10 +150,14 @@ fn dav_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if t.ok == 0 {
         return t.out
     }
-    if t.path == "/" {
-        return dav_plain(t.out.db, 400, "cannot overwrite root")
+    let g = dav_guard(ctx, t.out.db, t.ws, t.path)?
+    if g.ok == 0 {
+        return g.out
     }
-    let ex = tree_find(t.out.db, t.ws, t.path)?
+    if t.path == "/" {
+        return dav_plain(g.db, 400, "cannot overwrite root")
+    }
+    let ex = tree_find(g.db, t.ws, t.path)?
     if orm_ok_q(ex) == 0 {
         return act_err(orm_db_q(ex), 500, orm_err_q(ex))
     }
@@ -199,7 +184,11 @@ fn dav_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if t.ok == 0 {
         return t.out
     }
-    return tree_remove(t.out.db, t.ws, t.owner, t.path)?
+    let g = dav_guard(ctx, t.out.db, t.ws, t.path)?
+    if g.ok == 0 {
+        return g.out
+    }
+    return tree_remove(g.db, t.ws, t.owner, t.path)?
 }
 
 fn dav_mkcol(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
@@ -207,13 +196,17 @@ fn dav_mkcol(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if t.ok == 0 {
         return t.out
     }
+    let g = dav_guard(ctx, t.out.db, t.ws, t.path)?
+    if g.ok == 0 {
+        return g.out
+    }
     if t.path == "/" {
-        return dav_plain(t.out.db, 405, "root exists")
+        return dav_plain(g.db, 405, "root exists")
     }
     if bytes_len(http_body_bytes(ctx.req)) > 0 {
-        return dav_plain(t.out.db, 415, "mkcol body")
+        return dav_plain(g.db, 415, "mkcol body")
     }
-    let ex = tree_find(t.out.db, t.ws, t.path)?
+    let ex = tree_find(g.db, t.ws, t.path)?
     if orm_ok_q(ex) == 0 {
         return act_err(orm_db_q(ex), 500, orm_err_q(ex))
     }
@@ -277,8 +270,16 @@ fn dav_copy(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if to == t.path {
         return dav_plain(t.out.db, 403, "same path")
     }
+    let g = dav_guard(ctx, t.out.db, t.ws, t.path)?
+    if g.ok == 0 {
+        return g.out
+    }
+    let g2 = dav_guard(ctx, g.db, t.ws, to)?
+    if g2.ok == 0 {
+        return g2.out
+    }
     let over = dav_overwrite(fmr_header(ctx, "Overwrite"))
-    let dst = tree_find(t.out.db, t.ws, to)?
+    let dst = tree_find(g2.db, t.ws, to)?
     if orm_ok_q(dst) == 0 {
         return act_err(orm_db_q(dst), 500, orm_err_q(dst))
     }
@@ -348,8 +349,16 @@ fn dav_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     if to == "" {
         return dav_plain(t.out.db, 502, "bad destination")
     }
+    let g = dav_guard(ctx, t.out.db, t.ws, t.path)?
+    if g.ok == 0 {
+        return g.out
+    }
+    let g2 = dav_guard(ctx, g.db, t.ws, to)?
+    if g2.ok == 0 {
+        return g2.out
+    }
     let over = dav_overwrite(fmr_header(ctx, "Overwrite"))
-    let dst = tree_find(t.out.db, t.ws, to)?
+    let dst = tree_find(g2.db, t.ws, to)?
     if orm_ok_q(dst) == 0 {
         return act_err(orm_db_q(dst), 500, orm_err_q(dst))
     }
@@ -377,7 +386,7 @@ fn dav_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     return dav_plain(moved.db, code, "")
 }
 
-fn act_dav(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_dav(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let m = fmr_method(ctx)
     if m == "OPTIONS" {
         return dav_options(db)
@@ -405,6 +414,15 @@ fn act_dav(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     }
     if m == "MOVE" {
         return dav_move(ctx, db)?
+    }
+    if m == "LOCK" {
+        return act_dav_lock(ctx, db)?
+    }
+    if m == "UNLOCK" {
+        return act_dav_unlock(ctx, db)?
+    }
+    if m == "PROPPATCH" {
+        return act_dav_proppatch(ctx, db)?
     }
     let mut r = http_response(405, "not implemented")
     r = http_set_header(r, "Allow", dav_allow())

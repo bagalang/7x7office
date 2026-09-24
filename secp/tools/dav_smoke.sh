@@ -81,10 +81,26 @@ CP=$(code -X COPY -H "Destination: $B/dav/0/papers/c.txt" "$B/dav/0/papers/b.txt
 [[ "$CP" == "201" ]] && pass "COPY 201" || fail "COPY $CP"
 [[ "$(curl -s -u "$U" "$B/dav/0/papers/c.txt")" == "hello dav" ]] && pass "копието е същото" || fail "копие"
 
+echo "=== заключване ==="
+LOCKXML='<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>'
+LCODE=$(curl -s -o /tmp/dav_lock.xml -w '%{http_code}' -u "$U" -X LOCK \
+  -H 'Timeout: Second-600' -H 'Content-Type: application/xml' --data "$LOCKXML" \
+  "$B/dav/0/papers/b.txt")
+TOKEN=$(grep -o 'opaquelocktoken:[a-f0-9A-F]*' /tmp/dav_lock.xml | head -1)
+[[ "$LCODE" == "200" && -n "$TOKEN" ]] && pass "LOCK 200 $TOKEN" || fail "LOCK $LCODE"
+[[ "$(code -X PUT --data-binary @/tmp/dav_a.txt "$B/dav/0/papers/b.txt")" == "423" ]] \
+  && pass "PUT без токен → 423" || fail "PUT без токен"
+[[ "$(code -X PUT -H "If: (<$TOKEN>)" --data-binary @/tmp/dav_a.txt "$B/dav/0/papers/b.txt")" == "204" ]] \
+  && pass "PUT с токен → 204" || fail "PUT с токен"
+[[ "$(code -X UNLOCK -H "Lock-Token: <$TOKEN>" "$B/dav/0/papers/b.txt")" == "204" ]] \
+  && pass "UNLOCK 204" || fail "UNLOCK"
+PP='<D:propertyupdate xmlns:D="DAV:"><D:set><D:prop><D:displayname>x</D:displayname></D:prop></D:set></D:propertyupdate>'
+PB=$(curl -s -u "$U" -X PROPPATCH -H 'Content-Type: application/xml' --data "$PP" "$B/dav/0/papers/c.txt")
+echo "$PB" | grep -q '403' && pass "PROPPATCH отказва свойството с 403" || fail "PROPPATCH: $PB"
+
 echo "=== триене и отказ ==="
 [[ "$(code -X DELETE "$B/dav/0/papers")" == "204" ]] && pass "DELETE 204" || fail "DELETE"
 [[ "$(code -X PROPFIND -H 'Depth: 0' "$B/dav/0/papers")" == "404" ]] && pass "изтритата папка е 404" || fail "папката остана"
-[[ "$(code -X LOCK "$B/dav/0/papers/b.txt")" == "405" ]] && pass "LOCK още не е клас 2" || fail "LOCK"
 
 if command -v rclone >/dev/null 2>&1; then
   echo "=== rclone ==="

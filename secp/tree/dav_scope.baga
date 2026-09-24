@@ -142,3 +142,23 @@ fn dav_enter(ctx: FmrCtx, db: OrmDb, need: i64) -> DavIn !IO !Net {
         out: fmr_out(http_response(200, ""), d)
     }
 }
+
+fn dav_plain(db: OrmDb, status: i64, msg: str) -> FmrOut {
+    let mut r = http_response(status, msg)
+    r = http_set_header(r, "Content-Type", "text/plain; charset=utf-8")
+    return fmr_out(r, db)
+}
+
+fn dav_xml(db: OrmDb, status: i64, body: str) -> FmrOut {
+    let mut r = http_response(status, body)
+    r = http_set_header(r, "Content-Type", "application/xml; charset=utf-8")
+    return fmr_out(r, db)
+}
+
+fn dav_href(ws: i64, path: str) -> str {
+    let base = concat("/dav/", int_to_str(ws))
+    if path == "/" {
+        return concat(base, "/")
+    }
+    return concat(base, path)
+}

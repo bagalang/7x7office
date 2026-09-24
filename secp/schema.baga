@@ -283,6 +283,21 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_chat_messages_on_ws_id ON chat_messages (workspace_id, id)",
         "DROP INDEX IF EXISTS index_chat_messages_on_ws_id"
     )
+    // Фаза 4: WebDAV клас 2. expires_at е epoch секунди.
+    set = migrate_add(
+        set,
+        20260925033,
+        "create_dav_locks",
+        "CREATE TABLE dav_locks (id BIGSERIAL PRIMARY KEY, workspace_id BIGINT NOT NULL, path TEXT NOT NULL, token TEXT NOT NULL, owner_id BIGINT NOT NULL, depth BIGINT NOT NULL, expires_at BIGINT NOT NULL, owner_xml TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS dav_locks"
+    )
+    set = migrate_add(
+        set,
+        20260925034,
+        "index_dav_locks_ws",
+        "CREATE INDEX index_dav_locks_on_ws ON dav_locks (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_dav_locks_on_ws"
+    )
     return set
 }
 
@@ -522,6 +537,20 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_chat_messages_ws_id",
         "CREATE INDEX IF NOT EXISTS index_chat_messages_on_ws_id ON chat_messages (workspace_id, id)",
         "DROP INDEX IF EXISTS index_chat_messages_on_ws_id"
+    )
+    set = migrate_add(
+        set,
+        20260925033,
+        "create_dav_locks",
+        "CREATE TABLE IF NOT EXISTS dav_locks (id BIGINT, workspace_id BIGINT, path TEXT, token TEXT, owner_id BIGINT, depth BIGINT, expires_at BIGINT, owner_xml TEXT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS dav_locks"
+    )
+    set = migrate_add(
+        set,
+        20260925034,
+        "index_dav_locks_ws",
+        "CREATE INDEX IF NOT EXISTS index_dav_locks_on_ws ON dav_locks (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_dav_locks_on_ws"
     )
     return set
 }

@@ -185,7 +185,7 @@
 - [x] **Пакет `davbaga`**: Depth, Destination, Overwrite, If-Match, Basic, multistatus XML (2026-09-25). Чист тест `tests/dav_test.baga`
 - [x] Маршрут `/dav/{ws}` и `/dav/{ws}/{*path}` — catch-all във fmrbaga. OPTIONS минава към маршрута, когато не е CORS preflight
 - [x] PROPFIND (0, 1, infinity до 2000 възела), GET, HEAD, PUT, DELETE, MKCOL, COPY, MOVE. ETag е hash-ът на blob-а. Правата са същите като REST (ACL). Жив тест `tools/dav_smoke.sh`, включително rclone copyto
-- [ ] PROPPATCH, LOCK/UNLOCK и пълният `If` header — клас 2, още не (davbaga D1/D2). Клиент, който иска заключване, получава 405
+- [x] LOCK/UNLOCK и PROPPATCH (2026-09-25): изключително заключване в `dav_locks`, токен в `If` / `Lock-Token`. Без токен писането е 423. PROPPATCH връща 207 и 403 за всяко свойство (не се пазят). Споделено заключване се отказва. `Infinite` се стяга до едно денонощие. Пълният `If` с `Not` и или-списъци още не се оценява (D2)
 
 **Зависимости:** davbaga (нов: httpdbaga, xmlbaga)
 
