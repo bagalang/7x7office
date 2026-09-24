@@ -211,3 +211,26 @@ export async function downloadVersion(node: FsNode, version: number): Promise<vo
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// --- търсене (фаза 6) ---
+
+export type SearchHit = {
+  id: number;
+  name: string;
+  path: string;
+  is_dir: number;
+  size: number;
+  in_text: number;
+  updated_at?: string;
+};
+
+export type SearchResult = {
+  query: string;
+  limit: number;
+  items: SearchHit[];
+  count: number;
+};
+
+export async function searchFiles(query: string, limit = 25): Promise<SearchResult> {
+  return request<SearchResult>(`/v1/search?q=${encodeURIComponent(query)}&limit=${limit}`, "GET");
+}

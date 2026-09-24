@@ -7,7 +7,7 @@ import { useAuth } from "./AuthProvider";
 import { useI18n } from "./I18nProvider";
 import { PreferencesButton } from "./PreferencesButton";
 import { api, FsUsage } from "../lib/api";
-import { IconFolder, IconLogout, IconUsers } from "./icons";
+import { IconFolder, IconLogout, IconSearch, IconUsers } from "./icons";
 
 export type Me = { sub?: string; name?: string; is_admin?: number };
 
@@ -108,6 +108,9 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
       <nav className="sidebar">
         <Link href="/" className={`nav-item${pathname === "/" ? " active" : ""}`}>
           <IconFolder /> {t("nav.files")}
+        </Link>
+        <Link href="/search" className={`nav-item${pathname === "/search" ? " active" : ""}`}>
+          <IconSearch width={17} height={17} /> {t("nav.search")}
         </Link>
         {me?.is_admin === 1 ? (
           <Link href="/users" className={`nav-item${pathname === "/users" ? " active" : ""}`}>

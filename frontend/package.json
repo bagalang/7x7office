@@ -6,7 +6,9 @@
     "dev": "next dev -p 3010",
     "build": "next build",
     "start": "next start -p 3010",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check": "npm run check:i18n && tsc --noEmit && eslint"
   },
   "dependencies": {
     "next": "16.3.2",
