@@ -1,0 +1,254 @@
+// tree/versions_files.baga — версии на файл (history/restore) + разглеждане
+// на zip съдържание. Изнесено от actions.baga (filesize gate).
+
+import "auth.baga"
+import "store.baga"
+import "model.baga"
+import "versions.baga"
+import "../data/blobs.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "zipbaga/archive.baga"
+import "pathbaga/path.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+// ---------- versions (Phase 5) ----------
+
+// Shared lookup: node by path + version id param. ok=0 → out is the
+// error response; on ok, node_id/ver_id are set (ver row still to fetch).
+struct TreeVerReq {
+    ok: i64,
+    owner: i64,
+    node_id: i64,
+    ver_id: i64,
+    db: OrmDb,
+    out: FmrOut
+}
+
+fn tree_ver_req(ctx: FmrCtx, db: OrmDb, need_ver: i64) -> TreeVerReq !IO !Net {
+    let bad = TreeVerReq { ok: 0, owner: 0, node_id: 0, ver_id: 0, db: db, out: fmr_out(http_response(500, ""), db) }
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return TreeVerReq { ok: 0, owner: 0, node_id: 0, ver_id: 0, db: db, out: t.out }
+    }
+    let path = tree_qpath(ctx, "path")
+    let mut ver_id: i64 = 0
+    if need_ver == 1 {
+        ver_id = parse_int(query_decode_val(fmr_query(ctx, "version")))
+        if ver_id < 1 {
+            return TreeVerReq { ok: 0, owner: t.owner, node_id: 0, ver_id: 0, db: db, out: act_err(db, 400, "bad version id") }
+        }
+    }
+    let q = tree_find(db, t.owner, path)?
+    if orm_ok_q(q) == 0 {
+        return TreeVerReq { ok: 0, owner: t.owner, node_id: 0, ver_id: 0, db: orm_db_q(q), out: act_err(orm_db_q(q), 500, orm_err_q(q)) }
+    }
+    if orm_nrows(q) < 1 {
+        return TreeVerReq { ok: 0, owner: t.owner, node_id: 0, ver_id: 0, db: orm_db_q(q), out: act_404(orm_db_q(q), "path not found") }
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        return TreeVerReq { ok: 0, owner: t.owner, node_id: 0, ver_id: 0, db: orm_db_q(q), out: act_err(orm_db_q(q), 400, "is a directory") }
+    }
+    let nid = orm_cell_by_i64(q, 0, "id")
+    let mut r = bad
+    r.ok = 1
+    r.owner = t.owner
+    r.node_id = nid
+    r.ver_id = ver_id
+    r.db = orm_db_q(q)
+    return r
+}
+
+fn act_fs_versions(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let r = tree_ver_req(ctx, db, 0)?
+    if r.ok == 0 {
+        return r.out
+    }
+    let q = tree_ver_list(r.db, r.node_id)?
+    if orm_ok_q(q) == 0 {
+        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    }
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, tree_ver_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "path", tree_qpath(ctx, "path"))
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return act_ok(orm_db_q(q), o)
+}
+
+fn act_fs_version_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let r = tree_ver_req(ctx, db, 1)?
+    if r.ok == 0 {
+        return r.out
+    }
+    let v = tree_ver_find(r.db, r.node_id, r.ver_id)?
+    if orm_ok_q(v) == 0 {
+        return act_err(orm_db_q(v), 500, orm_err_q(v))
+    }
+    if orm_nrows(v) < 1 {
+        return act_404(orm_db_q(v), "version not found")
+    }
+    let hash = orm_cell_by(v, 0, "hash")
+    let body = data_blob_get(hash)?
+    if bytes_len(body) == 0 && orm_cell_by_i64(v, 0, "size") > 0 {
+        return act_err(orm_db_q(v), 500, "blob missing")
+    }
+    let path = tree_qpath(ctx, "path")
+    let mut resp = http_response_bytes(200, body)
+    resp = http_set_header(resp, "Content-Type", tree_mime(path))
+    resp = http_set_header(resp, "ETag", hash)
+    resp = http_set_header(resp, "Content-Disposition", concat("attachment; filename=\"", concat(tree_name_of(path), "\"")))
+    return fmr_out(resp, orm_db_q(v))
+}
+
+// Restore: snapshot the current content, then point the node at the
+// version's blob. The version row stays (history is append-only).
+fn act_fs_version_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let r = tree_ver_req(ctx, db, 1)?
+    if r.ok == 0 {
+        return r.out
+    }
+    let path = tree_qpath(ctx, "path")
+    let mut d = r.db
+    let cur = tree_find(d, r.owner, path)?
+    if orm_ok_q(cur) == 0 || orm_nrows(cur) < 1 {
+        return act_404(d, "path not found")
+    }
+    let cur_hash = orm_cell_by(cur, 0, "hash")
+    let cur_size = orm_cell_by_i64(cur, 0, "size")
+    let cur_thumb = orm_cell_by(cur, 0, "thumb_hash")
+    d = orm_db_q(cur)
+    let v = tree_ver_find(d, r.node_id, r.ver_id)?
+    if orm_ok_q(v) == 0 {
+        return act_err(orm_db_q(v), 500, orm_err_q(v))
+    }
+    if orm_nrows(v) < 1 {
+        return act_404(orm_db_q(v), "version not found")
+    }
+    let v_hash = orm_cell_by(v, 0, "hash")
+    let v_size = orm_cell_by_i64(v, 0, "size")
+    d = orm_db_q(v)
+    if v_hash == cur_hash {
+        let q = tree_find(d, r.owner, path)?
+        return act_ok(orm_db_q(q), tree_node_json(q, 0))
+    }
+    let body = data_blob_get(v_hash)?
+    if bytes_len(body) == 0 && v_size > 0 {
+        return act_err(d, 500, "blob missing")
+    }
+    // displace current content → snapshot it first (keeps the blob alive)
+    if cur_hash != "" {
+        let snap = tree_ver_snapshot(d, r.node_id, r.owner, path, cur_size, cur_hash)?
+        if orm_ok(snap) == 0 {
+            return act_err(orm_db_exec(snap), 500, orm_err_exec(snap))
+        }
+        d = orm_db_exec(snap)
+    }
+    let thumb = tree_make_thumb(body)?
+    let upd = tree_update_file(d, r.node_id, v_size, v_hash, thumb)?
+    if orm_ok(upd) == 0 {
+        return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
+    }
+    d = orm_db_exec(upd)
+    let cap = tree_ver_cap(d, r.node_id, tree_versions_keep()?)?
+    if orm_ok_q(cap) == 0 {
+        return act_err(orm_db_q(cap), 500, orm_err_q(cap))
+    }
+    d = orm_db_q(cap)
+    tree_ver_gc(d, cur_thumb)?
+    let q = tree_find(d, r.owner, path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return act_err(d, 500, "restore ok but node missing")
+    }
+    let mut o = tree_node_json(q, 0)
+    o = jobj_str(o, "etag", v_hash)
+    return act_ok(orm_db_q(q), o)
+}
+
+// ---------- zip browsing (Phase 5) ----------
+
+// Shared: auth + node lookup + zip_open_bytes over the blob.
+struct TreeZipReq {
+    ok: i64,
+    db: OrmDb,
+    zip: ZipArchive,
+    out: FmrOut
+}
+
+fn tree_zip_req(ctx: FmrCtx, db: OrmDb) -> TreeZipReq !IO !Net {
+    let t = tree_auth(ctx, db)?
+    if t.ok == 0 {
+        return TreeZipReq { ok: 0, db: db, zip: zip_empty_err(""), out: t.out }
+    }
+    let path = tree_qpath(ctx, "path")
+    let q = tree_find(db, t.owner, path)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return TreeZipReq { ok: 0, db: orm_db_q(q), zip: zip_empty_err(""), out: act_404(orm_db_q(q), "path not found") }
+    }
+    if orm_cell_by_i64(q, 0, "is_dir") == 1 {
+        return TreeZipReq { ok: 0, db: orm_db_q(q), zip: zip_empty_err(""), out: act_err(orm_db_q(q), 400, "is a directory") }
+    }
+    let body = data_blob_get(orm_cell_by(q, 0, "hash"))?
+    let z = zip_open_bytes(body)
+    if z.ok == 0 {
+        return TreeZipReq { ok: 0, db: orm_db_q(q), zip: z, out: act_err(orm_db_q(q), 400, z.err) }
+    }
+    return TreeZipReq { ok: 1, db: orm_db_q(q), zip: z, out: fmr_out(http_response(200, ""), orm_db_q(q)) }
+}
+
+fn act_fs_zip_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let r = tree_zip_req(ctx, db)?
+    if r.ok == 0 {
+        return r.out
+    }
+    let mut arr = jarr_new()
+    let n = zip_count(r.zip)
+    let mut i: i64 = 0
+    while i < n {
+        let nm = zip_name(r.zip, i)
+        let mut o = jobj_new()
+        o = jobj_str(o, "name", nm)
+        o = jobj_i64(o, "size", vec_get(r.zip.uncomp_sizes, i))
+        let mut is_dir: i64 = 0
+        if str_ends_with(nm, "/") {
+            is_dir = 1
+        }
+        o = jobj_i64(o, "is_dir", is_dir)
+        arr = jarr_obj(arr, o)
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "path", tree_qpath(ctx, "path"))
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", n)
+    return act_ok(r.db, o)
+}
+
+fn act_fs_zip_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let r = tree_zip_req(ctx, db)?
+    if r.ok == 0 {
+        return r.out
+    }
+    let entry = query_decode_val(fmr_query(ctx, "entry"))
+    if entry == "" {
+        return act_err(r.db, 400, "missing entry")
+    }
+    let part = zip_read(r.zip, entry)
+    if part.ok == 0 {
+        return act_404(r.db, part.err)
+    }
+    let mut resp = http_response_bytes(200, part.data)
+    resp = http_set_header(resp, "Content-Type", tree_mime(entry))
+    resp = http_set_header(resp, "Content-Disposition", concat("attachment; filename=\"", concat(tree_name_of(concat("/", entry)), "\"")))
+    return fmr_out(resp, r.db)
+}
