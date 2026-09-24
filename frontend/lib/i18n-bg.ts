@@ -82,6 +82,7 @@ export const bg: Record<string, string> = {
   "editor.saved": "Запазено",
   "editor.back": "Назад",
   "editor.err_save": "грешка при запис",
+  "editor.conflict": "Файлът е променен междувременно. Записах новото съдържание като конфликтно копие.",
   "editor.conflict_hint": " Натиснете „Запази“ отново, за да презапишете файла с това съдържание.",
   "editor.placeholder": "Започнете да пишете…",
   "editor.bold": "Удебелен (Ctrl+B)",

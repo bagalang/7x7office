@@ -106,6 +106,10 @@ export function SheetEditor({ doc }: { doc: DocContent }) {
         // next save writes the editor content over the file.
         etagRef.current = undefined;
         setConflict(true);
+        // Съобщението идва от backend-а на български; показваме преведено.
+        setError(t("editor.conflict"));
+        setState("dirty");
+        return;
       }
       setError(err instanceof Error ? err.message : t("editor.err_save"));
       setState("dirty");

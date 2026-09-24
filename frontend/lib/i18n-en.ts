@@ -82,6 +82,7 @@ export const en: Record<string, string> = {
   "editor.saved": "Saved",
   "editor.back": "Back",
   "editor.err_save": "error while saving",
+  "editor.conflict": "The file was changed in the meantime. The new content was stored as a conflict copy.",
   "editor.conflict_hint": " Press “Save” again to overwrite the file with this content.",
   "editor.placeholder": "Start typing…",
   "editor.bold": "Bold (Ctrl+B)",

@@ -84,6 +84,7 @@ export const de: Record<string, string> = {
   "editor.saved": "Gespeichert",
   "editor.back": "Zurück",
   "editor.err_save": "Fehler beim Speichern",
+  "editor.conflict": "Die Datei wurde zwischenzeitlich geändert. Der neue Inhalt wurde als Konfliktkopie gespeichert.",
   "editor.conflict_hint":
     " Klicken Sie erneut auf „Speichern“, um die Datei mit diesem Inhalt zu überschreiben.",
   "editor.placeholder": "Beginnen Sie zu schreiben…",

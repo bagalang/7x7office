@@ -83,6 +83,7 @@ export const ru: Record<string, string> = {
   "editor.saved": "Сохранено",
   "editor.back": "Назад",
   "editor.err_save": "ошибка при сохранении",
+  "editor.conflict": "Файл был изменён за это время. Новое содержимое сохранено как конфликтная копия.",
   "editor.conflict_hint":
     " Нажмите «Сохранить» ещё раз, чтобы перезаписать файл этим содержимым.",
   "editor.placeholder": "Начните печатать…",
