@@ -43,6 +43,20 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_tree_nodes_on_owner_parent ON tree_nodes (owner_id, parent_path)",
         "DROP INDEX IF EXISTS index_tree_nodes_on_owner_parent"
     )
+    set = migrate_add(
+        set,
+        20260924006,
+        "create_tree_versions",
+        "CREATE TABLE tree_versions (id BIGSERIAL PRIMARY KEY, node_id BIGINT NOT NULL REFERENCES tree_nodes(id), owner_id BIGINT NOT NULL, path TEXT NOT NULL, size BIGINT NOT NULL DEFAULT 0, hash TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())",
+        "DROP TABLE IF EXISTS tree_versions"
+    )
+    set = migrate_add(
+        set,
+        20260924007,
+        "index_tree_versions_node",
+        "CREATE INDEX index_tree_versions_on_node ON tree_versions (node_id)",
+        "DROP INDEX IF EXISTS index_tree_versions_on_node"
+    )
     return set
 }
 
@@ -83,6 +97,20 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_tree_nodes_owner_parent",
         "CREATE INDEX index_tree_nodes_on_owner_parent ON tree_nodes (owner_id, parent_path)",
         "DROP INDEX IF EXISTS index_tree_nodes_on_owner_parent ON tree_nodes"
+    )
+    set = migrate_add(
+        set,
+        20260924006,
+        "create_tree_versions",
+        "CREATE TABLE IF NOT EXISTS tree_versions (id BIGINT, node_id BIGINT, owner_id BIGINT, path TEXT, size BIGINT, hash TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS tree_versions"
+    )
+    set = migrate_add(
+        set,
+        20260924007,
+        "index_tree_versions_node",
+        "CREATE INDEX index_tree_versions_on_node ON tree_versions (node_id)",
+        "DROP INDEX IF EXISTS index_tree_versions_on_node ON tree_versions"
     )
     return set
 }

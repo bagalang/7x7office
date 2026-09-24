@@ -35,6 +35,13 @@ fn RID_FS_USAGE() -> i64 { return 28 }
 fn RID_USERS_LIST() -> i64 { return 30 }
 fn RID_USERS_CREATE() -> i64 { return 31 }
 fn RID_FS_PREVIEW() -> i64 { return 32 }
+fn RID_DOC_LOAD() -> i64 { return 33 }
+fn RID_DOC_SAVE() -> i64 { return 34 }
+fn RID_FS_VERSIONS() -> i64 { return 35 }
+fn RID_FS_VERSION_GET() -> i64 { return 36 }
+fn RID_FS_VERSION_RESTORE() -> i64 { return 37 }
+fn RID_FS_ZIP_LIST() -> i64 { return 38 }
+fn RID_FS_ZIP_GET() -> i64 { return 39 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -63,6 +70,13 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "GET", "/v1/fs/thumb", RID_FS_THUMB(), "", "fs", 0, "", "bytes", "200", "path")
     app = fmr_route_meta(app, "GET", "/v1/fs/usage", RID_FS_USAGE(), "", "fs", 0, "", "Usage", "200", "")
     app = fmr_route_meta(app, "GET", "/v1/fs/preview", RID_FS_PREVIEW(), "", "fs", 0, "", "Preview", "200", "path")
+    app = fmr_route_meta(app, "GET", "/v1/doc/load", RID_DOC_LOAD(), "", "doc", 0, "", "DocContent", "200", "path")
+    app = fmr_route_meta(app, "PUT", "/v1/doc/save", RID_DOC_SAVE(), "", "doc", 0, "text", "Node", "200", "path")
+    app = fmr_route_meta(app, "GET", "/v1/fs/versions", RID_FS_VERSIONS(), "", "fs", 0, "", "VersionList", "200", "path")
+    app = fmr_route_meta(app, "GET", "/v1/fs/version/get", RID_FS_VERSION_GET(), "", "fs", 0, "", "bytes", "200", "path,version")
+    app = fmr_route_meta(app, "POST", "/v1/fs/version/restore", RID_FS_VERSION_RESTORE(), "", "fs", 0, "", "Node", "200", "path,version")
+    app = fmr_route_meta(app, "GET", "/v1/fs/zip/list", RID_FS_ZIP_LIST(), "", "fs", 0, "", "ZipList", "200", "path")
+    app = fmr_route_meta(app, "GET", "/v1/fs/zip/get", RID_FS_ZIP_GET(), "", "fs", 0, "", "bytes", "200", "path,entry")
     return app
 }
 
@@ -103,5 +117,12 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     if id == RID_FS_THUMB() { return act_fs_thumb(ctx, db)? }
     if id == RID_FS_USAGE() { return act_fs_usage(ctx, db)? }
     if id == RID_FS_PREVIEW() { return act_fs_preview(ctx, db)? }
+    if id == RID_DOC_LOAD() { return act_doc_load(ctx, db)? }
+    if id == RID_DOC_SAVE() { return act_doc_save(ctx, db)? }
+    if id == RID_FS_VERSIONS() { return act_fs_versions(ctx, db)? }
+    if id == RID_FS_VERSION_GET() { return act_fs_version_get(ctx, db)? }
+    if id == RID_FS_VERSION_RESTORE() { return act_fs_version_restore(ctx, db)? }
+    if id == RID_FS_ZIP_LIST() { return act_fs_zip_list(ctx, db)? }
+    if id == RID_FS_ZIP_GET() { return act_fs_zip_get(ctx, db)? }
     return fmr_out(fmr_500("unhandled route"), db)
 }

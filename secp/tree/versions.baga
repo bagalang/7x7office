@@ -1,0 +1,179 @@
+// tree/versions.baga — content snapshots (Phase 5).
+// Blobs are content-addressed, so a version is just (node_id, size, hash,
+// ts): every overwrite of an existing file snapshots the PREVIOUS content
+// here before tree_nodes points at the new blob. Restore swaps the node
+// back to a snapshot (and snapshots the displaced content the same way).
+// tree_ver_gc replaces the node-only GC: a blob lives while any node OR
+// any version references it.
+
+import "model.baga"
+import "../data/blobs.baga"
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "std/str/str.baga"
+
+fn tree_ver_table() -> str {
+    return "tree_versions"
+}
+
+fn tree_ver_cols() -> str {
+    return "id, node_id, owner_id, path, size, hash, created_at"
+}
+
+fn tree_ver_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM tree_versions")?
+}
+
+// Snapshot `hash` as previous content of node_id. Callers skip empty
+// hashes (dirs) and no-op overwrites (same hash).
+fn tree_ver_snapshot(db: OrmDb, node_id: i64, owner: i64, path: str, size: i64, hash: str) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "node_id")
+    vec_push(cols, "owner_id")
+    vec_push(cols, "path")
+    vec_push(cols, "size")
+    vec_push(cols, "hash")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(node_id))
+    vec_push(vals, int_to_str(owner))
+    vec_push(vals, path)
+    vec_push(vals, int_to_str(size))
+    vec_push(vals, hash)
+    if tree_backend_boila()? == 1 {
+        let c = tree_ver_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let cols2 = vec_new()
+        vec_push(cols2, "id")
+        vec_push(cols2, "node_id")
+        vec_push(cols2, "owner_id")
+        vec_push(cols2, "path")
+        vec_push(cols2, "size")
+        vec_push(cols2, "hash")
+        let vals2 = vec_new()
+        vec_push(vals2, int_to_str(orm_count_n(c) + 1))
+        vec_push(vals2, int_to_str(node_id))
+        vec_push(vals2, int_to_str(owner))
+        vec_push(vals2, path)
+        vec_push(vals2, int_to_str(size))
+        vec_push(vals2, hash)
+        return orm_insert_strs(orm_db_c(c), tree_ver_table(), cols2, vals2)?
+    }
+    return orm_insert_strs(db, tree_ver_table(), cols, vals)?
+}
+
+// Newest first (id is monotonic on both backends).
+fn tree_ver_list(db: OrmDb, node_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat("SELECT ", tree_ver_cols())
+    let sql2 = concat(sql, " FROM tree_versions WHERE node_id = $1 ORDER BY id DESC")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(node_id))
+    return orm_query_params_str(db, sql2, vals)?
+}
+
+fn tree_ver_find(db: OrmDb, node_id: i64, ver_id: i64) -> OrmQuery !IO !Net {
+    let sql = concat("SELECT ", tree_ver_cols())
+    let sql2 = concat(sql, " FROM tree_versions WHERE node_id = $1 AND id = $2")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(node_id))
+    vec_push(vals, int_to_str(ver_id))
+    return orm_query_params_str(db, sql2, vals)?
+}
+
+// Version hashes of one node (subtree delete collects them for GC).
+fn tree_ver_hashes(db: OrmDb, node_id: i64) -> OrmQuery !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(node_id))
+    return orm_query_params_str(db, "SELECT hash FROM tree_versions WHERE node_id = $1", vals)?
+}
+
+fn tree_ver_drop_node(db: OrmDb, node_id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(node_id))
+    return orm_exec_params_str(db, "DELETE FROM tree_versions WHERE node_id = $1", vals)?
+}
+
+fn tree_ver_drop_id(db: OrmDb, ver_id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ver_id))
+    return orm_exec_params_str(db, "DELETE FROM tree_versions WHERE id = $1", vals)?
+}
+
+// References from snapshots (node refs are counted by tree_hash_refs).
+fn tree_ver_refs(db: OrmDb, hash: str) -> OrmCount !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, hash)
+    let sql = "SELECT COUNT(*) AS count FROM tree_versions WHERE hash = $1"
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return OrmCErr(OrmCountFail { err: orm_err_q(q), db: orm_db_q(q) })
+    }
+    let mut n: i64 = 0
+    if orm_nrows(q) > 0 {
+        n = orm_cell_i64(q, 0, 0)
+    }
+    return OrmCOk(OrmCountOk { count: n, db: orm_db_q(q) })
+}
+
+// Version-aware blob GC: delete only when neither nodes nor versions
+// reference the hash. Best-effort like the old tree_blob_gc.
+fn tree_ver_gc(db: OrmDb, hash: str) -> i64 !IO !Net {
+    if hash == "" {
+        return 0
+    }
+    let c1 = tree_hash_refs(db, hash)?
+    if orm_ok_c(c1) == 0 {
+        return 0
+    }
+    if orm_count_n(c1) > 0 {
+        return 0
+    }
+    let c2 = tree_ver_refs(orm_db_c(c1), hash)?
+    if orm_ok_c(c2) == 0 {
+        return 0
+    }
+    if orm_count_n(c2) == 0 {
+        data_blob_delete(hash)?
+    }
+    return 0
+}
+
+// Keep the newest `keep` versions of node_id; dropped rows get their
+// blobs GC'd. Returns a fresh post-cap list (check orm_ok_q for errors).
+fn tree_ver_cap(db: OrmDb, node_id: i64, keep: i64) -> OrmQuery !IO !Net {
+    let q = tree_ver_list(db, node_id)?
+    if orm_ok_q(q) == 0 {
+        return q
+    }
+    let mut d = orm_db_q(q)
+    if orm_nrows(q) > keep {
+        let mut i: i64 = keep
+        while i < orm_nrows(q) {
+            let del = tree_ver_drop_id(d, orm_cell_by_i64(q, i, "id"))?
+            if orm_ok(del) == 0 {
+                return OrmQErr(OrmQueryFail { err: orm_err_exec(del), tag: "", db: orm_db_exec(del) })
+            }
+            d = orm_db_exec(del)
+            i = i + 1
+        }
+        i = keep
+        while i < orm_nrows(q) {
+            tree_ver_gc(d, orm_cell_by(q, i, "hash"))?
+            i = i + 1
+        }
+    }
+    return tree_ver_list(d, node_id)?
+}
+
+fn tree_ver_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_i64(o, "size", orm_cell_by_i64(q, row, "size"))
+    o = jobj_str(o, "etag", orm_cell_by(q, row, "hash"))
+    let ca = orm_cell_by(q, row, "created_at")
+    if ca != "" {
+        o = jobj_str(o, "created_at", ca)
+    }
+    return o
+}

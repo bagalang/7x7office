@@ -1,25 +1,59 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useAuth } from "./AuthProvider";
+import { AppShell } from "./AppShell";
+import { Dialog } from "./Dialog";
+import {
+  IconChevronRight,
+  IconClose,
+  IconDownload,
+  IconFile,
+  IconFileText,
+  IconFolder,
+  IconGridView,
+  IconHistory,
+  IconImage,
+  IconListView,
+  IconPencil,
+  IconPlus,
+  IconSearch,
+  IconTrash,
+  IconUpload,
+} from "./icons";
 import {
   ApiError,
   FsList,
   FsNode,
-  FsUsage,
+  FsVersion,
+  ZipEntry,
   api,
   authedFetch,
   downloadFile,
+  downloadVersion,
+  downloadZipEntry,
+  listVersions,
+  listZip,
   putFile,
   qpath,
+  restoreVersion,
 } from "../lib/api";
+import { readStorage, writeStorage } from "../lib/storage";
+import { mdToHtml } from "../lib/markdown";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1048576).toFixed(1)} MB`;
+  if (n < 1073741824) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${(n / 1073741824).toFixed(2)} GB`;
+}
+
+function formatDate(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const pad = (x: number) => String(x).padStart(2, "0");
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function parentOf(path: string): string {
@@ -53,21 +87,45 @@ function messageOf(err: unknown): string {
   return "грешка";
 }
 
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+const TEXT_EXT = /\.(txt|md|markdown|csv|json|ya?ml|xml|log|baga|ts|tsx|js|css|html)$/i;
+
+function FileIcon({ node }: { node: FsNode }) {
+  if (node.is_dir) return <IconFolder />;
+  if (IMAGE_EXT.test(node.name)) return <IconImage />;
+  if (TEXT_EXT.test(node.name)) return <IconFileText />;
+  return <IconFile />;
+}
+
+type View = "list" | "grid";
+type SortKey = "name" | "size" | "date";
+
 export function FileBrowser() {
-  const { logout } = useAuth();
-  const router = useRouter();
   const [path, setPath] = useState("/");
   const [items, setItems] = useState<FsNode[]>([]);
-  const [usage, setUsage] = useState<FsUsage | null>(null);
-  const [who, setWho] = useState("");
-  const [admin, setAdmin] = useState(false);
-  const [folder, setFolder] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
   const [renamePath, setRenamePath] = useState("");
   const [renameValue, setRenameValue] = useState("");
   const [open, setOpen] = useState<FsNode | null>(null);
+  const [view, setView] = useState<View>("list");
+  const [sort, setSort] = useState<SortKey>("name");
+  const [query, setQuery] = useState("");
+  const [mkdirOpen, setMkdirOpen] = useState(false);
+  const [folder, setFolder] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<FsNode | null>(null);
+  const [versionsFor, setVersionsFor] = useState<FsNode | null>(null);
+
+  useEffect(() => {
+    const saved = readStorage("secp.view");
+    if (saved === "grid" || saved === "list") setView(saved);
+  }, []);
+
+  function pickView(v: View) {
+    setView(v);
+    writeStorage("secp.view", v);
+  }
 
   useEffect(() => {
     let cancel = false;
@@ -75,16 +133,9 @@ export function FileBrowser() {
       setBusy(true);
       setError("");
       try {
-        const [list, use, me] = await Promise.all([
-          api.get<FsList>(`/v1/fs/list?path=${qpath(path)}`),
-          api.get<FsUsage>("/v1/fs/usage"),
-          api.get<{ sub?: string; is_admin?: number }>("/v1/me"),
-        ]);
+        const list = await api.get<FsList>(`/v1/fs/list?path=${qpath(path)}`);
         if (cancel) return;
         setItems(list.items ?? []);
-        setUsage(use);
-        setWho(me.sub ?? "");
-        setAdmin(me.is_admin === 1);
       } catch (err) {
         if (!cancel) setError(messageOf(err));
       } finally {
@@ -96,8 +147,14 @@ export function FileBrowser() {
     };
   }, [path, reload]);
 
-  const sorted = items.slice().sort((a, b) => {
+  const filtered = items.filter((n) =>
+    query ? n.name.toLowerCase().includes(query.toLowerCase()) : true
+  );
+
+  const sorted = filtered.slice().sort((a, b) => {
     if (a.is_dir !== b.is_dir) return b.is_dir - a.is_dir;
+    if (sort === "size") return b.size - a.size;
+    if (sort === "date") return (b.updated_at ?? "").localeCompare(a.updated_at ?? "");
     return a.name.localeCompare(b.name, "bg");
   });
 
@@ -120,9 +177,10 @@ export function FileBrowser() {
       setError("невалидно име на папка");
       return;
     }
+    setMkdirOpen(false);
+    setFolder("");
     await run(async () => {
       await api.post(`/v1/fs/mkdir?path=${qpath(dest)}`);
-      setFolder("");
     });
   }
 
@@ -146,40 +204,81 @@ export function FileBrowser() {
       setError("невалидно име");
       return;
     }
+    const from = renamePath;
+    setRenamePath("");
     await run(async () => {
-      await api.post(`/v1/fs/move?from=${qpath(renamePath)}&to=${qpath(dest)}`);
-      setRenamePath("");
+      await api.post(`/v1/fs/move?from=${qpath(from)}&to=${qpath(dest)}`);
+      if (open && open.path === from) setOpen(null);
     });
   }
 
-  const used = usage?.used_bytes ?? 0;
-  const quota = usage?.quota_bytes ?? 0;
-  const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
+  function activate(node: FsNode) {
+    if (node.is_dir) {
+      setOpen(null);
+      setPath(node.path);
+    } else {
+      setOpen(node);
+    }
+  }
 
-  return (
-    <>
-      <header className="top">
-        <b>7x7office · secp</b>
-        {admin ? <Link href="/users">Потребители</Link> : null}
-        <span className="grow" />
-        <span className="who">{who}</span>
+  function startRename(node: FsNode) {
+    setRenamePath(node.path);
+    setRenameValue(node.name);
+  }
+
+  const searchBox = (
+    <div className="topbar-search">
+      <IconSearch width={16} height={16} />
+      <input
+        className="input"
+        placeholder="Търсене в папката…"
+        aria-label="Търсене"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+    </div>
+  );
+
+  const rowActions = (node: FsNode) => (
+    <span className="row-actions" onClick={(e) => e.stopPropagation()}>
+      {node.is_dir === 0 ? (
         <button
           type="button"
-          className="link"
-          onClick={() => {
-            logout();
-            router.replace("/login");
-          }}
+          className="icon-btn"
+          title="Свали"
+          onClick={() => void downloadFile(node).catch((err) => setError(messageOf(err)))}
         >
-          Изход
+          <IconDownload />
         </button>
-      </header>
-      <main className="wrap">
+      ) : null}
+      <button type="button" className="icon-btn" title="Преименувай" onClick={() => startRename(node)}>
+        <IconPencil />
+      </button>
+      <button type="button" className="icon-btn danger" title="Изтрий" onClick={() => setDeleteTarget(node)}>
+        <IconTrash />
+      </button>
+    </span>
+  );
+
+  return (
+    <AppShell search={searchBox}>
+      <main className="content-main">
         <div className="crumbs">
-          {crumbs(path).map((c, i) => (
-            <span key={c.path}>
-              {i > 0 ? <span className="sep">/</span> : null}
-              <button type="button" className="crumb" onClick={() => { setOpen(null); setPath(c.path); }}>
+          {crumbs(path).map((c, i, all) => (
+            <span key={c.path} style={{ display: "inline-flex", alignItems: "center" }}>
+              {i > 0 ? (
+                <span className="sep">
+                  <IconChevronRight width={14} height={14} />
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className={`crumb${i === all.length - 1 ? " current" : ""}`}
+                onClick={() => {
+                  setOpen(null);
+                  setPath(c.path);
+                }}
+              >
                 {c.name}
               </button>
             </span>
@@ -187,125 +286,266 @@ export function FileBrowser() {
         </div>
 
         <div className="toolbar">
-          <form onSubmit={onMkdir} className="row">
-            <input
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-              placeholder="Нова папка"
-              aria-label="Нова папка"
-            />
-            <button type="submit" disabled={busy}>
-              Създай
-            </button>
-          </form>
-          <label className="upload">
+          <label className="btn">
+            <IconUpload width={16} height={16} />
             Качи
             <input
               type="file"
               multiple
+              hidden
               onChange={(e) => {
                 void onUpload(e.target.files);
                 e.target.value = "";
               }}
             />
           </label>
-          <div className="quota">
-            <div className="bar">
-              <span style={{ width: `${pct}%` }} />
-            </div>
-            <span className="muted">
-              {formatBytes(used)} / {formatBytes(quota)}
-            </span>
-          </div>
+          <button type="button" className="btn ghost" onClick={() => setMkdirOpen(true)}>
+            <IconPlus width={16} height={16} />
+            Нова папка
+          </button>
+          <span className="grow" />
+          <select
+            className="select"
+            aria-label="Сортиране"
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+          >
+            <option value="name">По име</option>
+            <option value="size">По размер</option>
+            <option value="date">По дата</option>
+          </select>
+          <span className="toggle" role="group" aria-label="Изглед">
+            <button
+              type="button"
+              className={view === "list" ? "active" : ""}
+              title="Списък"
+              onClick={() => pickView("list")}
+            >
+              <IconListView />
+            </button>
+            <button
+              type="button"
+              className={view === "grid" ? "active" : ""}
+              title="Решетка"
+              onClick={() => pickView("grid")}
+            >
+              <IconGridView />
+            </button>
+          </span>
         </div>
 
         {error ? <p className="err">{error}</p> : null}
-        {busy ? <p className="muted">Зареждане…</p> : null}
 
-        <ul className="files">
-          {path !== "/" ? (
-            <li>
-              <button type="button" className="name" onClick={() => { setOpen(null); setPath(parentOf(path)); }}>
-                ..
-              </button>
-            </li>
-          ) : null}
-          {sorted.length === 0 ? <li className="muted empty">Папката е празна.</li> : null}
-          {sorted.map((node) => (
-            <li key={node.path}>
-              {node.has_thumb === 1 ? <Thumb path={node.path} /> : <span className="ph">{node.is_dir ? "▣" : "▤"}</span>}
-              {renamePath === node.path ? (
-                <form onSubmit={onRename} className="row grow">
-                  <input
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    aria-label="Ново име"
-                    autoFocus
-                  />
-                  <button type="submit">Запази</button>
-                  <button type="button" className="ghost" onClick={() => setRenamePath("")}>
-                    Отказ
-                  </button>
-                </form>
-              ) : (
-                <button
-                  type="button"
-                  className="name"
+        {view === "list" ? (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Име</th>
+                <th style={{ width: 110 }}>Размер</th>
+                <th style={{ width: 170 }}>Променен</th>
+                <th style={{ width: 110 }} />
+              </tr>
+            </thead>
+            <tbody>
+              {path !== "/" ? (
+                <tr
                   onClick={() => {
-                    if (node.is_dir) {
-                      setOpen(null);
-                      setPath(node.path);
-                    } else {
-                      setOpen(node);
-                    }
+                    setOpen(null);
+                    setPath(parentOf(path));
                   }}
                 >
-                  {node.name}
-                </button>
-              )}
-              <span className="meta">{node.is_dir ? "папка" : formatBytes(node.size)}</span>
-              <span className="actions">
-                {node.is_dir === 0 ? (
-                  <button type="button" onClick={() => void downloadFile(node).catch((err) => setError(messageOf(err)))}>
-                    Свали
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRenamePath(node.path);
-                    setRenameValue(node.name);
-                  }}
+                  <td>
+                    <span className="cell-name">
+                      <span className="cell-icon">
+                        <IconFolder />
+                      </span>
+                      <span className="label">..</span>
+                    </span>
+                  </td>
+                  <td className="muted">—</td>
+                  <td className="muted">—</td>
+                  <td />
+                </tr>
+              ) : null}
+              {sorted.map((node) => (
+                <tr
+                  key={node.path}
+                  className={open?.path === node.path ? "selected" : ""}
+                  onClick={() => activate(node)}
                 >
-                  Преименувай
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  onClick={() => {
-                    if (!window.confirm(`Изтриване на ${node.name}?`)) return;
-                    void run(async () => {
-                      await api.del(`/v1/fs/file?path=${qpath(node.path)}`);
-                    });
-                  }}
-                >
-                  Изтрий
-                </button>
-              </span>
-            </li>
-          ))}
-        </ul>
-        {open ? <FilePreview node={open} onClose={() => setOpen(null)} /> : null}
+                  <td>
+                    {renamePath === node.path ? (
+                      <form className="rename-form" onSubmit={onRename} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          className="input"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          aria-label="Ново име"
+                          autoFocus
+                        />
+                        <button type="submit" className="btn" style={{ padding: "5px 10px" }}>
+                          Запази
+                        </button>
+                        <button type="button" className="btn ghost" style={{ padding: "5px 10px" }} onClick={() => setRenamePath("")}>
+                          Отказ
+                        </button>
+                      </form>
+                    ) : (
+                      <span className="cell-name">
+                        <span className="cell-icon">
+                          {node.has_thumb === 1 ? <Thumb path={node.path} /> : <FileIcon node={node} />}
+                        </span>
+                        <span className="label">{node.name}</span>
+                      </span>
+                    )}
+                  </td>
+                  <td className="muted">{node.is_dir ? "—" : formatBytes(node.size)}</td>
+                  <td className="muted">{formatDate(node.updated_at)}</td>
+                  <td>{rowActions(node)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="grid-cards">
+            {sorted.map((node) => (
+              <div
+                key={node.path}
+                className={`grid-card${open?.path === node.path ? " selected" : ""}`}
+                onClick={() => activate(node)}
+              >
+                <span className="grid-thumb">
+                  {node.has_thumb === 1 ? (
+                    <Thumb path={node.path} />
+                  ) : (
+                    <FileIcon node={node} />
+                  )}
+                </span>
+                <span className="grid-meta">
+                  <span className="label">{node.name}</span>
+                  <span className="sub">{node.is_dir ? "папка" : formatBytes(node.size)}</span>
+                </span>
+                {rowActions(node)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {sorted.length === 0 && !busy ? (
+          <div className="empty-state">
+            {query ? `Няма резултати за „${query}“.` : "Папката е празна. Качете файл или създайте папка."}
+          </div>
+        ) : null}
+        {busy ? <p className="muted">Зареждане…</p> : null}
       </main>
-    </>
+
+      {open ? (
+        <FilePreview
+          node={open}
+          onClose={() => setOpen(null)}
+          onRename={() => startRename(open)}
+          onDelete={() => setDeleteTarget(open)}
+          onShowVersions={() => setVersionsFor(open)}
+          onError={setError}
+        />
+      ) : null}
+
+      {versionsFor ? (
+        <VersionsDialog
+          node={versionsFor}
+          onClose={() => setVersionsFor(null)}
+          onRestored={() => {
+            setVersionsFor(null);
+            setOpen(null);
+            setReload((n) => n + 1);
+          }}
+        />
+      ) : null}
+
+      {mkdirOpen ? (
+        <Dialog title="Нова папка" onClose={() => setMkdirOpen(false)}>
+          <form onSubmit={onMkdir}>
+            <div className="field">
+              <label htmlFor="mkdir-name">Име</label>
+              <input
+                id="mkdir-name"
+                className="input"
+                value={folder}
+                onChange={(e) => setFolder(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="dialog-actions">
+              <button type="button" className="btn ghost" onClick={() => setMkdirOpen(false)}>
+                Отказ
+              </button>
+              <button type="submit" className="btn" disabled={busy}>
+                Създай
+              </button>
+            </div>
+          </form>
+        </Dialog>
+      ) : null}
+
+      {deleteTarget ? (
+        <Dialog title="Изтриване" onClose={() => setDeleteTarget(null)}>
+          <p style={{ margin: 0 }}>
+            Сигурни ли сте, че искате да изтриете <b>{deleteTarget.name}</b>?
+          </p>
+          <div className="dialog-actions">
+            <button type="button" className="btn ghost" onClick={() => setDeleteTarget(null)}>
+              Отказ
+            </button>
+            <button
+              type="button"
+              className="btn danger-ghost"
+              onClick={() => {
+                const target = deleteTarget;
+                setDeleteTarget(null);
+                if (open?.path === target.path) setOpen(null);
+                void run(async () => {
+                  await api.del(`/v1/fs/file?path=${qpath(target.path)}`);
+                });
+              }}
+            >
+              Изтрий
+            </button>
+          </div>
+        </Dialog>
+      ) : null}
+    </AppShell>
   );
 }
 
-function FilePreview({ node, onClose }: { node: FsNode; onClose: () => void }) {
+function FilePreview({
+  node,
+  onClose,
+  onRename,
+  onDelete,
+  onShowVersions,
+  onError,
+}: {
+  node: FsNode;
+  onClose: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onShowVersions: () => void;
+  onError: (msg: string) => void;
+}) {
+  const router = useRouter();
   const [kind, setKind] = useState("");
   const [text, setText] = useState("");
   const [img, setImg] = useState("");
   const [err, setErr] = useState("");
+  const editable = /\.(docx|odt|txt|md|xlsx|ods|csv)$/i.test(node.name);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   useEffect(() => {
     let dead = false;
@@ -319,7 +559,7 @@ function FilePreview({ node, onClose }: { node: FsNode; onClose: () => void }) {
       if (dead) return;
       setKind(prev.kind);
       setText(prev.text ?? "");
-      if (prev.kind !== "image") return;
+      if (prev.kind !== "image" && prev.kind !== "pdf") return;
       const res = await authedFetch(`/v1/fs/file?path=${qpath(node.path)}`);
       if (!res.ok || dead) return;
       obj = URL.createObjectURL(await res.blob());
@@ -338,23 +578,236 @@ function FilePreview({ node, onClose }: { node: FsNode; onClose: () => void }) {
   }, [node.path]);
 
   return (
-    <section className="preview">
+    <aside className="preview-pane">
       <div className="preview-bar">
-        <b>{node.name}</b>
+        <span className="label">{node.name}</span>
         <span className="grow" />
-        <button type="button" onClick={() => void downloadFile(node).catch((e) => setErr(messageOf(e)))}>
-          Свали
+        <button type="button" className="icon-btn" title="Затвори" onClick={onClose}>
+          <IconClose />
         </button>
-        <button type="button" className="ghost" onClick={onClose}>
+      </div>
+      <div className="preview-body">
+        {err ? <p className="err">{err}</p> : null}
+        {kind === "image" && img ? <img className="preview-img" src={img} alt="" /> : null}
+        {kind === "pdf" && img ? (
+          <embed className="preview-pdf" src={img} type="application/pdf" />
+        ) : null}
+        {kind === "markdown" ? (
+          <div className="preview-md" dangerouslySetInnerHTML={{ __html: mdToHtml(text) }} />
+        ) : null}
+        {kind === "csv" ? <PreviewTable text={text} sep={text.includes(";") ? ";" : ","} /> : null}
+        {kind === "sheet" ? <PreviewTable text={text} sep={"\t"} /> : null}
+        {kind === "zip" ? <ZipPreview node={node} onError={onError} /> : null}
+        {kind === "text" ? <pre>{text}</pre> : null}
+        {kind === "empty" ? <p className="muted">Няма текстов преглед за този файл.</p> : null}
+        {kind === "" && !err ? <p className="muted">Отваряне…</p> : null}
+
+        <dl className="preview-facts">
+          <div>
+            <dt>Размер</dt>
+            <dd>{formatBytes(node.size)}</dd>
+          </div>
+          <div>
+            <dt>Променен</dt>
+            <dd>{formatDate(node.updated_at)}</dd>
+          </div>
+          <div>
+            <dt>Път</dt>
+            <dd>{node.path}</dd>
+          </div>
+        </dl>
+
+        <div className="preview-actions">
+          {editable ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => router.push(`/edit?path=${encodeURIComponent(node.path)}`)}
+            >
+              <IconPencil width={16} height={16} /> Редактирай
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={editable ? "btn ghost" : "btn"}
+            onClick={() => void downloadFile(node).catch((e) => onError(messageOf(e)))}
+          >
+            <IconDownload width={16} height={16} /> Свали
+          </button>
+          <button type="button" className="btn ghost" onClick={onShowVersions}>
+            <IconHistory width={16} height={16} /> Версии
+          </button>
+          <button type="button" className="btn ghost" onClick={onRename}>
+            <IconPencil width={16} height={16} /> Преименувай
+          </button>
+          <button type="button" className="btn danger-ghost" onClick={onDelete}>
+            <IconTrash width={16} height={16} /> Изтрий
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function PreviewTable({ text, sep }: { text: string; sep: string }) {
+  const rows = text
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map((l) => l.split(sep));
+  if (rows.length === 0) return <p className="muted">Празна таблица.</p>;
+  return (
+    <div className="preview-table-wrap">
+      <table className="preview-table">
+        <tbody>
+          {rows.map((row, r) => (
+            <tr key={r}>
+              {row.map((cell, c) => (r === 0 ? <th key={c}>{cell}</th> : <td key={c}>{cell}</td>))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ZipPreview({ node, onError }: { node: FsNode; onError: (msg: string) => void }) {
+  const [items, setItems] = useState<ZipEntry[] | null>(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let dead = false;
+    setItems(null);
+    setErr("");
+    listZip(node.path)
+      .then((z) => {
+        if (!dead) setItems(z.items);
+      })
+      .catch((e: unknown) => {
+        if (!dead) setErr(messageOf(e));
+      });
+    return () => {
+      dead = true;
+    };
+  }, [node.path]);
+
+  if (err) return <p className="err">{err}</p>;
+  if (!items) return <p className="muted">Отваряне на архива…</p>;
+  if (items.length === 0) return <p className="muted">Празен архив.</p>;
+  return (
+    <div className="preview-table-wrap">
+      <table className="preview-table">
+        <tbody>
+          {items.map((it) => (
+            <tr key={it.name}>
+              <td>
+                <span className="zip-name">
+                  {it.is_dir ? "📁 " : ""}
+                  {it.name}
+                </span>
+              </td>
+              <td className="muted">{it.is_dir ? "" : formatBytes(it.size)}</td>
+              <td>
+                {it.is_dir ? null : (
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    title="Свали"
+                    onClick={() => void downloadZipEntry(node, it.name).catch((e) => onError(messageOf(e)))}
+                  >
+                    <IconDownload width={15} height={15} />
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function VersionsDialog({
+  node,
+  onClose,
+  onRestored,
+}: {
+  node: FsNode;
+  onClose: () => void;
+  onRestored: () => void;
+}) {
+  const [items, setItems] = useState<FsVersion[]>([]);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let dead = false;
+    listVersions(node.path)
+      .then((list) => {
+        if (!dead) setItems(list.items ?? []);
+      })
+      .catch((e: unknown) => {
+        if (!dead) setErr(messageOf(e));
+      });
+    return () => {
+      dead = true;
+    };
+  }, [node.path]);
+
+  async function onRestore(v: FsVersion) {
+    setBusy(true);
+    setErr("");
+    try {
+      await restoreVersion(node.path, v.id);
+      onRestored();
+    } catch (e: unknown) {
+      setErr(messageOf(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog title={`Версии на ${node.name}`} onClose={onClose}>
+      {err ? <p className="err">{err}</p> : null}
+      {items.length === 0 && !err ? (
+        <p className="muted">Няма запазени версии. Версия се пази при всяка промяна на файла.</p>
+      ) : null}
+      <div className="versions-list">
+        {items.map((v) => (
+          <div key={v.id} className="version-row">
+            <span className="version-meta">
+              <span className="label">v{v.id}</span>
+              <span className="sub">
+                {formatBytes(v.size)} · {formatDate(v.created_at)}
+              </span>
+            </span>
+            <span className="row-actions" style={{ opacity: 1 }}>
+              <button
+                type="button"
+                className="icon-btn"
+                title="Свали тази версия"
+                onClick={() => void downloadVersion(node, v.id).catch((e: unknown) => setErr(messageOf(e)))}
+              >
+                <IconDownload />
+              </button>
+              <button
+                type="button"
+                className="icon-btn"
+                title="Възстанови"
+                disabled={busy}
+                onClick={() => void onRestore(v)}
+              >
+                <IconHistory />
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="dialog-actions">
+        <button type="button" className="btn ghost" onClick={onClose}>
           Затвори
         </button>
       </div>
-      {err ? <p className="err">{err}</p> : null}
-      {kind === "image" && img ? <img className="preview-img" src={img} alt="" /> : null}
-      {kind === "text" ? <pre>{text}</pre> : null}
-      {kind === "empty" ? <p className="muted">Файлът е записан. Няма текстов преглед — сваля се с „Свали“.</p> : null}
-      {kind === "" && !err ? <p className="muted">Отваряне…</p> : null}
-    </section>
+    </Dialog>
   );
 }
 
@@ -378,6 +831,6 @@ function Thumb({ path }: { path: string }) {
       if (obj) URL.revokeObjectURL(obj);
     };
   }, [path]);
-  if (!url) return <span className="ph">▤</span>;
-  return <img className="thumb" src={url} alt="" />;
+  if (!url) return <IconFile width={18} height={18} />;
+  return <img src={url} alt="" />;
 }

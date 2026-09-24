@@ -1,0 +1,154 @@
+import { SVGProps } from "react";
+
+type P = SVGProps<SVGSVGElement>;
+
+function base(props: P): P {
+  return {
+    width: 18,
+    height: 18,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.6,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": true,
+    ...props,
+  };
+}
+
+export const IconFolder = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+  </svg>
+);
+
+export const IconFile = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+    <path d="M14 3v5h5" />
+  </svg>
+);
+
+export const IconFileText = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+    <path d="M14 3v5h5M9 13h6M9 17h6" />
+  </svg>
+);
+
+export const IconImage = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <circle cx="9" cy="10" r="1.6" />
+    <path d="m21 16-4.5-4.5L7 21" />
+  </svg>
+);
+
+export const IconUpload = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 16V4m0 0 4 4m-4-4L8 8" />
+    <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+  </svg>
+);
+
+export const IconDownload = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 4v12m0 0 4-4m-4 4-4-4" />
+    <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+  </svg>
+);
+
+export const IconPencil = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M17 3a2.8 2.8 0 1 1 4 4L8 20l-5 1 1-5z" />
+  </svg>
+);
+
+export const IconTrash = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7" />
+    <path d="M10 11v6M14 11v6" />
+  </svg>
+);
+
+export const IconPlus = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const IconSearch = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m21 21-4.3-4.3" />
+  </svg>
+);
+
+export const IconClose = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </svg>
+);
+
+export const IconChevronRight = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+);
+
+export const IconUser = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </svg>
+);
+
+export const IconLogout = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4" />
+    <path d="M10 17l5-5-5-5M15 12H3" />
+  </svg>
+);
+
+export const IconListView = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M8 6h13M8 12h13M8 18h13" />
+    <circle cx="4" cy="6" r="1" fill="currentColor" />
+    <circle cx="4" cy="12" r="1" fill="currentColor" />
+    <circle cx="4" cy="18" r="1" fill="currentColor" />
+  </svg>
+);
+
+export const IconGridView = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="4" y="4" width="7" height="7" rx="1.5" />
+    <rect x="13" y="4" width="7" height="7" rx="1.5" />
+    <rect x="4" y="13" width="7" height="7" rx="1.5" />
+    <rect x="13" y="13" width="7" height="7" rx="1.5" />
+  </svg>
+);
+
+export const IconDots = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconUsers = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+    <path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M17.5 14.4a6.5 6.5 0 0 1 4 5.6" />
+  </svg>
+);
+
+export const IconHistory = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M3.5 12a8.5 8.5 0 1 1 2.5 6" />
+    <path d="M3.5 12H7M3.5 12V8.5" />
+    <path d="M12 7.5V12l3 2" />
+  </svg>
+);

@@ -194,8 +194,10 @@ fn tree_delete_subtree(db: OrmDb, owner: i64, path: str) -> OrmExec !IO !Net {
 }
 
 // Bytes used by an owner's files (dirs count 0).
+// Plain SUM — boila has no COALESCE around aggregates; pg_cell_i64 maps
+// the NULL of an empty set to 0 on both backends.
 fn tree_usage(db: OrmDb, owner: i64) -> OrmCount !IO !Net {
-    let sql = "SELECT COALESCE(SUM(size), 0) AS count FROM tree_nodes WHERE owner_id = "
+    let sql = "SELECT SUM(size) AS count FROM tree_nodes WHERE owner_id = "
     let sql2 = concat(sql, int_to_str(owner))
     return orm_count_sql(db, concat(sql2, " AND is_dir = 0"))?
 }

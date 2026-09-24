@@ -86,11 +86,11 @@
 
 **Резултат:** preview на DOCX/XLSX/ODT/ODS/PDF/CSV/MD в браузъра; редакция и запазване; история на версиите.
 
-- [ ] Preview pipeline: officebaga extract → HTML; mdbaga → HTML; csvbaga → таблица; pdfbaga render; imgbaga директно
-- [ ] Редактор: md → DOCX (officebaga convert/from_md); `replace_text` за DOCX/ODT; XLSX/ODS клетки през JSON API
-- [ ] Модул `versions`: snapshot при всяко записване (data/tree/versions модел), diff по метаданни, restore
-- [ ] Конфликтно копие при едновременна редакция (ETag check)
-- [ ] zipbaga: разглеждане на архив без разархивиране
+- [x] Preview pipeline (2026-09-24): `GET /v1/fs/preview` връща типизиран `kind` — `markdown` (docx/odt/doc чрез officebaga `office_to_markdown_rich`; .md суров), `sheet` (xlsx/xls/ods → TSV), `csv`, `text`, `image`, `pdf` (pdfbaga е само writer → браузърът рендира blob-а native чрез `<embed>`), `empty`. UI: markdown се рендира като HTML (client `mdToHtml`), csv/sheet като таблица, pdf вграден viewer
+- [x] Редактор MVP (2026-09-24): `GET /v1/doc/load` + `PUT /v1/doc/save` (markdown за документи, TSV за таблици); DOCX round-trip пази заглавия/bold/italic/списъци (officebaga: `docx_markdown` + inline runs в `from_md`); ODT записва plain; legacy .doc/.xls само за четене. UI: `/edit` — Zoho-стил редактор (toolbar, страница, Ctrl+S) + sheet редактор (клетки, +ред/+колона); „Редактирай" в preview панела. OL номерацията става bullet при запис (v1)
+- [x] Модул `versions` (2026-09-24): `tree_versions` (snapshot на предишното съдържание при всяко презаписване/редакция; blob-овете са content-addressed → версия = hash+size+ts); `GET /v1/fs/versions`, `GET /v1/fs/version/get`, `POST /v1/fs/version/restore` (restore snapshot-ва и текущото); cap `SECP_VERSIONS_MAX` (50) с GC; blob GC брои и version референции; версиите се трият с възела. UI: „Версии" диалог в preview панела (свали/възстанови). **Fix в boilaDB**: WHERE fallback — две+ условия от един вид (напр. `owner_id = $1 AND path = $2`) вече се препарсват като общ израз (dual evaluator) вместо `0A000 повторно = условие`, за SELECT и UPDATE/DELETE; `tree_usage` без COALESCE (boila няма COALESCE около агрегат — `pg_cell_i64` мапва NULL→0)
+- [x] Конфликтно копие при едновременна редакция (ETag check) (2026-09-24): `doc/load` връща `etag` (hash); `doc/save?etag=` при несъвпадение записва новото съдържание като `<име>.conflict-<hash8>.<ext>` и отговаря 409 „файлът е променен междувременно; записано като …" вместо да презапише. UI: редакторите пратят etag-а от load, обновяват го от отговора на save и при 409 показват съобщението + „Запази отново" презаписва (stale etag се изчиства)
+- [x] zipbaga: разглеждане на архив без разархивиране (2026-09-24): `GET /v1/fs/zip/list` (име/размер/папка от central directory) и `GET /v1/fs/zip/get?entry=` (разархивира само записа в паметта); preview `kind=zip`; UI: таблица с файловете в архива + бутон „Свали" per запис
 
 **Зависимости:** officebaga, pdfbaga, csvbaga, mdbaga, zipbaga
 

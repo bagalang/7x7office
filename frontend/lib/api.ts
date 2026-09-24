@@ -96,6 +96,7 @@ export type FsNode = {
   is_dir: number;
   size: number;
   has_thumb: number;
+  etag?: string;
   updated_at?: string;
 };
 
@@ -115,6 +116,86 @@ export async function putFile(path: string, body: Blob): Promise<FsNode> {
 
 export async function downloadFile(node: FsNode): Promise<void> {
   const res = await authedFetch(`/v1/fs/file?path=${qpath(node.path)}`);
+  if (!res.ok) {
+    const data = await readBody(res);
+    throw new ApiError(res.status, detailOf(data, res.statusText));
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = node.name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export type DocContent = {
+  name: string;
+  path: string;
+  kind: string;
+  format: string;
+  text: string;
+  etag?: string;
+};
+
+export async function loadDoc(path: string): Promise<DocContent> {
+  return request<DocContent>(`/v1/doc/load?path=${qpath(path)}`, "GET");
+}
+
+// The editor sends the etag it loaded; on a mismatch the backend stores the
+// new content as a `.conflict-*` copy and answers 409 instead of overwriting.
+export async function saveDoc(path: string, text: string, etag?: string): Promise<FsNode> {
+  const q = etag ? `&etag=${encodeURIComponent(etag)}` : "";
+  const res = await authedFetch(`/v1/doc/save?path=${qpath(path)}${q}`, {
+    method: "PUT",
+    body: text,
+  });
+  const data = await readBody(res);
+  if (!res.ok) throw new ApiError(res.status, detailOf(data, res.statusText));
+  return data as FsNode;
+}
+
+export type ZipEntry = { name: string; size: number; is_dir: number };
+export type ZipList = { path: string; items: ZipEntry[]; count: number };
+
+export async function listZip(path: string): Promise<ZipList> {
+  return request<ZipList>(`/v1/fs/zip/list?path=${qpath(path)}`, "GET");
+}
+
+export async function downloadZipEntry(node: FsNode, entry: string): Promise<void> {
+  const res = await authedFetch(`/v1/fs/zip/get?path=${qpath(node.path)}&entry=${encodeURIComponent(entry)}`);
+  if (!res.ok) {
+    const data = await readBody(res);
+    throw new ApiError(res.status, detailOf(data, res.statusText));
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = entry.split("/").filter(Boolean).pop() ?? "file";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export type FsVersion = {
+  id: number;
+  size: number;
+  etag: string;
+  created_at?: string;
+};
+
+export type FsVersionList = { path: string; items: FsVersion[]; count: number };
+
+export async function listVersions(path: string): Promise<FsVersionList> {
+  return request<FsVersionList>(`/v1/fs/versions?path=${qpath(path)}`, "GET");
+}
+
+export async function restoreVersion(path: string, version: number): Promise<FsNode> {
+  return request<FsNode>(`/v1/fs/version/restore?path=${qpath(path)}&version=${version}`, "POST");
+}
+
+export async function downloadVersion(node: FsNode, version: number): Promise<void> {
+  const res = await authedFetch(`/v1/fs/version/get?path=${qpath(node.path)}&version=${version}`);
   if (!res.ok) {
     const data = await readBody(res);
     throw new ApiError(res.status, detailOf(data, res.statusText));

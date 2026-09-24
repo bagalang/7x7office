@@ -1,0 +1,144 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ApiError, DocContent, saveDoc } from "../lib/api";
+import { htmlToMd, mdToHtml } from "../lib/markdown";
+import { IconClose } from "./icons";
+
+type SaveState = "saved" | "dirty" | "saving";
+
+function ToolButton({
+  label,
+  title,
+  onAction,
+}: {
+  label: React.ReactNode;
+  title: string;
+  onAction: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="tool-btn"
+      title={title}
+      onMouseDown={(e) => {
+        e.preventDefault(); // keep selection in the editable area
+        onAction();
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+export function DocEditor({ doc }: { doc: DocContent }) {
+  const router = useRouter();
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [state, setState] = useState<SaveState>("saved");
+  const [error, setError] = useState("");
+  const [conflict, setConflict] = useState(false);
+  const etagRef = useRef<string | undefined>(doc.etag);
+  const stateRef = useRef<SaveState>("saved");
+  stateRef.current = state;
+
+  useEffect(() => {
+    if (areaRef.current) {
+      areaRef.current.innerHTML = mdToHtml(doc.text);
+    }
+    etagRef.current = doc.etag;
+    setConflict(false);
+    setState("saved");
+    // run once per document
+  }, [doc.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function exec(command: string, value?: string) {
+    document.execCommand(command, false, value);
+    areaRef.current?.focus();
+    setState("dirty");
+  }
+
+  async function save() {
+    if (!areaRef.current || stateRef.current === "saving") return;
+    setState("saving");
+    setError("");
+    try {
+      const node = await saveDoc(doc.path, htmlToMd(areaRef.current), etagRef.current);
+      if (node.etag) etagRef.current = node.etag;
+      setConflict(false);
+      setState("saved");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // A conflict copy was already stored; drop our stale etag so the
+        // next save writes the editor content over the file.
+        etagRef.current = undefined;
+        setConflict(true);
+      }
+      setError(err instanceof Error ? err.message : "грешка при запис");
+      setState("dirty");
+    }
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void save();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const status =
+    state === "saving" ? "Записване…" : state === "dirty" ? "Незапазени промени" : "Запазено";
+
+  return (
+    <div className="editor-shell">
+      <header className="editor-topbar">
+        <button type="button" className="icon-btn" title="Назад" onClick={() => router.push("/")}>
+          <IconClose />
+        </button>
+        <span className="editor-name">{doc.name}</span>
+        <span className={`editor-status${state === "dirty" ? " dirty" : ""}`}>{status}</span>
+        <span className="grow" />
+        <button type="button" className="btn" onClick={() => void save()} disabled={state === "saving"}>
+          Запази
+        </button>
+      </header>
+
+      <div className="editor-toolbar">
+        <ToolButton label={<b>B</b>} title="Удебелен (Ctrl+B)" onAction={() => exec("bold")} />
+        <ToolButton label={<i>I</i>} title="Курсив (Ctrl+I)" onAction={() => exec("italic")} />
+        <span className="tool-sep" />
+        <ToolButton label="H1" title="Заглавие 1" onAction={() => exec("formatBlock", "h1")} />
+        <ToolButton label="H2" title="Заглавие 2" onAction={() => exec("formatBlock", "h2")} />
+        <ToolButton label="H3" title="Заглавие 3" onAction={() => exec("formatBlock", "h3")} />
+        <ToolButton label="¶" title="Обикновен текст" onAction={() => exec("formatBlock", "p")} />
+        <span className="tool-sep" />
+        <ToolButton label="•" title="Списък" onAction={() => exec("insertUnorderedList")} />
+        <ToolButton label="1." title="Номериран списък" onAction={() => exec("insertOrderedList")} />
+        <span className="tool-sep" />
+        <ToolButton label="⌫" title="Махни форматирането" onAction={() => exec("removeFormat")} />
+      </div>
+
+      {error ? (
+        <p className="err" style={{ margin: "8px 24px" }}>
+          {error}
+          {conflict ? " Натиснете „Запази“ отново, за да презапишете файла с това съдържание." : ""}
+        </p>
+      ) : null}
+
+      <div className="editor-scroll">
+        <div
+          ref={areaRef}
+          className="editor-page"
+          contentEditable
+          suppressContentEditableWarning
+          spellCheck={false}
+          onInput={() => setState("dirty")}
+        />
+      </div>
+    </div>
+  );
+}
