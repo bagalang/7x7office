@@ -78,7 +78,7 @@ fn tree_remove(db: OrmDb, ws: i64, owner: i64, path: str) -> FmrOut !IO !Net !Ti
     d = logged.db
     i = 0
     while i < vec_len(hashes) {
-        tree_ver_gc(d, vec_get(hashes, i))?
+        tree_ver_gc(d, ws, vec_get(hashes, i))?
         i = i + 1
     }
     return act_no_content(d)

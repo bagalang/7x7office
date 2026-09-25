@@ -292,7 +292,10 @@
 
 ## Фаза 7 — Хардънинг и мащаб (по желание)
 
-- [ ] Криптиране на blobs при покой (AES-GCM от std/crypto, per-workspace ключове — модел `data/key`)
+- [x] Криптиране на blobs при покой (2026-09-25): AES-GCM, ключ на пространство
+      в `data_keys` (увит с `SECP_MASTER_KEY`). Без променливата записът е
+      открит текст. Старите файлове се четат от стария път. Чист тест
+      `tests/data_seal_test.baga`, жив `tools/crypt_smoke.sh`
 - [ ] WOPI: **wopibaga** за Collabora/OnlyOffice (допълнение към officebaga)
 - [ ] **s3baga** datasource; blobs в rocksbaga или директно в **boilaDB** (rocksbaga storage под нея — може да се допълва при нужда) като алтернативи на FS
 - [ ] otelbaga traceparent през целия път; rate limiting (relbaga bulkhead)

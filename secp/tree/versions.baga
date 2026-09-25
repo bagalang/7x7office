@@ -121,24 +121,48 @@ fn tree_ver_refs(db: OrmDb, hash: str) -> OrmCount !IO !Net {
     return OrmCOk(OrmCountOk { count: n, db: orm_db_q(q) })
 }
 
-// Version-aware blob GC: delete only when neither nodes nor versions
-// reference the hash. Best-effort like the old tree_blob_gc.
-fn tree_ver_gc(db: OrmDb, hash: str) -> i64 !IO !Net {
+fn tree_ver_refs_ws(db: OrmDb, ws: i64, hash: str) -> OrmCount !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, hash)
+    let sql = "SELECT COUNT(*) AS count FROM tree_versions WHERE workspace_id = $1 AND hash = $2"
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return OrmCErr(OrmCountFail { err: orm_err_q(q), db: orm_db_q(q) })
+    }
+    let mut n: i64 = 0
+    if orm_nrows(q) > 0 {
+        n = orm_cell_i64(q, 0, 0)
+    }
+    return OrmCOk(OrmCountOk { count: n, db: orm_db_q(q) })
+}
+
+// Шифрованият файл е на пространството. Старият общ файл се трие само
+// когато НИКОЙ вече не сочи hash-а.
+fn tree_ver_gc(db: OrmDb, ws: i64, hash: str) -> i64 !IO !Net {
     if hash == "" {
         return 0
     }
-    let c1 = tree_hash_refs(db, hash)?
-    if orm_ok_c(c1) == 0 {
+    let wn = tree_hash_refs_ws(db, ws, hash)?
+    if orm_ok_c(wn) == 0 {
         return 0
     }
-    if orm_count_n(c1) > 0 {
+    let wv = tree_ver_refs_ws(orm_db_c(wn), ws, hash)?
+    if orm_ok_c(wv) == 0 {
         return 0
     }
-    let c2 = tree_ver_refs(orm_db_c(c1), hash)?
-    if orm_ok_c(c2) == 0 {
+    if orm_count_n(wn) == 0 && orm_count_n(wv) == 0 {
+        data_blob_delete_ws(ws, hash)?
+    }
+    let gn = tree_hash_refs(orm_db_c(wv), hash)?
+    if orm_ok_c(gn) == 0 {
         return 0
     }
-    if orm_count_n(c2) == 0 {
+    let gv = tree_ver_refs(orm_db_c(gn), hash)?
+    if orm_ok_c(gv) == 0 {
+        return 0
+    }
+    if orm_count_n(gn) == 0 && orm_count_n(gv) == 0 {
         data_blob_delete(hash)?
     }
     return 0
@@ -164,7 +188,7 @@ fn tree_ver_cap(db: OrmDb, node_id: i64, keep: i64) -> OrmQuery !IO !Net {
         }
         i = keep
         while i < orm_nrows(q) {
-            tree_ver_gc(d, orm_cell_by(q, i, "hash"))?
+            tree_ver_gc(d, orm_cell_by_i64(q, i, "workspace_id"), orm_cell_by(q, i, "hash"))?
             i = i + 1
         }
     }

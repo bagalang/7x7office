@@ -8,6 +8,7 @@ import "versions.baga"
 import "activity_kinds.baga"
 import "activity_model.baga"
 import "../data/blobs.baga"
+import "../data/crypt.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -103,21 +104,26 @@ fn act_fs_version_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_404(orm_db_q(v), "version not found")
     }
     let hash = orm_cell_by(v, 0, "hash")
-    let body = data_blob_get(hash)?
-    if bytes_len(body) == 0 && orm_cell_by_i64(v, 0, "size") > 0 {
-        return act_err(orm_db_q(v), 500, "blob missing")
+    let size = orm_cell_by_i64(v, 0, "size")
+    let got = data_open(orm_db_q(v), r.ws, hash)?
+    if got.err != "" {
+        return act_err(got.db, 500, got.err)
+    }
+    let body = got.body
+    if bytes_len(body) == 0 && size > 0 {
+        return act_err(got.db, 500, "blob missing")
     }
     let path = tree_qpath(ctx, "path")
     let mut resp = http_response_bytes(200, body)
     resp = http_set_header(resp, "Content-Type", tree_mime(path))
     resp = http_set_header(resp, "ETag", hash)
     resp = http_set_header(resp, "Content-Disposition", concat("attachment; filename=\"", concat(tree_name_of(path), "\"")))
-    return fmr_out(resp, orm_db_q(v))
+    return fmr_out(resp, got.db)
 }
 
 // Restore: snapshot the current content, then point the node at the
 // version's blob. The version row stays (history is append-only).
-fn act_fs_version_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_fs_version_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let r = tree_ver_req(ctx, db, 2, 1)?
     if r.ok == 0 {
         return r.out
@@ -146,7 +152,12 @@ fn act_fs_version_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         let q = tree_find(d, r.ws, path)?
         return act_ok(orm_db_q(q), tree_node_json(q, 0))
     }
-    let body = data_blob_get(v_hash)?
+    let got = data_open(d, r.ws, v_hash)?
+    if got.err != "" {
+        return act_err(got.db, 500, got.err)
+    }
+    d = got.db
+    let body = got.body
     if bytes_len(body) == 0 && v_size > 0 {
         return act_err(d, 500, "blob missing")
     }
@@ -158,7 +169,9 @@ fn act_fs_version_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         }
         d = orm_db_exec(snap)
     }
-    let thumb = tree_make_thumb(body)?
+    let th = tree_make_thumb(d, r.ws, body)?
+    d = th.db
+    let thumb = th.hash
     let upd = tree_update_file(d, r.node_id, v_size, v_hash, thumb)?
     if orm_ok(upd) == 0 {
         return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
@@ -169,7 +182,7 @@ fn act_fs_version_restore(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(orm_db_q(cap), 500, orm_err_q(cap))
     }
     d = orm_db_q(cap)
-    tree_ver_gc(d, cur_thumb)?
+    tree_ver_gc(d, r.ws, cur_thumb)?
     let q = tree_find(d, r.ws, path)?
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(d, 500, "restore ok but node missing")
@@ -206,12 +219,16 @@ fn tree_zip_req(ctx: FmrCtx, db: OrmDb) -> TreeZipReq !IO !Net {
     if orm_cell_by_i64(q, 0, "is_dir") == 1 {
         return TreeZipReq { ok: 0, db: orm_db_q(q), zip: zip_empty_err(""), out: act_err(orm_db_q(q), 400, "is a directory") }
     }
-    let body = data_blob_get(orm_cell_by(q, 0, "hash"))?
-    let z = zip_open_bytes(body)
-    if z.ok == 0 {
-        return TreeZipReq { ok: 0, db: orm_db_q(q), zip: z, out: act_err(orm_db_q(q), 400, z.err) }
+    let hash = orm_cell_by(q, 0, "hash")
+    let got = data_open(orm_db_q(q), t.ws, hash)?
+    if got.err != "" {
+        return TreeZipReq { ok: 0, db: got.db, zip: zip_empty_err(""), out: act_err(got.db, 500, got.err) }
     }
-    return TreeZipReq { ok: 1, db: orm_db_q(q), zip: z, out: fmr_out(http_response(200, ""), orm_db_q(q)) }
+    let z = zip_open_bytes(got.body)
+    if z.ok == 0 {
+        return TreeZipReq { ok: 0, db: got.db, zip: z, out: act_err(got.db, 400, z.err) }
+    }
+    return TreeZipReq { ok: 1, db: got.db, zip: z, out: fmr_out(http_response(200, ""), got.db) }
 }
 
 fn act_fs_zip_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {

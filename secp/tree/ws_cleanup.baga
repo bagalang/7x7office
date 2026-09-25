@@ -19,6 +19,7 @@ import "dav_lock.baga"
 import "share_model.baga"
 import "versions.baga"
 import "../data/blobs.baga"
+import "../data/keys.baga"
 import "ormbaga/orm.baga"
 import "std/str/str.baga"
 
@@ -104,12 +105,17 @@ fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net !Time {
         return TreeWsPurge { db: orm_db_exec(dl), nodes: 0, err: "delete locks failed" }
     }
     d = orm_db_exec(dl)
+    let kd = data_key_drop(d, ws)?
+    if orm_ok(kd) == 0 {
+        return TreeWsPurge { db: orm_db_exec(kd), nodes: 0, err: "delete key failed" }
+    }
+    d = orm_db_exec(kd)
     // GC: има ли още някой друг (друг workspace/версия), или blob-ът е за триене
     let mut i: i64 = 0
     while i < n {
         let h = orm_cell_by(hq, i, "hash")
         if h != "" {
-            tree_ver_gc(d, h)?
+            tree_ver_gc(d, ws, h)?
         }
         i = i + 1
     }

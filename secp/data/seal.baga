@@ -1,0 +1,89 @@
+// data/seal.baga — AES-GCM плик за blob и за ключ на пространство.
+// ЧИСТ модул: без база и без файлове. Ключът е 32 байта, nonce е 12.
+// AAD връзва шифъра към пространството, за да не се мести файл между тях.
+
+import "std/crypto/aes.baga"
+import "std/crypto/gcm.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+
+struct DataPlain {
+    ok: i64,
+    pt: bytes
+}
+
+fn data_plain_fail() -> DataPlain {
+    return DataPlain { ok: 0, pt: bytes_new(0) }
+}
+
+fn data_master_hex_ok(h: str) -> i64 {
+    if len(h) != 64 {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < 64 {
+        if hex_val(char_at(h, i)) < 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn data_aad_blob(ws: i64) -> bytes {
+    return bytes_of_str(concat("secp-blob:", int_to_str(ws)))
+}
+
+fn data_aad_key(ws: i64) -> bytes {
+    return bytes_of_str(concat("secp-key:", int_to_str(ws)))
+}
+
+fn data_bytes_push(v: Vec<i64>, b: bytes) -> Vec<i64> {
+    let mut i: i64 = 0
+    let n = bytes_len(b)
+    while i < n {
+        vec_push(v, bytes_at(b, i))
+        i = i + 1
+    }
+    return v
+}
+
+// S1 || nonce || (ciphertext || tag). Празен резултат = лош ключ или nonce.
+fn data_seal_close(key: bytes, nonce: bytes, aad: bytes, pt: bytes) -> bytes {
+    if bytes_len(key) != 32 {
+        return bytes_new(0)
+    }
+    if bytes_len(nonce) != 12 {
+        return bytes_new(0)
+    }
+    let ct = gcm_seal(aes_expand(key), nonce, aad, pt)
+    let v: Vec<i64> = vec_new()
+    vec_push(v, 83)
+    vec_push(v, 49)
+    let v2 = data_bytes_push(v, nonce)
+    let v3 = data_bytes_push(v2, ct)
+    return bytes_from_vec(v3)
+}
+
+fn data_seal_open(key: bytes, packed: bytes, aad: bytes) -> DataPlain {
+    if bytes_len(key) != 32 {
+        return data_plain_fail()
+    }
+    let n = bytes_len(packed)
+    if n < 30 {
+        return data_plain_fail()
+    }
+    if bytes_at(packed, 0) != 83 {
+        return data_plain_fail()
+    }
+    if bytes_at(packed, 1) != 49 {
+        return data_plain_fail()
+    }
+    let nonce = bytes_slice(packed, 2, 14)
+    let ct = bytes_slice(packed, 14, n)
+    let opened = gcm_open(aes_expand(key), nonce, aad, ct)
+    if opened.ok == 0 {
+        return data_plain_fail()
+    }
+    return DataPlain { ok: 1, pt: opened.pt }
+}

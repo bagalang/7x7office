@@ -10,6 +10,7 @@ import "versions.baga"
 import "activity_model.baga"
 import "text.baga"
 import "../data/blobs.baga"
+import "../data/crypt.baga"
 import "ormbaga/orm.baga"
 import "fmrbaga/action.baga"
 import "fmrbaga/jsonx.baga"
@@ -59,24 +60,29 @@ fn tree_versions_keep() -> i64 !IO {
 
 // ---------- thumbnails ----------
 
-// 256px-max PNG thumbnail into the blob store; "" when not an image.
-fn tree_make_thumb(content: bytes) -> str !IO {
+struct ThumbOut {
+    db: OrmDb,
+    hash: str
+}
+
+// 256px-max PNG thumbnail into the blob store; hash "" when not an image.
+fn tree_make_thumb(db: OrmDb, ws: i64, content: bytes) -> ThumbOut !IO !Net !Random {
     if bytes_len(content) > 20971520 {
-        return ""
+        return ThumbOut { db: db, hash: "" }
     }
     let info = img_info(content)
     if info.ok == 0 {
-        return ""
+        return ThumbOut { db: db, hash: "" }
     }
     if info.w < 1 || info.h < 1 {
-        return ""
+        return ThumbOut { db: db, hash: "" }
     }
     if info.w <= 256 && info.h <= 256 {
-        return ""  // small enough — clients use the file itself
+        return ThumbOut { db: db, hash: "" }
     }
     let im = img_load(content)
     if im.ok == 0 {
-        return ""
+        return ThumbOut { db: db, hash: "" }
     }
     let mut tw: i64 = 256
     let mut th: i64 = 256
@@ -89,13 +95,14 @@ fn tree_make_thumb(content: bytes) -> str !IO {
     if th < 1 { th = 1 }
     let rim = img_resize_bilinear(im, tw, th)
     if rim.ok == 0 {
-        return ""
+        return ThumbOut { db: db, hash: "" }
     }
     let png = img_encode(rim, img_fmt_png())
     if bytes_len(png) == 0 {
-        return ""
+        return ThumbOut { db: db, hash: "" }
     }
-    return data_blob_put(png)?
+    let saved = data_save(db, ws, png)?
+    return ThumbOut { db: saved.db, hash: saved.hash }
 }
 
 // ---------- mkdir -p ----------
@@ -140,7 +147,7 @@ fn tree_mkdir_p(db: OrmDb, ws: i64, owner: i64, path: str) -> str !IO !Net {
 
 // Shared store flow (PUT file, doc save): quota → mkdir -p → blob →
 // node upsert → GC of replaced blobs. thumbs=1 probes for image thumbs.
-fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumbs: i64) -> FmrOut !IO !Net !Time {
+fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumbs: i64) -> FmrOut !IO !Net !Time !Random {
     let size = bytes_len(body)
     let mut d = db
     // quota: usage + new - replaced <= quota
@@ -176,13 +183,17 @@ fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumb
     if perr != "" {
         return act_err(d, 409, perr)
     }
-    let hash = data_blob_put(body)?
-    if hash == "" {
-        return act_err(d, 500, "blob write failed")
+    let saved = data_save(d, ws, body)?
+    if saved.hash == "" {
+        return act_err(saved.db, 500, saved.err)
     }
+    d = saved.db
+    let hash = saved.hash
     let mut thumb = ""
     if thumbs == 1 {
-        thumb = tree_make_thumb(body)?
+        let th = tree_make_thumb(d, ws, body)?
+        d = th.db
+        thumb = th.hash
     }
     if existing_id > 0 {
         // Phase 5: snapshot the displaced content as a version first, so
@@ -206,8 +217,8 @@ fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumb
             }
             d = orm_db_q(cap)
         }
-        tree_ver_gc(d, old_hash)?
-        tree_ver_gc(d, old_thumb)?
+        tree_ver_gc(d, ws, old_hash)?
+        tree_ver_gc(d, ws, old_thumb)?
     } else {
         let ins = tree_insert(d, ws, owner, path, tree_parent_of(path), tree_name_of(path), 0, size, hash, thumb)?
         if orm_ok(ins) == 0 {

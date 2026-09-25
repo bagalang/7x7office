@@ -21,6 +21,7 @@ import "share_roles.baga"
 import "model.baga"
 import "store.baga"
 import "../data/blobs.baga"
+import "../data/crypt.baga"
 import "../idm/mail.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -288,8 +289,12 @@ fn act_share_view(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         // нищо — само метаданни (викащият решава дали да дръпне /download)
     }
     if size <= 1048576 && (str_starts_with(mime, "text/") == 1 || mime == "application/json") {
-        let body = data_blob_get(hash)?
-        out = jobj_str(out, "content", str_of_bytes(body))
+        let got = data_open(d, o.ws, hash)?
+        if got.err != "" {
+            return act_err(got.db, 500, got.err)
+        }
+        d = got.db
+        out = jobj_str(out, "content", str_of_bytes(got.body))
     }
     return act_ok(d, out)
 }
@@ -318,13 +323,17 @@ fn act_share_download(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let hash = orm_cell_by(q, 0, "hash")
     let size = orm_cell_by_i64(q, 0, "size")
     let name = orm_cell_by(q, 0, "name")
-    let body = data_blob_get(hash)?
-    if bytes_len(body) == 0 && size > 0 {
-        return act_err(orm_db_q(q), 500, "blob missing")
+    let got = data_open(orm_db_q(q), o.ws, hash)?
+    if got.err != "" {
+        return act_err(got.db, 500, got.err)
     }
+    if bytes_len(got.body) == 0 && size > 0 {
+        return act_err(got.db, 500, "blob missing")
+    }
+    let body = got.body
     // Броячът се вдига ПРЕДИ отговора: ако записът се провали, по-добре да
     // не сме дали файла, отколкото да сме го дали и броячът да е сбъркан.
-    let bump = share_bump_downloads(orm_db_q(q), o.id, o.downloads)?
+    let bump = share_bump_downloads(got.db, o.id, o.downloads)?
     if orm_ok(bump) == 0 {
         return act_err(orm_db_exec(bump), 500, orm_err_exec(bump))
     }
@@ -336,7 +345,7 @@ fn act_share_download(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
 }
 
 // PUT /s/{token}/upload?path= → качване в папка (само ниво 2).
-fn act_share_upload(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_share_upload(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let o = share_open_resolve(ctx, db, share_path_token(ctx))?
     if o.ok == 0 {
         return o.out

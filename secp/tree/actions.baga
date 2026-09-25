@@ -18,6 +18,7 @@ import "model.baga"
 import "versions.baga"
 import "text.baga"
 import "../data/blobs.baga"
+import "../data/crypt.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -128,7 +129,7 @@ fn act_fs_mkdir(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     return act_created(logged.db, tree_node_json(q, 0))
 }
 
-fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 2, path)?
     if t.ok == 0 {
@@ -167,12 +168,16 @@ fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let hash = orm_cell_by(q, 0, "hash")
     let name = orm_cell_by(q, 0, "name")
-    let body = data_blob_get(hash)?
-    if bytes_len(body) == 0 && orm_cell_by_i64(q, 0, "size") > 0 {
-        return act_err(orm_db_q(q), 500, "blob missing")
+    let size = orm_cell_by_i64(q, 0, "size")
+    let got = data_open(orm_db_q(q), t.ws, hash)?
+    if got.err != "" {
+        return act_err(got.db, 500, got.err)
+    }
+    if bytes_len(got.body) == 0 && size > 0 {
+        return act_err(got.db, 500, "blob missing")
     }
     let mime = tree_mime(path)
-    let mut r = http_response_bytes(200, body)
+    let mut r = http_response_bytes(200, got.body)
     r = http_set_header(r, "Content-Type", mime)
     r = http_set_header(r, "ETag", hash)
     let mut disp = "attachment"
@@ -180,7 +185,7 @@ fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         disp = "inline"
     }
     r = http_set_header(r, "Content-Disposition", concat(concat(disp, "; filename=\""), concat(name, "\"")))
-    return fmr_out(r, orm_db_q(q))
+    return fmr_out(r, got.db)
 }
 
 // Text preview for the file manager. Office files go through officebaga.
@@ -221,6 +226,7 @@ fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let ext = tree_ext(path)
     let mut kind = "empty"
     let mut text = ""
+    let mut hold = orm_db_q(q)
     if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "webp" || ext == "bmp" {
         kind = "image"
     } else {
@@ -233,10 +239,16 @@ fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
                 kind = "zip"
             } else {
                 let hash = orm_cell_by(q, 0, "hash")
-                let body = data_blob_get(hash)?
-                if bytes_len(body) == 0 && orm_cell_by_i64(q, 0, "size") > 0 {
-                    return act_err(orm_db_q(q), 500, "blob missing")
+                let size = orm_cell_by_i64(q, 0, "size")
+                let got = data_open(orm_db_q(q), t.ws, hash)?
+                if got.err != "" {
+                    return act_err(got.db, 500, got.err)
                 }
+                if bytes_len(got.body) == 0 && size > 0 {
+                    return act_err(got.db, 500, "blob missing")
+                }
+                let body = got.body
+                hold = got.db
                 if ext == "md" {
                     kind = "markdown"
                     text = str_of_bytes(body)
@@ -277,7 +289,7 @@ fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     o = jobj_str(o, "name", name)
     o = jobj_str(o, "kind", kind)
     o = jobj_str(o, "text", text)
-    return act_ok(orm_db_q(q), o)
+    return act_ok(hold, o)
 }
 
 fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
@@ -294,14 +306,17 @@ fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if thumb == "" {
         return act_404(orm_db_q(q), "no thumbnail")
     }
-    let body = data_blob_get(thumb)?
-    if bytes_len(body) == 0 {
-        return act_err(orm_db_q(q), 500, "thumb blob missing")
+    let got = data_open(orm_db_q(q), t.ws, thumb)?
+    if got.err != "" {
+        return act_err(got.db, 500, got.err)
     }
-    let mut r = http_response_bytes(200, body)
+    if bytes_len(got.body) == 0 {
+        return act_err(got.db, 500, "thumb blob missing")
+    }
+    let mut r = http_response_bytes(200, got.body)
     r = http_set_header(r, "Content-Type", "image/png")
     r = http_set_header(r, "Cache-Control", "private, max-age=3600")
-    return fmr_out(r, orm_db_q(q))
+    return fmr_out(r, got.db)
 }
 
 fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {

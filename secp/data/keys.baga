@@ -1,0 +1,101 @@
+// data/keys.baga — ключ на пространство, увит с главния ключ.
+// В базата стои само плика (hex). Суровият ключ не се записва и не се логва.
+// Таблицата е data_keys. Модулът data я притежава.
+
+import "seal.baga"
+import "ormbaga/orm.baga"
+import "std/bytes/bytes.baga"
+import "std/random/random.baga"
+import "std/str/str.baga"
+
+struct DataKey {
+    db: OrmDb,
+    raw: bytes,
+    err: str
+}
+
+fn data_key_fail(db: OrmDb, err: str) -> DataKey {
+    return DataKey { db: db, raw: bytes_new(0), err: err }
+}
+
+fn data_key_find(db: OrmDb, ws: i64) -> OrmQuery !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_query_params_str(db, "SELECT wrapped FROM data_keys WHERE workspace_id = $1", vals)?
+}
+
+fn data_key_insert(db: OrmDb, ws: i64, wrapped: str) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, wrapped)
+    return orm_exec_params_str(db, "INSERT INTO data_keys (workspace_id, wrapped) VALUES ($1, $2)", vals)?
+}
+
+fn data_key_drop(db: OrmDb, ws: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    return orm_exec_params_str(db, "DELETE FROM data_keys WHERE workspace_id = $1", vals)?
+}
+
+fn data_nonce12() -> bytes !Random {
+    return bytes_from_vec(random_bytes(12))
+}
+
+fn data_key_unwrap(db: OrmDb, ws: i64, master: bytes, wrapped_hex: str) -> DataKey {
+    let packed = bytes_from_vec(bytes_from_hex(wrapped_hex))
+    let opened = data_seal_open(master, packed, data_aad_key(ws))
+    if opened.ok == 0 {
+        return data_key_fail(db, "workspace key unwrap failed")
+    }
+    return DataKey { db: db, raw: opened.pt, err: "" }
+}
+
+// Чете съществуващ ключ. Не създава нов — четенето на стар файл не бива
+// да върти ключа.
+fn data_key_load(db: OrmDb, ws: i64, master: bytes) -> DataKey !IO !Net {
+    let q = data_key_find(db, ws)?
+    if orm_ok_q(q) == 0 {
+        return data_key_fail(orm_db_q(q), orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return data_key_fail(orm_db_q(q), "workspace key missing")
+    }
+    let wrapped = orm_cell_by(q, 0, "wrapped")
+    return data_key_unwrap(orm_db_q(q), ws, master, wrapped)
+}
+
+// Връща ключа, създава го при първи запис. При загубен insert (друг
+// worker е спечелил) чете отново неговия ред.
+fn data_key_ensure(db: OrmDb, ws: i64, master: bytes) -> DataKey !IO !Net !Random {
+    let q = data_key_find(db, ws)?
+    if orm_ok_q(q) == 0 {
+        return data_key_fail(orm_db_q(q), orm_err_q(q))
+    }
+    if orm_nrows(q) > 0 {
+        let wrapped = orm_cell_by(q, 0, "wrapped")
+        return data_key_unwrap(orm_db_q(q), ws, master, wrapped)
+    }
+    let raw = bytes_from_vec(random_bytes(32))
+    if bytes_len(raw) != 32 {
+        return data_key_fail(orm_db_q(q), "key random failed")
+    }
+    let nonce = data_nonce12()?
+    if bytes_len(nonce) != 12 {
+        return data_key_fail(orm_db_q(q), "nonce failed")
+    }
+    let packed = data_seal_close(master, nonce, data_aad_key(ws), raw)
+    if bytes_len(packed) < 30 {
+        return data_key_fail(orm_db_q(q), "key wrap failed")
+    }
+    let hex = bytes_to_hex(vec_from_bytes(packed))
+    let ins = data_key_insert(orm_db_q(q), ws, hex)?
+    if orm_ok(ins) == 0 {
+        let again = data_key_find(orm_db_exec(ins), ws)?
+        if orm_ok_q(again) == 0 || orm_nrows(again) < 1 {
+            return data_key_fail(orm_db_exec(ins), orm_err_exec(ins))
+        }
+        let wrapped2 = orm_cell_by(again, 0, "wrapped")
+        return data_key_unwrap(orm_db_q(again), ws, master, wrapped2)
+    }
+    return DataKey { db: orm_db_exec(ins), raw: raw, err: "" }
+}

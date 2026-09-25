@@ -298,6 +298,14 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_dav_locks_on_ws ON dav_locks (workspace_id, path)",
         "DROP INDEX IF EXISTS index_dav_locks_on_ws"
     )
+    // Фаза 7: ключ на пространство. Суровият ключ не се пази — само пликът.
+    set = migrate_add(
+        set,
+        20260925035,
+        "create_data_keys",
+        "CREATE TABLE data_keys (workspace_id BIGINT PRIMARY KEY, wrapped TEXT NOT NULL)",
+        "DROP TABLE IF EXISTS data_keys"
+    )
     return set
 }
 
@@ -551,6 +559,13 @@ fn secp_boila_migrations() -> MigrationSet {
         "index_dav_locks_ws",
         "CREATE INDEX IF NOT EXISTS index_dav_locks_on_ws ON dav_locks (workspace_id, path)",
         "DROP INDEX IF EXISTS index_dav_locks_on_ws"
+    )
+    set = migrate_add(
+        set,
+        20260925035,
+        "create_data_keys",
+        "CREATE TABLE IF NOT EXISTS data_keys (workspace_id BIGINT, wrapped TEXT, PRIMARY KEY (workspace_id))",
+        "DROP TABLE IF EXISTS data_keys"
     )
     return set
 }

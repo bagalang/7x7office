@@ -235,6 +235,23 @@ fn tree_hash_refs(db: OrmDb, hash: str) -> OrmCount !IO !Net {
     return orm_count_sql(db, concat(sql, "'"))?
 }
 
+fn tree_hash_refs_ws(db: OrmDb, ws: i64, hash: str) -> OrmCount !IO !Net {
+    let sql = "SELECT COUNT(*) AS count FROM tree_nodes WHERE workspace_id = $1 AND (hash = $2 OR thumb_hash = $3)"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, hash)
+    vec_push(vals, hash)
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return OrmCErr(OrmCountFail { err: orm_err_q(q), db: orm_db_q(q) })
+    }
+    let mut n: i64 = 0
+    if orm_nrows(q) > 0 {
+        n = orm_cell_i64(q, 0, 0)
+    }
+    return OrmCOk(OrmCountOk { count: n, db: orm_db_q(q) })
+}
+
 fn tree_node_json(q: OrmQuery, row: i64) -> JObj {
     let mut o = jobj_new()
     o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))

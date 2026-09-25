@@ -1,0 +1,108 @@
+// data/crypt.baga — запис и четене на blob.
+// Без SECP_MASTER_KEY файловете остават както досега (открит текст,
+// общ път по hash). С 64 hex знака новите записи са AES-GCM с ключ
+// на пространството. Старият път се чете, докато файлът е още там.
+
+import "blobs.baga"
+import "keys.baga"
+import "seal.baga"
+import "ormbaga/orm.baga"
+import "std/crypto/sha256.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+import "std/os/os.baga"
+
+struct DataMaster {
+    on: i64,
+    key: bytes,
+    err: str
+}
+
+struct DataSaved {
+    db: OrmDb,
+    hash: str,
+    err: str
+}
+
+struct DataGot {
+    db: OrmDb,
+    body: bytes,
+    err: str
+}
+
+fn data_master() -> DataMaster !IO {
+    let h = env("SECP_MASTER_KEY")?
+    if str_trim(h) == "" {
+        return DataMaster { on: 0, key: bytes_new(0), err: "" }
+    }
+    if data_master_hex_ok(h) == 0 {
+        return DataMaster { on: 0, key: bytes_new(0), err: "SECP_MASTER_KEY must be 64 hex chars" }
+    }
+    return DataMaster { on: 1, key: bytes_from_vec(bytes_from_hex(h)), err: "" }
+}
+
+fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random {
+    let master = data_master()?
+    if master.err != "" {
+        return DataSaved { db: db, hash: "", err: master.err }
+    }
+    if master.on == 0 {
+        let hash = data_blob_put(content)?
+        if hash == "" {
+            return DataSaved { db: db, hash: "", err: "blob write failed" }
+        }
+        return DataSaved { db: db, hash: hash, err: "" }
+    }
+    let hash = sha256_b_hex(content)
+    let root = data_root()?
+    let path = data_blob_path_ws(root, ws, hash)
+    if file_exists(path) == 1 {
+        return DataSaved { db: db, hash: hash, err: "" }
+    }
+    let key = data_key_ensure(db, ws, master.key)?
+    if key.err != "" {
+        return DataSaved { db: key.db, hash: "", err: key.err }
+    }
+    let nonce = data_nonce12()?
+    if bytes_len(nonce) != 12 {
+        return DataSaved { db: key.db, hash: "", err: "nonce failed" }
+    }
+    let packed = data_seal_close(key.raw, nonce, data_aad_blob(ws), content)
+    if bytes_len(packed) < 30 {
+        return DataSaved { db: key.db, hash: "", err: "blob seal failed" }
+    }
+    let rc = data_blob_write_ws(ws, hash, packed)?
+    if rc < 0 {
+        return DataSaved { db: key.db, hash: "", err: "blob write failed" }
+    }
+    return DataSaved { db: key.db, hash: hash, err: "" }
+}
+
+fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net {
+    if hash == "" {
+        return DataGot { db: db, body: bytes_new(0), err: "" }
+    }
+    let root = data_root()?
+    let path = data_blob_path_ws(root, ws, hash)
+    if file_exists(path) == 0 {
+        let body = data_blob_get(hash)?
+        return DataGot { db: db, body: body, err: "" }
+    }
+    let master = data_master()?
+    if master.err != "" {
+        return DataGot { db: db, body: bytes_new(0), err: master.err }
+    }
+    if master.on == 0 {
+        return DataGot { db: db, body: bytes_new(0), err: "blob is encrypted" }
+    }
+    let packed = read_file_bytes(path)?
+    let key = data_key_load(db, ws, master.key)?
+    if key.err != "" {
+        return DataGot { db: key.db, body: bytes_new(0), err: key.err }
+    }
+    let opened = data_seal_open(key.raw, packed, data_aad_blob(ws))
+    if opened.ok == 0 {
+        return DataGot { db: key.db, body: bytes_new(0), err: "blob decrypt failed" }
+    }
+    return DataGot { db: key.db, body: opened.pt, err: "" }
+}

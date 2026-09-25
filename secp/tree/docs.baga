@@ -9,6 +9,7 @@ import "store.baga"
 import "model.baga"
 import "versions.baga"
 import "../data/blobs.baga"
+import "../data/crypt.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -82,10 +83,15 @@ fn act_doc_load(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(orm_db_q(q), 400, "not an editable document")
     }
     let hash = orm_cell_by(q, 0, "hash")
-    let body = data_blob_get(hash)?
-    if bytes_len(body) == 0 && orm_cell_by_i64(q, 0, "size") > 0 {
-        return act_err(orm_db_q(q), 500, "blob missing")
+    let size = orm_cell_by_i64(q, 0, "size")
+    let got = data_open(orm_db_q(q), t.ws, hash)?
+    if got.err != "" {
+        return act_err(got.db, 500, got.err)
     }
+    if bytes_len(got.body) == 0 && size > 0 {
+        return act_err(got.db, 500, "blob missing")
+    }
+    let body = got.body
     let mut text = ""
     if ext == "txt" || ext == "md" || ext == "csv" {
         text = str_of_bytes(body)
@@ -113,10 +119,10 @@ fn act_doc_load(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     o = jobj_str(o, "format", ext)
     o = jobj_str(o, "etag", hash)
     o = jobj_str(o, "text", text)
-    return act_ok(orm_db_q(q), o)
+    return act_ok(got.db, o)
 }
 
-fn act_doc_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_doc_save(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 2, path)?
     if t.ok == 0 {
