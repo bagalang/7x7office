@@ -31,26 +31,193 @@ fn tree_search_esc(q: str) -> str {
     return buf_str(b)
 }
 
-// Един параметър, 2 колони → не можем `$1` на две места с ormbaga
-// (param-ите се броят по позиция), затова подаваме шаблона два пъти.
-fn tree_search_nodes(db: OrmDb, ws: i64, pat: str, limit: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT n.id, n.name, n.path, n.is_dir, n.size, n.updated_at, n.hash, CASE WHEN t.node_id IS NULL THEN 0 ELSE 1 END AS in_text FROM tree_nodes n LEFT JOIN tree_text t ON t.node_id = n.id WHERE n.workspace_id = $1 AND n.is_dir = 0 AND (n.name ILIKE $2 ESCAPE '\\' OR t.text ILIKE $3 ESCAPE '\\') ORDER BY n.name LIMIT "
-    let vals = vec_new()
-    vec_push(vals, int_to_str(ws))
-    vec_push(vals, pat)
-    vec_push(vals, pat)
-    return orm_query_params_str(db, concat(sql, int_to_str(limit)), vals)?
+// Резултатите от търсенето, слято от ДВЕ заявки (виж tree_search_nodes).
+// boilaSQL не решава квалифицирани колони в WHERE, не познава подзаявки в
+// FROM, а `WHERE <дясна колона> IS NULL` върху LEFT JOIN връща сбъркани
+// редове — затова няма JOIN: по една заявка на таблица и сливане в кода.
+struct SearchRows {
+    db: OrmDb,
+    err: str,
+    n: i64,
+    ids: Vec<i64>,
+    names: Vec<str>,
+    paths: Vec<str>,
+    is_dirs: Vec<i64>,
+    sizes: Vec<i64>,
+    updated_ats: Vec<str>,
+    in_texts: Vec<i64>
 }
 
-fn tree_search_json(q: OrmQuery, row: i64) -> JObj {
+fn search_rows_fail(db: OrmDb, err: str) -> SearchRows {
+    return SearchRows { db: db, err: err, n: 0, ids: vec_new(), names: vec_new(), paths: vec_new(), is_dirs: vec_new(), sizes: vec_new(), updated_ats: vec_new(), in_texts: vec_new() }
+}
+
+fn search_id_in(ids: Vec<i64>, id: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(ids) {
+        if vec_get(ids, i) == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// Долепяне на един ред от tree_nodes към резултата. Vec полетата се
+// споделят (мутацията се вижда отвън), скаларното `n` НЕ — викащият го
+// обновява с vec_len след цикъла.
+fn search_rows_push(rows: SearchRows, q: OrmQuery, r: i64, in_text: i64) {
+    vec_push(rows.ids, orm_cell_by_i64(q, r, "id"))
+    vec_push(rows.names, orm_cell_by(q, r, "name"))
+    vec_push(rows.paths, orm_cell_by(q, r, "path"))
+    vec_push(rows.is_dirs, orm_cell_by_i64(q, r, "is_dir"))
+    vec_push(rows.sizes, orm_cell_by_i64(q, r, "size"))
+    vec_push(rows.updated_ats, orm_cell_by(q, r, "updated_at"))
+    vec_push(rows.in_texts, in_text)
+}
+
+// `in_text` значи „възелът ИМА извлечен текст" (както CASE-ът в стария JOIN).
+// За редовете от крак А (съвпадение по име) се проверява с една IN заявка.
+fn search_mark_text(db: OrmDb, rows: SearchRows) -> SearchRows !IO !Net {
+    let mut csv = ""
+    let mut i: i64 = 0
+    while i < rows.n {
+        if csv != "" {
+            csv = concat(csv, ",")
+        }
+        csv = concat(csv, int_to_str(vec_get(rows.ids, i)))
+        i = i + 1
+    }
+    if csv == "" {
+        rows.db = db
+        return rows
+    }
+    let q = orm_query_params_str(db, concat("SELECT node_id FROM tree_text WHERE node_id IN (", concat(csv, ")")), vec_new())?
+    if orm_ok_q(q) == 0 {
+        return search_rows_fail(orm_db_q(q), orm_err_q(q))
+    }
+    rows.db = orm_db_q(q)
+    let mut j: i64 = 0
+    while j < orm_nrows(q) {
+        let nid = orm_cell_by_i64(q, j, "node_id")
+        let mut k: i64 = 0
+        while k < rows.n {
+            if vec_get(rows.ids, k) == nid {
+                vec_set(rows.in_texts, k, 1)
+            }
+            k = k + 1
+        }
+        j = j + 1
+    }
+    return rows
+}
+
+// Подредба по име (insertion sort — редовете са ≤ 2×лимита, детерминирано е).
+fn search_rows_sort(rows: SearchRows) {
+    let mut i: i64 = 1
+    while i < rows.n {
+        let mut j = i
+        while j > 0 {
+            let a = vec_get(rows.names, j - 1)
+            let b = vec_get(rows.names, j)
+            if a > b {
+                vec_set(rows.names, j - 1, b)
+                vec_set(rows.names, j, a)
+                let ida = vec_get(rows.ids, j - 1)
+                vec_set(rows.ids, j - 1, vec_get(rows.ids, j))
+                vec_set(rows.ids, j, ida)
+                let pa = vec_get(rows.paths, j - 1)
+                vec_set(rows.paths, j - 1, vec_get(rows.paths, j))
+                vec_set(rows.paths, j, pa)
+                let da = vec_get(rows.is_dirs, j - 1)
+                vec_set(rows.is_dirs, j - 1, vec_get(rows.is_dirs, j))
+                vec_set(rows.is_dirs, j, da)
+                let sa = vec_get(rows.sizes, j - 1)
+                vec_set(rows.sizes, j - 1, vec_get(rows.sizes, j))
+                vec_set(rows.sizes, j, sa)
+                let ua = vec_get(rows.updated_ats, j - 1)
+                vec_set(rows.updated_ats, j - 1, vec_get(rows.updated_ats, j))
+                vec_set(rows.updated_ats, j, ua)
+                let ta = vec_get(rows.in_texts, j - 1)
+                vec_set(rows.in_texts, j - 1, vec_get(rows.in_texts, j))
+                vec_set(rows.in_texts, j, ta)
+            }
+            j = j - 1
+        }
+        i = i + 1
+    }
+}
+
+// Търсенето е с ДВА крака, без JOIN:
+//   А) tree_nodes по име — ORDER BY name идва направо от базата;
+//   Б) tree_text по съдържание → node_id-та, после по един ред от tree_nodes
+//      за тези, които А не е хванал.
+// След сливането: подредба по име и рязане до лимита (като старата заявка).
+fn tree_search_nodes(db: OrmDb, ws: i64, pat: str, limit: i64) -> SearchRows !IO !Net {
+    let cols = "SELECT id, name, path, is_dir, size, updated_at FROM tree_nodes "
+    let vals_a = vec_new()
+    vec_push(vals_a, int_to_str(ws))
+    vec_push(vals_a, pat)
+    let qa = orm_query_params_str(db, concat(concat(cols, "WHERE workspace_id = $1 AND is_dir = 0 AND name ILIKE $2 ESCAPE '\\' ORDER BY name LIMIT "), int_to_str(limit)), vals_a)?
+    if orm_ok_q(qa) == 0 {
+        return search_rows_fail(orm_db_q(qa), orm_err_q(qa))
+    }
+    let mut rows = SearchRows { db: orm_db_q(qa), err: "", n: 0, ids: vec_new(), names: vec_new(), paths: vec_new(), is_dirs: vec_new(), sizes: vec_new(), updated_ats: vec_new(), in_texts: vec_new() }
+    let mut i: i64 = 0
+    while i < orm_nrows(qa) {
+        search_rows_push(rows, qa, i, 0)
+        i = i + 1
+    }
+    rows.n = vec_len(rows.ids)
+    // Крак Б: съвпадение в извлечения текст.
+    let vals_b = vec_new()
+    vec_push(vals_b, int_to_str(ws))
+    vec_push(vals_b, pat)
+    let qb = orm_query_params_str(rows.db, concat("SELECT node_id FROM tree_text WHERE workspace_id = $1 AND text ILIKE $2 ESCAPE '\\' LIMIT ", int_to_str(limit)), vals_b)?
+    if orm_ok_q(qb) == 0 {
+        return search_rows_fail(orm_db_q(qb), orm_err_q(qb))
+    }
+    let mut d = orm_db_q(qb)
+    let mut j: i64 = 0
+    while j < orm_nrows(qb) {
+        let nid = orm_cell_by_i64(qb, j, "node_id")
+        if search_id_in(rows.ids, nid) == 0 {
+            let vals_n = vec_new()
+            vec_push(vals_n, int_to_str(nid))
+            let qn = orm_query_params_str(d, concat(cols, "WHERE id = $1"), vals_n)?
+            if orm_ok_q(qn) == 0 {
+                return search_rows_fail(orm_db_q(qn), orm_err_q(qn))
+            }
+            d = orm_db_q(qn)
+            if orm_nrows(qn) > 0 {
+                search_rows_push(rows, qn, 0, 1)
+            }
+        }
+        j = j + 1
+    }
+    rows.n = vec_len(rows.ids)
+    // Маркирай „има текст" и за редовете от крак А (старото CASE поведение).
+    let marked = search_mark_text(d, rows)?
+    if marked.err != "" {
+        return marked
+    }
+    search_rows_sort(marked)
+    // Рязане до лимита (крак А + крак Б могат да дадат до 2×limit).
+    if marked.n > limit {
+        marked.n = limit
+    }
+    return marked
+}
+
+fn tree_search_json(rows: SearchRows, row: i64) -> JObj {
     let mut o = jobj_new()
-    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
-    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
-    o = jobj_str(o, "path", orm_cell_by(q, row, "path"))
-    o = jobj_i64(o, "is_dir", orm_cell_by_i64(q, row, "is_dir"))
-    o = jobj_i64(o, "size", orm_cell_by_i64(q, row, "size"))
-    o = jobj_i64(o, "in_text", orm_cell_by_i64(q, row, "in_text"))
-    let ua = orm_cell_by(q, row, "updated_at")
+    o = jobj_i64(o, "id", vec_get(rows.ids, row))
+    o = jobj_str(o, "name", vec_get(rows.names, row))
+    o = jobj_str(o, "path", vec_get(rows.paths, row))
+    o = jobj_i64(o, "is_dir", vec_get(rows.is_dirs, row))
+    o = jobj_i64(o, "size", vec_get(rows.sizes, row))
+    o = jobj_i64(o, "in_text", vec_get(rows.in_texts, row))
+    let ua = vec_get(rows.updated_ats, row)
     if ua != "" {
         o = jobj_str(o, "updated_at", ua)
     }

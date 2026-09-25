@@ -62,11 +62,11 @@ fn activity_qactor(ctx: FmrCtx) -> i64 {
     return parse_int(raw)
 }
 
-fn activity_rows_json(q: OrmQuery) -> str {
+fn activity_rows_json(rows: ActRows) -> str {
     let mut arr = jarr_new()
     let mut i: i64 = 0
-    while i < orm_nrows(q) {
-        arr = jarr_obj(arr, tree_activity_to_json(q, i))
+    while i < rows.n {
+        arr = jarr_obj(arr, tree_activity_to_json(rows, i))
         i = i + 1
     }
     return jarr_encode(arr)
@@ -74,7 +74,7 @@ fn activity_rows_json(q: OrmQuery) -> str {
 
 // Една заявка според филтъра — не „вземи всичко, после презапиши". Пътят
 // печели пред актьора, защото е по-тесен (виж бележката в activity_model.baga).
-fn activity_query(db: OrmDb, ws: i64, path: str, actor: i64, limit: i64) -> OrmQuery !IO !Net {
+fn activity_query(db: OrmDb, ws: i64, path: str, actor: i64, limit: i64) -> ActRows !IO !Net {
     if path != "" {
         return tree_activity_list_path(db, ws, path, limit)?
     }
@@ -114,9 +114,9 @@ fn act_activity_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     // "/a//b" не би съвпаднал с нищо и панелът „История" е празен.
     let path = activity_normalize_path(query_decode_val(fmr_query(ctx, "path")))
     let actor = activity_qactor(ctx)
-    let mut q = activity_query(t.out.db, t.ws, path, actor, limit)?
-    if orm_ok_q(q) == 0 {
-        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    let mut rows = activity_query(t.out.db, t.ws, path, actor, limit)?
+    if rows.err != "" {
+        return act_err(rows.db, 500, rows.err)
     }
     let mut o = jobj_new()
     o = jobj_i64(o, "workspace_id", t.ws)
@@ -124,7 +124,7 @@ fn act_activity_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     o = jobj_i64(o, "limit", limit)
     o = jobj_str(o, "path", path)
     o = jobj_i64(o, "actor_id", actor)
-    o = jobj_raw(o, "items", activity_rows_json(q))
-    o = jobj_i64(o, "count", orm_nrows(q))
-    return act_ok(orm_db_q(q), o)
+    o = jobj_raw(o, "items", activity_rows_json(rows))
+    o = jobj_i64(o, "count", rows.n)
+    return act_ok(rows.db, o)
 }

@@ -138,7 +138,7 @@ fn report_storage_sheet(db: OrmDb, user_id: i64, lang: str) -> ReportBuilt !IO !
     if ens.err != "" {
         return report_built_fail(ens.db, ens.err)
     }
-    let q = ws_list_all(ens.db, user_id)?
+    let q = ws_list_all(ens.db)?
     if orm_ok_q(q) == 0 {
         return report_built_fail(orm_db_q(q), orm_err_q(q))
     }
@@ -214,7 +214,7 @@ fn report_activity_sheet(db: OrmDb, user_id: i64, lang: str) -> ReportBuilt !IO 
     if ens.err != "" {
         return report_built_fail(ens.db, ens.err)
     }
-    let q = ws_list_all(ens.db, user_id)?
+    let q = ws_list_all(ens.db)?
     if orm_ok_q(q) == 0 {
         return report_built_fail(orm_db_q(q), orm_err_q(q))
     }

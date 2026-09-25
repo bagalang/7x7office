@@ -12,6 +12,7 @@ import "ws_gateway_loop.baga"
 import "ws_gateway_pump.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/config.baga"
+import "ormbaga/orm.baga"
 import "std/os/os.baga"
 import "std/str/str.baga"
 import "std/time/time.baga"
@@ -47,6 +48,11 @@ fn wsg_start() -> i64 !Par !IO !Net !Random !Time {
 
 // Основният цикъл на нишката. Тук е и JWT тайната: `fmr_config_load` я чете
 // веднъж, вместо всяка нова връзка да пипа средата.
+//
+// Връзката към базата за pump-а е ЕДНА и живее извън цикъла: отварянето на
+// нова на всеки tick (500 ms) хабеше по handshake към boilaDB два пъти в
+// секунда и натрупваше памет (fn-резултат struct-ове не се освобождават от
+// --rc). Мъртва връзка (orm_ok_db = 0 след провалена заявка) се преотваря.
 fn wsg_serve(port: i64) -> i64 !IO !Net !Par !Time !Random {
     let cfg = fmr_config_load()?
     let listener = tcp_listen(port)?
@@ -57,12 +63,26 @@ fn wsg_serve(port: i64) -> i64 !IO !Net !Par !Time !Random {
     eprintln(concat(concat("wsg: каналът слуша на :", int_to_str(port)), " (/ws)"))
     let mut hub = wsg_hub_new(listener, cfg.jwt_secret)
     let poll_ms = wsg_poll_ms()?
+    let mut pdb = fmr_open_db(fmr_build_app()?)?
     let mut ticks: i64 = 0
     while true {
         hub = wsg_step(hub, poll_ms)?
         // Излъчването е извън poll-а: зависи от часовника, не от мрежата.
         // Така събитие, записано между два чита, пак стига до клиента.
-        hub = wsg_pump(hub)?.hub
+        if orm_ok_db(pdb) == 0 {
+            orm_close(pdb)?
+            pdb = fmr_open_db(fmr_build_app()?)?
+        }
+        if orm_ok_db(pdb) == 1 {
+            let pr = wsg_pump(pdb, hub)?
+            hub = pr.hub
+            // Провалена заявка в pump-а значи вероятно умряла връзка:
+            // затваряме и преотваряме, иначе каналът мълчи вечно.
+            if pr.db_err == 1 {
+                orm_close(pdb)?
+                pdb = fmr_open_db(fmr_build_app()?)?
+            }
+        }
         ticks = ticks + 1
         // Ping-ът е по-рядко от tick-а: той е за откриване на мъртви връзки,
         // а не за трафик. 20 tick-а ≈ 10 s при подразбираните 500 ms.

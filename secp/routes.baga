@@ -133,7 +133,15 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
         r = http_set_header(r, "Retry-After", "1")
         return fmr_out(r, db)
     }
-    let out = secp_dispatch(ctx, db)?
+    // Гръмнал handler (raise вместо act_err) НЕ бива да излезе с `?`: тогава
+    // слотът на bulkhead-а не се връща (сървърът „блокира" след ~FMR_WORKERS
+    // грешки) и worker-ът от пула умира. Затова всички ефекти се ловят в 500,
+    // a secp_guard_put винаги се изпълнява.
+    let out = secp_dispatch(ctx, db)
+        catch !IO => fmr_out(fmr_500("internal error"), db)
+        catch !Net => fmr_out(fmr_500("internal error"), db)
+        catch !Random => fmr_out(fmr_500("internal error"), db)
+        catch !Time => fmr_out(fmr_500("internal error"), db)
     if admit == 1 {
         secp_guard_put(ctx)
     }

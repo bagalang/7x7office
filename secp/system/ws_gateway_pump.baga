@@ -297,11 +297,12 @@ fn wsg_on_readable(h: WsgHub, c0: WsgConn) -> WsgHub !IO !Net !Time !Random {
 
 struct WsgPump {
     hub: WsgHub,
-    sent: i64
+    sent: i64,
+    db_err: i64
 }
 
-fn wsg_pump_conn_done(h: WsgHub, sent: i64) -> WsgPump {
-    return WsgPump { hub: h, sent: sent }
+fn wsg_pump_conn_done(h: WsgHub, sent: i64, db_err: i64) -> WsgPump {
+    return WsgPump { hub: h, sent: sent, db_err: db_err }
 }
 
 // Новите редове от одита → събития към абонираните. Връща обновения хъб
@@ -310,15 +311,22 @@ fn wsg_pump_conn_done(h: WsgHub, sent: i64) -> WsgPump {
 // ЗАЩО НЕ „изпрати на всички едно и също": всеки абонат има СВОЙ курсор,
 // защото е абониран в различен момент. Така един бавен клиент не забавя
 // другите и не губи ред.
-fn wsg_pump(h: WsgHub) -> WsgPump !IO !Net !Time !Random {
-    let db = fmr_open_db(fmr_build_app()?)?
-    if orm_ok_db(db) == 0 {
-        orm_close(db)?
-        return wsg_pump_conn_done(h, 0)
+//
+// Връзката към базата идва ОТВЪН (wsg_serve я държи постоянна): тяхното
+// отваряне/затваряне на всеки tick (2 пъти в секунда) беше и най-големият
+// източник на натрупване в паметта при празен ход — struct-ове от fn
+// резултат не се освобождават от --rc (виж бележката в codegen_c.c), а един
+// PgConn носи буфери и читател.
+fn wsg_pump(db: OrmDb, h: WsgHub) -> WsgPump !IO !Net !Time !Random {
+    // Празен хъб = няма какво да се излъчва. Ранният изход пести и заявките,
+    // и копията на fds — на празен ход това е основният разход на цикъла.
+    if vec_len(h.fds) == 0 {
+        return wsg_pump_conn_done(h, 0, 0)
     }
     let mut hub = h
     let mut d = db
     let mut sent: i64 = 0
+    let mut db_err: i64 = 0
     // Копие: wsg_pump_conn може да махне връзка (мъртва), т.е. да смени hub.fds.
     let fds = wsg_fds_copy(hub)
     let mut i: i64 = 0
@@ -331,47 +339,54 @@ fn wsg_pump(h: WsgHub) -> WsgPump !IO !Net !Time !Random {
                 hub = r.hub
                 d = r.db
                 sent = sent + r.sent
+                if r.err == 1 {
+                    db_err = 1
+                }
             }
         }
         i = i + 1
     }
     let fan = wsg_fanout_chat(d, hub)?
-    orm_close(fan.db)?
-    return wsg_pump_conn_done(fan.hub, sent)
+    let mut e = db_err
+    if fan.err == 1 {
+        e = 1
+    }
+    return wsg_pump_conn_done(fan.hub, sent, e)
 }
 
 struct WsgPumpConn {
     hub: WsgHub,
     db: OrmDb,
-    sent: i64
+    sent: i64,
+    err: i64
 }
 
 // Един абонат: вземи новото след курсора му и изпрати. Изпращането е
 // „най-добро усилие" — ако записът се провали (затворен таб), връзката се
 // маха и останалите продължават.
 fn wsg_pump_conn(db: OrmDb, h: WsgHub, c: WsgConn) -> WsgPumpConn !IO !Net !Time {
-    let q = tree_activity_tail(db, c.ws, c.cursor, ws_tail_limit())?
-    let d = orm_db_q(q)
-    if orm_ok_q(q) == 0 {
-        return WsgPumpConn { hub: h, db: d, sent: 0 }
+    let rows = tree_activity_tail(db, c.ws, c.cursor, ws_tail_limit())?
+    let d = rows.db
+    if rows.err != "" {
+        return WsgPumpConn { hub: h, db: d, sent: 0, err: 1 }
     }
     let mut hub = h
     let mut cur = c
-    let total = orm_nrows(q)
+    let total = rows.n
     let mut i: i64 = 0
     let mut sent: i64 = 0
     while i < total {
-        let verb = orm_cell_by(q, i, "verb")
+        let verb = vec_get(rows.verbs, i)
         let ev = ws_event_of_verb(verb)
         // Непознат verb не се излъчва (виж ws_events.baga) — но курсорът се
         // мести и през него, иначе един лош ред би „заседнал" канала завинаги.
-        let id = orm_cell_by_i64(q, i, "id")
+        let id = vec_get(rows.ids, i)
         if ev != "" {
-            let item = jobj_encode(tree_activity_to_json(q, i))
+            let item = jobj_encode(tree_activity_to_json(rows, i))
             let msg = ws_msg_event(c.ws, ev, item)
             let w = wsg_send_text(c.fd, msg)?
             if w != 0 {
-                return WsgPumpConn { hub: wsg_conn_drop(hub, c.fd)?, db: d, sent: sent }
+                return WsgPumpConn { hub: wsg_conn_drop(hub, c.fd)?, db: d, sent: sent, err: 0 }
             }
             sent = sent + 1
         }
@@ -379,7 +394,7 @@ fn wsg_pump_conn(db: OrmDb, h: WsgHub, c: WsgConn) -> WsgPumpConn !IO !Net !Time
         i = i + 1
     }
     hub = wsg_conn_put(hub, cur)
-    return WsgPumpConn { hub: hub, db: d, sent: sent }
+    return WsgPumpConn { hub: hub, db: d, sent: sent, err: 0 }
 }
 
 // ---------- ping ----------
@@ -387,6 +402,9 @@ fn wsg_pump_conn(db: OrmDb, h: WsgHub, c: WsgConn) -> WsgPumpConn !IO !Net !Time
 // Сървър → клиент ping. Открива мъртви връзки, които poll не вижда
 // (половината отворен сокет: peer-ът не праща нищо, но и не затваря).
 fn wsg_ping_due(h: WsgHub) -> WsgHub !IO !Net !Time {
+    if vec_len(h.fds) == 0 {
+        return h
+    }
     let every = wsg_ping_ms()?
     let now = monotonic_ms()
     let mut hub = h

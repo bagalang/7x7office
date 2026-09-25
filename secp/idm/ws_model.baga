@@ -63,23 +63,64 @@ fn ws_find_by_slug(db: OrmDb, slug: str) -> OrmQuery !IO !Net {
 
 // Работните пространства на потребителя + ролята му (един JOIN, P28).
 // NULL role (админ без членство) се оправя в handler-а.
+// boilaSQL правила (важат и за Postgres): лявата таблица е първа в ON, а в
+// WHERE/ORDER BY колоните са неквалифицирани и недвусмислени (user_id,
+// is_personal, label ги има само в едната таблица).
 fn ws_list_for_user(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT w.id, w.slug, w.label, w.description, w.is_personal, w.owner_id, w.created_at, m.role AS role FROM idm_workspaces w LEFT JOIN idm_workspace_members m ON m.workspace_id = w.id WHERE m.user_id = $1 ORDER BY w.is_personal DESC, w.label"
+    let sql = "SELECT w.id, w.slug, w.label, w.description, w.is_personal, w.owner_id, w.created_at, m.role AS role FROM idm_workspaces w LEFT JOIN idm_workspace_members m ON w.id = m.workspace_id WHERE user_id = $1 ORDER BY is_personal DESC, label"
     let vals = vec_new()
     vec_push(vals, int_to_str(user_id))
     return orm_query_params_str(db, sql, vals)?
 }
 
-// За админ: всички workspace-и, с ролята на този потребител, ако е член.
-fn ws_list_all(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT w.id, w.slug, w.label, w.description, w.is_personal, w.owner_id, w.created_at, m.role AS role FROM idm_workspaces w LEFT JOIN idm_workspace_members m ON m.workspace_id = w.id AND m.user_id = $1 ORDER BY w.is_personal DESC, w.label"
+// За админ: всички workspace-и. Ролята на потребителя НЕ се JOIN-ва:
+// boilaSQL не поддържа AND условия в ON, затова ролите се теглят с
+// ws_roles_of_user и се сливат в кода (работи еднакво и на Postgres).
+fn ws_list_all(db: OrmDb) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, slug, label, description, is_personal, owner_id, created_at FROM idm_workspaces ORDER BY is_personal DESC, label"
+    return orm_query_params_str(db, sql, vec_new())?
+}
+
+struct WsRoles {
+    db: OrmDb,
+    err: str,
+    ws: Vec<i64>,
+    roles: Vec<str>
+}
+
+// Членствата на потребителя (workspace_id → role) за сливане с ws_list_all.
+fn ws_roles_of_user(db: OrmDb, user_id: i64) -> WsRoles !IO !Net {
     let vals = vec_new()
     vec_push(vals, int_to_str(user_id))
-    return orm_query_params_str(db, sql, vals)?
+    let q = orm_query_params_str(db, "SELECT workspace_id, role FROM idm_workspace_members WHERE user_id = $1", vals)?
+    if orm_ok_q(q) == 0 {
+        return WsRoles { db: orm_db_q(q), err: orm_err_q(q), ws: vec_new(), roles: vec_new() }
+    }
+    let ws: Vec<i64> = vec_new()
+    let roles: Vec<str> = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        vec_push(ws, orm_cell_by_i64(q, i, "workspace_id"))
+        vec_push(roles, orm_cell_by(q, i, "role"))
+        i = i + 1
+    }
+    return WsRoles { db: orm_db_q(q), err: "", ws: ws, roles: roles }
+}
+
+// Ролята на потребителя в дадения workspace ("" = не е член).
+fn ws_role_lookup(ws: Vec<i64>, roles: Vec<str>, ws_id: i64) -> str {
+    let mut i: i64 = 0
+    while i < vec_len(ws) {
+        if vec_get(ws, i) == ws_id {
+            return vec_get(roles, i)
+        }
+        i = i + 1
+    }
+    return ""
 }
 
 fn ws_members_of(db: OrmDb, ws_id: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT m.id, m.user_id, m.role, u.email, u.name FROM idm_workspace_members m LEFT JOIN idm_users u ON u.id = m.user_id WHERE m.workspace_id = $1 ORDER BY m.id"
+    let sql = "SELECT m.id, m.user_id, m.role, u.email, u.name FROM idm_workspace_members m LEFT JOIN idm_users u ON m.user_id = u.id WHERE workspace_id = $1 ORDER BY id"
     let vals = vec_new()
     vec_push(vals, int_to_str(ws_id))
     return orm_query_params_str(db, sql, vals)?

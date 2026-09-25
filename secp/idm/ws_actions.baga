@@ -93,20 +93,35 @@ fn act_ws_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_ok_q(q) == 0 {
         return act_err(orm_db_q(q), 500, orm_err_q(q))
     }
+    let mut role_ws: Vec<i64> = vec_new()
+    let mut role_names: Vec<str> = vec_new()
     if c.is_admin == 1 {
-        // админът освен своите вижда и всички останали
-        q = ws_list_all(d, c.id)?
+        // админът освен своите вижда и всички останали; ролите му идват
+        // отделно (boilaSQL няма AND в ON — виж ws_model.baga)
+        q = ws_list_all(d)?
         if orm_ok_q(q) == 0 {
             return act_err(orm_db_q(q), 500, orm_err_q(q))
         }
+        let rr = ws_roles_of_user(orm_db_q(q), c.id)?
+        if rr.err != "" {
+            return act_err(rr.db, 500, rr.err)
+        }
+        role_ws = rr.ws
+        role_names = rr.roles
     }
     d = orm_db_q(q)
     let mut arr = jarr_new()
     let mut i: i64 = 0
     while i < orm_nrows(q) {
         // админ извън членството: правата му са като owner, но ролята не е
-        // „негова" — показваме admin, за да не е празна дупка в UI-а
-        let mut role = orm_cell_by(q, i, "role")
+        // „негова" — показваме admin, за да не е празна дупка в UI-а.
+        // ws_list_all няма role колона — за админ тя идва от сливането.
+        let mut role = ""
+        if c.is_admin == 1 {
+            role = ws_role_lookup(role_ws, role_names, orm_cell_by_i64(q, i, "id"))
+        } else {
+            role = orm_cell_by(q, i, "role")
+        }
         if role == "" && c.is_admin == 1 {
             role = "admin"
         }

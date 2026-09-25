@@ -57,17 +57,17 @@ fn act_chat_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return t.out
     }
     let limit = chat_history_clamp(chat_qlimit(ctx))
-    let q = chat_list(t.out.db, t.ws, limit)?
-    if orm_ok_q(q) == 0 {
-        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    let rows = chat_list(t.out.db, t.ws, limit)?
+    if rows.err != "" {
+        return act_err(rows.db, 500, rows.err)
     }
     let mut o = jobj_new()
     o = jobj_i64(o, "workspace_id", t.ws)
     o = jobj_str(o, "room", chat_room_key(t.ws))
     o = jobj_i64(o, "limit", limit)
-    o = jobj_raw(o, "items", chat_rows_chrono(q))
-    o = jobj_i64(o, "count", orm_nrows(q))
-    return act_ok(orm_db_q(q), o)
+    o = jobj_raw(o, "items", chat_rows_chrono(rows))
+    o = jobj_i64(o, "count", rows.n)
+    return act_ok(rows.db, o)
 }
 
 fn act_chat_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
@@ -89,9 +89,9 @@ fn act_chat_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         return act_err(orm_db_q(ins), 500, orm_err_q(ins))
     }
     let id = orm_cell_by_i64(ins, 0, "id")
-    let q = chat_by_id(orm_db_q(ins), id)?
-    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
-        return act_err(orm_db_q(q), 500, "chat row missing")
+    let rows = chat_by_id(orm_db_q(ins), id)?
+    if rows.err != "" || rows.n < 1 {
+        return act_err(rows.db, 500, "chat row missing")
     }
-    return act_created(orm_db_q(q), chat_to_json(q, 0))
+    return act_created(rows.db, chat_to_json(rows, 0))
 }

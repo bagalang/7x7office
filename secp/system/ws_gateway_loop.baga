@@ -41,11 +41,15 @@ fn wsg_accept(h: WsgHub, fd: i64) -> WsgHub !IO !Net {
 fn wsg_step(h: WsgHub, poll_ms: i64) -> WsgHub !IO !Net !Time !Random {
     let pollfds: Vec<i64> = vec_new()
     vec_push(pollfds, h.listener)
-    let fds = wsg_fds_copy(h)
-    let mut i: i64 = 0
-    while i < vec_len(fds) {
-        vec_push(pollfds, vec_get(fds, i))
-        i = i + 1
+    // Празен хъб: само слушателят — без копие на fds (това е горещият път
+    // на празен ход, 2 пъти в секунда).
+    if vec_len(h.fds) > 0 {
+        let fds = wsg_fds_copy(h)
+        let mut i: i64 = 0
+        while i < vec_len(fds) {
+            vec_push(pollfds, vec_get(fds, i))
+            i = i + 1
+        }
     }
     let pr = poll_wait(pollfds, poll_ms)?
     let mut hub = h

@@ -33,11 +33,11 @@ fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let pat = concat(concat("%", tree_search_esc(q)), "%")
     let limit = tree_search_limit(fmr_query(ctx, "limit"))
-    let nq = tree_search_nodes(t.out.db, t.ws, pat, limit)?
-    if orm_ok_q(nq) == 0 {
-        return act_err(orm_db_q(nq), 500, orm_err_q(nq))
+    let rows = tree_search_nodes(t.out.db, t.ws, pat, limit)?
+    if rows.err != "" {
+        return act_err(rows.db, 500, rows.err)
     }
-    let mut d = orm_db_q(nq)
+    let mut d = rows.db
     // Търсенето чете ИМЕНА и СЪДЪРЖАНИЕ — трябва да уважава изричните права
     // по път, иначе viewer научава за файлове, които не може да отвори.
     // Редовете се теглят веднъж и се филтрират в паметта (виж acl_model.baga).
@@ -53,10 +53,10 @@ fn act_search(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let mut arr = jarr_new()
     let mut i: i64 = 0
     let mut kept: i64 = 0
-    while i < orm_nrows(nq) {
-        let p = orm_cell_by(nq, i, "path")
+    while i < rows.n {
+        let p = vec_get(rows.paths, i)
         if acl_effective(acl.paths, acl.levels, acl.inherits, p, t.level, protect) >= acl_level_read() {
-            arr = jarr_obj(arr, tree_search_json(nq, i))
+            arr = jarr_obj(arr, tree_search_json(rows, i))
             kept = kept + 1
         }
         i = i + 1
@@ -87,22 +87,38 @@ fn act_search_reindex(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if orm_cell_by_i64(u, 0, "is_admin") != 1 {
         return act_err(orm_db_q(u), 403, "admin only")
     }
-    let sql = "SELECT n.id FROM tree_nodes n LEFT JOIN tree_text t ON t.node_id = n.id WHERE n.is_dir = 0 AND t.node_id IS NULL ORDER BY n.id LIMIT 1000"
-    let q = orm_query_params_str(orm_db_q(u), sql, vec_new())?
-    if orm_ok_q(q) == 0 {
-        return act_err(orm_db_q(q), 500, orm_err_q(q))
+    // Файловете БЕЗ текст в индекса. boilaSQL връща сбъркани редове при
+    // `WHERE <дясна колона> IS NULL` върху LEFT JOIN (и няма NOT EXISTS),
+    // затова анти-JOIN-ът е разлика на две еднотаблични заявки в кода.
+    let files = tree_search_all_files(orm_db_q(u), 1000)?
+    if orm_ok_q(files) == 0 {
+        return act_err(orm_db_q(files), 500, orm_err_q(files))
     }
-    let mut d = orm_db_q(q)
+    let have = orm_query_params_str(orm_db_q(files), "SELECT node_id FROM tree_text", vec_new())?
+    if orm_ok_q(have) == 0 {
+        return act_err(orm_db_q(have), 500, orm_err_q(have))
+    }
+    let mut d = orm_db_q(have)
     let mut n: i64 = 0
     let mut i: i64 = 0
-    while i < orm_nrows(q) {
-        let nid = orm_cell_by_i64(q, i, "id")
-        let e = ops_enqueue(d, "extract-text", int_to_str(nid))?
-        if orm_ok(e) == 0 {
-            return act_err(orm_db_exec(e), 500, orm_err_exec(e))
+    while i < orm_nrows(files) {
+        let nid = orm_cell_by_i64(files, i, "id")
+        let mut has_text: i64 = 0
+        let mut j: i64 = 0
+        while j < orm_nrows(have) {
+            if orm_cell_by_i64(have, j, "node_id") == nid {
+                has_text = 1
+            }
+            j = j + 1
         }
-        d = orm_db_exec(e)
-        n = n + 1
+        if has_text == 0 {
+            let e = ops_enqueue(d, "extract-text", int_to_str(nid))?
+            if orm_ok(e) == 0 {
+                return act_err(orm_db_exec(e), 500, orm_err_exec(e))
+            }
+            d = orm_db_exec(e)
+            n = n + 1
+        }
         i = i + 1
     }
     let mut o = jobj_new()

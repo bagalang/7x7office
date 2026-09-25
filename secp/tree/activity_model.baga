@@ -125,44 +125,141 @@ fn tree_activity_insert(db: OrmDb, ws: i64, actor: i64, verb: str, node_id: i64,
 
 // ---------- четене ----------
 
-// Един JOIN за всичко, което списъкът показва. Ролята на актьора не се
-// тегли — feed-ът не е за права, а за действия; имейл/име стигат.
-fn tree_activity_select() -> str {
-    return "SELECT a.id AS id, a.workspace_id AS workspace_id, a.actor_id AS actor_id, a.verb AS verb, a.node_id AS node_id, a.path AS path, a.meta AS meta, a.ts AS ts, u.email AS actor_email, u.name AS actor_name"
+// Редове + актьори, слято в кода. boilaSQL не решава квалифицирани колони в
+// WHERE, а `id` е двусмислена при JOIN с idm_users (Postgres я отказва),
+// затова activity се чете без JOIN, а актьорите — с IN заявка после.
+// Ролята на актьора не се тегли — feed-ът не е за права, а за действия;
+// имейл/име стигат.
+struct ActRows {
+    db: OrmDb,
+    err: str,
+    n: i64,
+    ids: Vec<i64>,
+    ws_ids: Vec<i64>,
+    actors: Vec<i64>,
+    verbs: Vec<str>,
+    node_ids: Vec<i64>,
+    paths: Vec<str>,
+    metas: Vec<str>,
+    tss: Vec<i64>,
+    emails: Vec<str>,
+    names: Vec<str>
+}
+
+fn act_rows_fail(db: OrmDb, err: str) -> ActRows {
+    return ActRows { db: db, err: err, n: 0, ids: vec_new(), ws_ids: vec_new(), actors: vec_new(), verbs: vec_new(), node_ids: vec_new(), paths: vec_new(), metas: vec_new(), tss: vec_new(), emails: vec_new(), names: vec_new() }
+}
+
+fn act_id_in_list(ids: Vec<i64>, id: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(ids) {
+        if vec_get(ids, i) == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// email/name за всеки ред по actor_id. Една IN заявка за всички актьори;
+// липсващ потребител (изтрит) дава празни полета — както LEFT JOIN NULL-а.
+fn tree_activity_attach_actors(db: OrmDb, q: OrmQuery) -> ActRows !IO !Net {
+    let mut rows = ActRows { db: db, err: "", n: orm_nrows(q), ids: vec_new(), ws_ids: vec_new(), actors: vec_new(), verbs: vec_new(), node_ids: vec_new(), paths: vec_new(), metas: vec_new(), tss: vec_new(), emails: vec_new(), names: vec_new() }
+    let uniq: Vec<i64> = vec_new()
+    let mut in_list = ""
+    let mut i: i64 = 0
+    while i < rows.n {
+        let aid = orm_cell_by_i64(q, i, "actor_id")
+        vec_push(rows.ids, orm_cell_by_i64(q, i, "id"))
+        vec_push(rows.ws_ids, orm_cell_by_i64(q, i, "workspace_id"))
+        vec_push(rows.actors, aid)
+        vec_push(rows.verbs, orm_cell_by(q, i, "verb"))
+        vec_push(rows.node_ids, orm_cell_by_i64(q, i, "node_id"))
+        vec_push(rows.paths, orm_cell_by(q, i, "path"))
+        vec_push(rows.metas, orm_cell_by(q, i, "meta"))
+        vec_push(rows.tss, orm_cell_by_i64(q, i, "ts"))
+        vec_push(rows.emails, "")
+        vec_push(rows.names, "")
+        if aid > 0 && act_id_in_list(uniq, aid) == 0 {
+            vec_push(uniq, aid)
+            if in_list != "" {
+                in_list = concat(in_list, ",")
+            }
+            in_list = concat(in_list, int_to_str(aid))
+        }
+        i = i + 1
+    }
+    let mut d = orm_db_q(q)
+    if in_list == "" {
+        rows.db = d
+        return rows
+    }
+    let uq = orm_query_params_str(d, concat("SELECT id, email, name FROM idm_users WHERE id IN (", concat(in_list, ")")), vec_new())?
+    if orm_ok_q(uq) == 0 {
+        return act_rows_fail(orm_db_q(uq), orm_err_q(uq))
+    }
+    d = orm_db_q(uq)
+    let mut r: i64 = 0
+    while r < rows.n {
+        let aid = vec_get(rows.actors, r)
+        let mut j: i64 = 0
+        while j < orm_nrows(uq) {
+            if orm_cell_by_i64(uq, j, "id") == aid {
+                vec_set(rows.emails, r, orm_cell_by(uq, j, "email"))
+                vec_set(rows.names, r, orm_cell_by(uq, j, "name"))
+            }
+            j = j + 1
+        }
+        r = r + 1
+    }
+    rows.db = d
+    return rows
+}
+
+fn tree_activity_read(db: OrmDb, sql: str, vals: Vec<str>) -> ActRows !IO !Net {
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return act_rows_fail(orm_db_q(q), orm_err_q(q))
+    }
+    return tree_activity_attach_actors(orm_db_q(q), q)?
+}
+
+fn tree_activity_select_from() -> str {
+    return concat(concat("SELECT ", tree_activity_cols()), " FROM activity ")
 }
 
 // Последните `limit` действия в пространството, най-новите първи. Идемпотентно
 // при еднакъв ts: подреждаме и по id (низходящо), за да е детерминирано.
-fn tree_activity_list(db: OrmDb, ws: i64, limit: i64) -> OrmQuery !IO !Net {
+fn tree_activity_list(db: OrmDb, ws: i64, limit: i64) -> ActRows !IO !Net {
     let n = int_to_str(activity_limit_clamp(limit))
-    let sql = concat(concat(tree_activity_select(), " FROM activity a LEFT JOIN idm_users u ON u.id = a.actor_id WHERE a.workspace_id = $1 ORDER BY a.ts DESC, a.id DESC LIMIT "), n)
+    let sql = concat(concat(tree_activity_select_from(), "WHERE workspace_id = $1 ORDER BY ts DESC, id DESC LIMIT "), n)
     let vals = vec_new()
     vec_push(vals, int_to_str(ws))
-    return orm_query_params_str(db, sql, vals)?
+    return tree_activity_read(db, sql, vals)?
 }
 
 // Действията върху възел и поддървото му (за панела „История" на файл).
 // Сравнението по сегменти: LIKE '/a/%' не хваща съсед /ab.
-fn tree_activity_list_path(db: OrmDb, ws: i64, path: str, limit: i64) -> OrmQuery !IO !Net {
+fn tree_activity_list_path(db: OrmDb, ws: i64, path: str, limit: i64) -> ActRows !IO !Net {
     let n = int_to_str(activity_limit_clamp(limit))
-    let sql = concat(concat(tree_activity_select(), " FROM activity a LEFT JOIN idm_users u ON u.id = a.actor_id WHERE a.workspace_id = $1 AND (a.path = $2 OR a.path LIKE $3) ORDER BY a.ts DESC, a.id DESC LIMIT "), n)
+    let sql = concat(concat(tree_activity_select_from(), "WHERE workspace_id = $1 AND (path = $2 OR path LIKE $3) ORDER BY ts DESC, id DESC LIMIT "), n)
     let vals = vec_new()
     vec_push(vals, int_to_str(ws))
     vec_push(vals, path)
     vec_push(vals, concat(path, "/%"))
-    return orm_query_params_str(db, sql, vals)?
+    return tree_activity_read(db, sql, vals)?
 }
 
 // Действията на един потребител („какво е правил Иван"). Филтърът по
 // път и по актьор са взаимно изключващи се в API-то — комбинирани правят
 // рядко полезен ъгъл, а трета заявка не си струва поддръжката (v1).
-fn tree_activity_list_actor(db: OrmDb, ws: i64, actor: i64, limit: i64) -> OrmQuery !IO !Net {
+fn tree_activity_list_actor(db: OrmDb, ws: i64, actor: i64, limit: i64) -> ActRows !IO !Net {
     let n = int_to_str(activity_limit_clamp(limit))
     // actor_id е число от заявката — интерполира се безопасно (виж acl_qid).
-    let sql = concat(concat(tree_activity_select(), " FROM activity a LEFT JOIN idm_users u ON u.id = a.actor_id WHERE a.workspace_id = $1 AND a.actor_id = "), concat(int_to_str(actor), concat(" ORDER BY a.ts DESC, a.id DESC LIMIT ", n)))
+    let sql = concat(concat(tree_activity_select_from(), "WHERE workspace_id = $1 AND actor_id = "), concat(int_to_str(actor), concat(" ORDER BY ts DESC, id DESC LIMIT ", n)))
     let vals = vec_new()
     vec_push(vals, int_to_str(ws))
-    return orm_query_params_str(db, sql, vals)?
+    return tree_activity_read(db, sql, vals)?
 }
 
 // ---------- опашка (WS gateway, Фаза 3) ----------
@@ -187,25 +284,24 @@ fn tree_activity_max_id(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
 // Защо възходящо, а не низходящо като списъка: списъкът показва „последното",
 // а опашката „какво ново". Обръщането на реда в една посока само ще накара
 // клиента да го обърне обратно.
-fn tree_activity_tail(db: OrmDb, ws: i64, after: i64, limit: i64) -> OrmQuery !IO !Net {
+fn tree_activity_tail(db: OrmDb, ws: i64, after: i64, limit: i64) -> ActRows !IO !Net {
     // Таванът е activity_limit_max (200), същият като ws_tail_limit().
     // tree не тегли system/ws_events — иначе модулът зависи от gateway-а.
     let n = activity_limit_clamp(limit)
-    let sql = concat(concat(tree_activity_select(), " FROM activity a LEFT JOIN idm_users u ON u.id = a.actor_id WHERE a.workspace_id = $1 AND a.id > $2 ORDER BY a.id ASC LIMIT "), int_to_str(n))
+    let sql = concat(concat(tree_activity_select_from(), "WHERE workspace_id = $1 AND id > $2 ORDER BY id ASC LIMIT "), int_to_str(n))
     let vals = vec_new()
     vec_push(vals, int_to_str(ws))
     vec_push(vals, int_to_str(after))
-    return orm_query_params_str(db, sql, vals)?
+    return tree_activity_read(db, sql, vals)?
 }
 
 // id-то на последния ред в резултата (0 при празно). Клиентът мести курсора
 // с него — не с брой редове, за да е идемпотентно при едновременни записи.
-fn tree_activity_last_id(q: OrmQuery) -> i64 {
-    let n = orm_nrows(q)
-    if n < 1 {
+fn tree_activity_last_id(rows: ActRows) -> i64 {
+    if rows.n < 1 {
         return 0
     }
-    return orm_cell_by_i64(q, n - 1, "id")
+    return vec_get(rows.ids, rows.n - 1)
 }
 
 // ---------- чистене ----------
@@ -248,19 +344,19 @@ fn tree_activity_meta_json(o: JObj, meta: str) -> JObj {
     return jobj_str(o, "meta", meta)
 }
 
-fn tree_activity_to_json(q: OrmQuery, row: i64) -> JObj {
+fn tree_activity_to_json(rows: ActRows, row: i64) -> JObj {
     let mut o = jobj_new()
-    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
-    o = jobj_i64(o, "workspace_id", orm_cell_by_i64(q, row, "workspace_id"))
-    o = jobj_i64(o, "actor_id", orm_cell_by_i64(q, row, "actor_id"))
-    o = jobj_str(o, "actor_email", orm_cell_by(q, row, "actor_email"))
-    o = jobj_str(o, "actor_name", orm_cell_by(q, row, "actor_name"))
-    o = jobj_str(o, "verb", orm_cell_by(q, row, "verb"))
-    o = jobj_i64(o, "node_id", orm_cell_by_i64(q, row, "node_id"))
-    o = jobj_str(o, "path", orm_cell_by(q, row, "path"))
-    let meta = orm_cell_by(q, row, "meta")
+    o = jobj_i64(o, "id", vec_get(rows.ids, row))
+    o = jobj_i64(o, "workspace_id", vec_get(rows.ws_ids, row))
+    o = jobj_i64(o, "actor_id", vec_get(rows.actors, row))
+    o = jobj_str(o, "actor_email", vec_get(rows.emails, row))
+    o = jobj_str(o, "actor_name", vec_get(rows.names, row))
+    o = jobj_str(o, "verb", vec_get(rows.verbs, row))
+    o = jobj_i64(o, "node_id", vec_get(rows.node_ids, row))
+    o = jobj_str(o, "path", vec_get(rows.paths, row))
+    let meta = vec_get(rows.metas, row)
     o = tree_activity_meta_json(o, meta)
-    let ts = orm_cell_by_i64(q, row, "ts")
+    let ts = vec_get(rows.tss, row)
     o = jobj_i64(o, "ts", ts)
     let iso = tree_activity_ts_iso(ts)
     if iso != "" {

@@ -152,14 +152,15 @@ fn ops_fail(db: OrmDb, id: i64, kind: str, attempts: i64, err: str) -> OrmExec !
     return orm_update_by_id(db, ops_table(), id, cols, vals)?
 }
 
-// Връща броя обработени задачи (за лога/metrics).
+// Връща броя обработени задачи (за лога/metrics). -1 = заявката за
+// вземане се провали (вероятно мъртва връзка) — викащият я преотваря.
 fn ops_tick(db: OrmDb) -> i64 !IO !Net !Time !Random {
     if orm_ok_db(db) == 0 {
-        return 0
+        return -1
     }
     let q = ops_claim(db)?
     if orm_ok_q(q) == 0 {
-        return 0
+        return -1
     }
     let mut d = orm_db_q(q)
     let mut n: i64 = 0
@@ -282,16 +283,24 @@ fn ops_loop(tick_ms: i64) -> i64 !IO !Net !Par !Time !Random {
         let r = ops_recover(db0)?
         orm_close(orm_db_exec(r))?
     }
+    // Връзката е ЕДНА извън цикъла: open/close на всеки tick натрупваше
+    // памет (fn-резултат struct-ове не се освобождават от --rc). Мъртва
+    // връзка (tick върне -1) се преотваря.
+    let mut db = fmr_open_db(app)?
     while true {
-        let db = fmr_open_db(app)?
-        if orm_ok_db(db) == 1 {
-            let n = ops_tick(db)?
-            if n > 0 {
-                eprintln(concat("secp scheduler: изпълнени ", int_to_str(n)))
-            }
+        if orm_ok_db(db) == 0 {
+            orm_close(db)?
+            db = fmr_open_db(app)?
+        }
+        let n = ops_tick(db)?
+        if n < 0 {
+            orm_close(db)?
+            db = fmr_open_db(app)?
+        }
+        if n > 0 {
+            eprintln(concat("secp scheduler: изпълнени ", int_to_str(n)))
         }
         secp_trace_tick()
-        orm_close(db)?
         sleep_ms(tick_ms)
     }
     return 0
