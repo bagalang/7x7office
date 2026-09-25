@@ -12,7 +12,7 @@
 Фаза 5  офис          ──►  preview/edit DOCX/XLSX/ODT/ODS + версии
 Фаза 5.5 фронтенд      ──►  4 езика (bg/en/de/ru) + spellCheck + светла/тъмна тема
 Фаза 6  търсене/поща  ──►  FTS, smtpbaga, scheduler actions
-Фаза 7  хардънинг     ──►  квоти, криптиране, WOPI, клъстер (по желание)
+Фаза 7  хардънинг     ──►  квоти, криптиране, WOPI (по желание)
 ```
 
 ---
@@ -281,7 +281,11 @@
 - [x] UI: `/forgot` и `/reset` страници (4 езика, светла/тъмна тема)
 - [x] dev инструмент: `secp/tools/mock_smtp.baga` — SMTP сървър, който
       записва писмата във файл (тестове без реален доставчик)
-- [ ] reportbaga: админ отчети (storage per workspace, activity)
+- [x] reportbaga: админ отчети (2026-09-25) — място по пространство
+      (файлове, байтове, членове) и активност по verb. `GET /v1/reports/storage`
+      и `GET /v1/reports/activity`: JSON или `?format=csv|xlsx|ods|html|pdf`,
+      само админ. Заглавията следват `?lang=bg|en|de|ru`. Чистата част е
+      `reports/sheet.baga` (`tests/report_sheet_test.baga`). UI: `/reports`
 - [ ] **searchbaga** (само ако PG FTS не стигне): индекс върху rocksbaga
 
 **Зависимости:** smtpbaga (готов), reportbaga, queuebaga, grebaga (CLI търсене)
@@ -291,7 +295,6 @@
 - [ ] Криптиране на blobs при покой (AES-GCM от std/crypto, per-workspace ключове — модел `data/key`)
 - [ ] WOPI: **wopibaga** за Collabora/OnlyOffice (допълнение към officebaga)
 - [ ] **s3baga** datasource; blobs в rocksbaga или директно в **boilaDB** (rocksbaga storage под нея — може да се допълва при нужда) като алтернативи на FS
-- [ ] Разцепване на процеси: scheduler отделно; raftbaga клъстер за метаданни (Track S)
 - [ ] otelbaga traceparent през целия път; rate limiting (relbaga bulkhead)
 
 ---

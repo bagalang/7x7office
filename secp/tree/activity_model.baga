@@ -268,3 +268,17 @@ fn tree_activity_to_json(q: OrmQuery, row: i64) -> JObj {
     }
     return o
 }
+
+// Брой редове с този verb в пространството. verb идва само от
+// activity_verbs() — непознат низ не се слага в SQL.
+fn activity_verb_count(db: OrmDb, ws: i64, verb: str) -> OrmCount !IO !Net {
+    if activity_verb_valid(verb) == 0 {
+        return orm_count_sql(db, "SELECT 0 AS count")?
+    }
+    let mut sql = "SELECT COUNT(*) AS count FROM activity WHERE workspace_id = "
+    sql = concat(sql, int_to_str(ws))
+    sql = concat(sql, " AND verb = '")
+    sql = concat(sql, verb)
+    sql = concat(sql, "'")
+    return orm_count_sql(db, sql)?
+}

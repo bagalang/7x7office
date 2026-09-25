@@ -1,6 +1,6 @@
 // schema.baga — secp migrations (owned by the app, not the framework).
 // Table names carry the module prefix (idm_*) — one owner per table, so the
-// modular monolith can split into services later (README „Монолит → микросервизи").
+// one owner module per table (README „Модулен монолит").
 // Postgres set uses SERIAL; boila set is BoilaSQL-safe (explicit PK, no SERIAL).
 
 import "ormbaga/migrate.baga"

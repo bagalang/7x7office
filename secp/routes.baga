@@ -16,6 +16,7 @@ import "tree/activity_actions.baga"
 import "tree/share_actions.baga"
 import "tree/share_open.baga"
 import "tree/dav_actions.baga"
+import "reports/actions.baga"
 import "system/chat_actions.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
@@ -81,6 +82,8 @@ fn RID_ACTIVITY() -> i64 { return 63 }
 fn RID_CHAT_LIST() -> i64 { return 64 }
 fn RID_CHAT_POST() -> i64 { return 65 }
 fn RID_DAV() -> i64 { return 66 }
+fn RID_REPORT_STORAGE() -> i64 { return 67 }
+fn RID_REPORT_ACTIVITY() -> i64 { return 68 }
 
 fn fmr_build_app() -> FmrApp !IO {
     let cfg = fmr_config_load()?
@@ -133,6 +136,8 @@ fn fmr_build_app() -> FmrApp !IO {
     app = fmr_route_meta(app, "DELETE", "/v1/fs/acl", RID_FS_ACL_DELETE(), "", "fs", 0, "", "-", "204", "acl_id")
     // Фаза 3: activity feed (само четене; пишат го самите действия).
     app = fmr_route_meta(app, "GET", "/v1/activity", RID_ACTIVITY(), "", "fs", 0, "", "ActivityList", "200", "limit,path,actor_id")
+    app = fmr_route_meta(app, "GET", "/v1/reports/storage", RID_REPORT_STORAGE(), "", "reports", 0, "", "StorageReport", "200", "format,lang")
+    app = fmr_route_meta(app, "GET", "/v1/reports/activity", RID_REPORT_ACTIVITY(), "", "reports", 0, "", "ActivityReport", "200", "format,lang")
     app = fmr_route_meta(app, "GET", "/v1/chat", RID_CHAT_LIST(), "", "chat", 0, "", "ChatList", "200", "limit")
     app = fmr_route_meta(app, "POST", "/v1/chat", RID_CHAT_POST(), "", "chat", 0, "ChatPost", "ChatMessage", "201", "")
     // WebDAV: един id, два шаблона (корен и {*path}). public=1 — Basic е в handler-а.
@@ -225,6 +230,8 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_FS_ACL_SET() { return act_fs_acl_set(ctx, db)? }
     if id == RID_FS_ACL_DELETE() { return act_fs_acl_delete(ctx, db)? }
     if id == RID_ACTIVITY() { return act_activity_list(ctx, db)? }
+    if id == RID_REPORT_STORAGE() { return act_report_storage(ctx, db)? }
+    if id == RID_REPORT_ACTIVITY() { return act_report_activity(ctx, db)? }
     if id == RID_CHAT_LIST() { return act_chat_list(ctx, db)? }
     if id == RID_CHAT_POST() { return act_chat_post(ctx, db)? }
     if id == RID_DAV() { return act_dav(ctx, db)? }

@@ -219,6 +219,13 @@ fn tree_usage(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
     return orm_count_sql(db, concat(sql2, " AND is_dir = 0"))?
 }
 
+// Брой файлове (папките не влизат). Същият филтър като tree_usage.
+fn tree_file_count(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
+    let sql = "SELECT COUNT(*) AS count FROM tree_nodes WHERE workspace_id = "
+    let sql2 = concat(sql, int_to_str(ws))
+    return orm_count_sql(db, concat(sql2, " AND is_dir = 0"))?
+}
+
 // Nodes still referencing a blob hash (hash is server-generated hex — safe to interpolate).
 fn tree_hash_refs(db: OrmDb, hash: str) -> OrmCount !IO !Net {
     let mut sql = "SELECT COUNT(*) AS count FROM tree_nodes WHERE hash = '"

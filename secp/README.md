@@ -79,6 +79,9 @@ secp/
     activity_model.baga  activity: append-only запис/списък/чистене
     activity_actions.baga GET /v1/activity (per workspace/path/actor)
     actions.baga docs.baga   API заяви (fs/* и doc/*)
+  reports/                админ отчети (Фаза 6): място и активност
+    sheet.baga          формат, заглавия, броене (чист)
+    actions.baga        GET /v1/reports/storage и /activity
   system/scheduler.baga фонови задачи (ops_jobs): extract-text, mail-send
   system/mail_jobs.baga mail-send: разчита payload и праща
   tools/mock_smtp.baga  dev SMTP сървър (пише писмата във файл)
@@ -88,11 +91,11 @@ secp/
 ```
 
 Правила за границите на модулите (задължителни — виж
-[README „Монолит → микросервизи"](../README.md)):
+[README „Модулен монолит"](../README.md)):
 
 1. Таблица = точно един модул-собственик (`idm_users` се пипа само от `idm/`).
 2. Междумодулни викания само през публични fn на модула, не през SQL към чужди таблици.
-3. Събитията (от Фаза 3) минават през bus-абстракция, не през директни викания.
+3. Приложението е един процес — scheduler, WebSocket и HTTP живеят заедно.
 
 ## Build & run
 

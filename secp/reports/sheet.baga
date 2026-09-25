@@ -1,0 +1,265 @@
+// reports/sheet.baga — формат, заглавия и броене за админ отчетите.
+// ЧИСТ модул: без база. Колоните на активността следват activity_verbs(),
+// за да не се разминават файлът и записите в activity.
+
+import "../tree/activity_kinds.baga"
+import "std/str/str.baga"
+
+fn report_format_json() -> str { return "json" }
+fn report_format_csv() -> str { return "csv" }
+fn report_format_xlsx() -> str { return "xlsx" }
+fn report_format_ods() -> str { return "ods" }
+fn report_format_html() -> str { return "html" }
+fn report_format_pdf() -> str { return "pdf" }
+
+fn report_kind_storage() -> str { return "storage" }
+fn report_kind_activity() -> str { return "activity" }
+
+fn report_format_norm(fmt: str) -> str {
+    if fmt == "" {
+        return report_format_json()
+    }
+    return fmt
+}
+
+fn report_format_ok(fmt: str) -> i64 {
+    if fmt == report_format_json() { return 1 }
+    if fmt == report_format_csv() { return 1 }
+    if fmt == report_format_xlsx() { return 1 }
+    if fmt == report_format_ods() { return 1 }
+    if fmt == report_format_html() { return 1 }
+    if fmt == report_format_pdf() { return 1 }
+    return 0
+}
+
+// json (и празен format) се връща като JSON. Останалите познати — файл.
+fn report_format_is_file(fmt: str) -> i64 {
+    if report_format_ok(fmt) == 0 {
+        return 0
+    }
+    if fmt == report_format_json() {
+        return 0
+    }
+    return 1
+}
+
+// PDF минава през pdfbaga и чете шрифт от диска. Останалите формати са чисти.
+fn report_format_needs_io(fmt: str) -> i64 {
+    if fmt == report_format_pdf() {
+        return 1
+    }
+    return 0
+}
+
+fn report_format_mime(fmt: str) -> str {
+    if fmt == report_format_csv() { return "text/csv; charset=utf-8" }
+    if fmt == report_format_xlsx() {
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
+    if fmt == report_format_ods() { return "application/vnd.oasis.opendocument.spreadsheet" }
+    if fmt == report_format_html() { return "text/html; charset=utf-8" }
+    if fmt == report_format_pdf() { return "application/pdf" }
+    return "application/json"
+}
+
+fn report_filename(kind: str, fmt: str) -> str {
+    return concat(concat(kind, "_report."), fmt)
+}
+
+// Непознат език пада към български — същият ред като фронтенда.
+fn report_lang(lang: str) -> str {
+    if lang == "en" { return "en" }
+    if lang == "de" { return "de" }
+    if lang == "ru" { return "ru" }
+    return "bg"
+}
+
+fn report_word_id(l: str) -> str {
+    if l == "en" { return "Id" }
+    if l == "de" { return "Id" }
+    if l == "ru" { return "Ид" }
+    return "Ид"
+}
+
+fn report_word_name(l: str) -> str {
+    if l == "en" { return "Name" }
+    if l == "de" { return "Name" }
+    if l == "ru" { return "Имя" }
+    return "Име"
+}
+
+fn report_word_slug(l: str) -> str {
+    if l == "en" { return "Slug" }
+    if l == "de" { return "Kürzel" }
+    if l == "ru" { return "Код" }
+    return "Код"
+}
+
+fn report_word_personal(l: str) -> str {
+    if l == "en" { return "Personal" }
+    if l == "de" { return "Persönlich" }
+    if l == "ru" { return "Личное" }
+    return "Лично"
+}
+
+fn report_word_files(l: str) -> str {
+    if l == "en" { return "Files" }
+    if l == "de" { return "Dateien" }
+    if l == "ru" { return "Файлы" }
+    return "Файлове"
+}
+
+fn report_word_bytes(l: str) -> str {
+    if l == "en" { return "Bytes" }
+    if l == "de" { return "Bytes" }
+    if l == "ru" { return "Байты" }
+    return "Байтове"
+}
+
+fn report_word_members(l: str) -> str {
+    if l == "en" { return "Members" }
+    if l == "de" { return "Mitglieder" }
+    if l == "ru" { return "Участники" }
+    return "Членове"
+}
+
+fn report_word_total(l: str) -> str {
+    if l == "en" { return "Total" }
+    if l == "de" { return "Gesamt" }
+    if l == "ru" { return "Всего" }
+    return "Общо"
+}
+
+fn report_storage_cols() -> i64 { return 7 }
+
+fn report_storage_title(lang: str) -> str {
+    let l = report_lang(lang)
+    if l == "en" { return "Storage by workspace" }
+    if l == "de" { return "Speicher je Arbeitsbereich" }
+    if l == "ru" { return "Место по пространствам" }
+    return "Място по пространство"
+}
+
+fn report_storage_meta(lang: str) -> str {
+    let l = report_lang(lang)
+    if l == "en" { return "Files, bytes and members" }
+    if l == "de" { return "Dateien, Bytes und Mitglieder" }
+    if l == "ru" { return "Файлы, байты и участники" }
+    return "Файлове, байтове и членове"
+}
+
+fn report_storage_header(lang: str, col: i64) -> str {
+    let l = report_lang(lang)
+    if col == 0 { return report_word_id(l) }
+    if col == 1 { return report_word_name(l) }
+    if col == 2 { return report_word_slug(l) }
+    if col == 3 { return report_word_personal(l) }
+    if col == 4 { return report_word_files(l) }
+    if col == 5 { return report_word_bytes(l) }
+    if col == 6 { return report_word_members(l) }
+    return ""
+}
+
+fn report_activity_verb_n() -> i64 {
+    return vec_len(activity_verbs())
+}
+
+fn report_activity_verb(i: i64) -> str {
+    let v = activity_verbs()
+    if i < 0 {
+        return ""
+    }
+    if i >= vec_len(v) {
+        return ""
+    }
+    return vec_get(v, i)
+}
+
+// Id, Име, Общо, после по един стълб на познат verb (машинното име).
+fn report_activity_cols() -> i64 {
+    return 3 + report_activity_verb_n()
+}
+
+fn report_activity_title(lang: str) -> str {
+    let l = report_lang(lang)
+    if l == "en" { return "Activity by workspace" }
+    if l == "de" { return "Aktivität je Arbeitsbereich" }
+    if l == "ru" { return "Активность по пространствам" }
+    return "Активност по пространство"
+}
+
+fn report_activity_meta(lang: str) -> str {
+    let l = report_lang(lang)
+    if l == "en" { return "Event counts by kind" }
+    if l == "de" { return "Anzahl der Ereignisse nach Art" }
+    if l == "ru" { return "Число событий по виду" }
+    return "Брой събития по вид"
+}
+
+fn report_activity_header(lang: str, col: i64) -> str {
+    let l = report_lang(lang)
+    if col == 0 { return report_word_id(l) }
+    if col == 1 { return report_word_name(l) }
+    if col == 2 { return report_word_total(l) }
+    return report_activity_verb(col - 3)
+}
+
+fn report_verb_slot(verb: str) -> i64 {
+    let all = activity_verbs()
+    let mut i: i64 = 0
+    let n = vec_len(all)
+    while i < n {
+        if vec_get(all, i) == verb {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+fn report_counts_new() -> Vec<i64> {
+    let counts: Vec<i64> = vec_new()
+    let n = report_activity_verb_n()
+    let mut i: i64 = 0
+    while i < n {
+        vec_push(counts, 0)
+        i = i + 1
+    }
+    return counts
+}
+
+// Слага абсолютен брой. Непознат verb не пипа вектора.
+fn report_count_set(counts: Vec<i64>, verb: str, n: i64) -> Vec<i64> {
+    let slot = report_verb_slot(verb)
+    if slot >= 0 {
+        vec_set(counts, slot, n)
+    }
+    return counts
+}
+
+fn report_tally(verbs: Vec<str>) -> Vec<i64> {
+    let mut counts = report_counts_new()
+    let mut i: i64 = 0
+    let n = vec_len(verbs)
+    while i < n {
+        let verb = vec_get(verbs, i)
+        let slot = report_verb_slot(verb)
+        if slot >= 0 {
+            let cur = vec_get(counts, slot)
+            counts = report_count_set(counts, verb, cur + 1)
+        }
+        i = i + 1
+    }
+    return counts
+}
+
+fn report_tally_total(counts: Vec<i64>) -> i64 {
+    let mut s: i64 = 0
+    let mut i: i64 = 0
+    let n = vec_len(counts)
+    while i < n {
+        s = s + vec_get(counts, i)
+        i = i + 1
+    }
+    return s
+}

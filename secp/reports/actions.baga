@@ -1,0 +1,300 @@
+// reports/actions.baga — админ отчети: място и активност по пространство.
+// Само is_admin. JSON по подразбиране; ?format= дава файл през reportbaga.
+// Числата се четат през функциите на idm/tree — този модул не пише техния SQL.
+
+import "sheet.baga"
+import "../idm/user_actions.baga"
+import "../idm/ws_model.baga"
+import "../tree/model.baga"
+import "../tree/activity_model.baga"
+import "reportbaga/report.baga"
+import "csvbaga/csv.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "querybaga/query.baga"
+import "std/str/str.baga"
+
+struct ReportWs {
+    ids: Vec<i64>,
+    labels: Vec<str>,
+    slugs: Vec<str>,
+    personal: Vec<i64>,
+    n: i64
+}
+
+struct ReportBuilt {
+    ok: i64,
+    err: str,
+    db: OrmDb,
+    table: CsvTable,
+    body: JObj,
+    title: str,
+    meta: str
+}
+
+struct ReportGate {
+    ok: i64,
+    db: OrmDb,
+    user_id: i64,
+    lang: str,
+    fmt: str,
+    out: FmrOut
+}
+
+fn report_built_fail(db: OrmDb, err: str) -> ReportBuilt {
+    return ReportBuilt {
+        ok: 0,
+        err: err,
+        db: db,
+        table: csv_fail(err),
+        body: jobj_new(),
+        title: "",
+        meta: ""
+    }
+}
+
+fn report_take_ws(q: OrmQuery) -> ReportWs {
+    let ids: Vec<i64> = vec_new()
+    let labels: Vec<str> = vec_new()
+    let slugs: Vec<str> = vec_new()
+    let personal: Vec<i64> = vec_new()
+    let n = orm_nrows(q)
+    let mut i: i64 = 0
+    while i < n {
+        vec_push(ids, orm_cell_by_i64(q, i, "id"))
+        vec_push(labels, orm_cell_by(q, i, "label"))
+        vec_push(slugs, orm_cell_by(q, i, "slug"))
+        vec_push(personal, orm_cell_by_i64(q, i, "is_personal"))
+        i = i + 1
+    }
+    return ReportWs { ids: ids, labels: labels, slugs: slugs, personal: personal, n: n }
+}
+
+fn report_push_header(cells: Vec<str>, kind: str, lang: str) -> Vec<str> {
+    let mut cols = report_storage_cols()
+    if kind == report_kind_activity() {
+        cols = report_activity_cols()
+    }
+    let mut c: i64 = 0
+    while c < cols {
+        if kind == report_kind_activity() {
+            vec_push(cells, report_activity_header(lang, c))
+        } else {
+            vec_push(cells, report_storage_header(lang, c))
+        }
+        c = c + 1
+    }
+    return cells
+}
+
+fn report_emit_fmt(title: str, meta: str, table: CsvTable, fmt: str) -> ReportOut !IO {
+    if report_format_needs_io(fmt) == 1 {
+        return report_from_table_io(title, meta, table, fmt)?
+    }
+    return report_from_table(title, meta, table, fmt)
+}
+
+fn report_send(db: OrmDb, built: ReportBuilt, kind: str, fmt: str) -> FmrOut !IO {
+    if report_format_is_file(fmt) == 0 {
+        return act_ok(db, built.body)
+    }
+    let out = report_emit_fmt(built.title, built.meta, built.table, fmt)?
+    if out.ok == 0 {
+        return act_err(db, 500, out.err)
+    }
+    let mut r = http_response_bytes(200, out.data)
+    r = http_set_header(r, "Content-Type", report_format_mime(fmt))
+    let name = report_filename(kind, fmt)
+    r = http_set_header(r, "Content-Disposition", concat("attachment; filename=\"", concat(name, "\"")))
+    return fmr_out(r, db)
+}
+
+fn report_open(ctx: FmrCtx, db: OrmDb) -> ReportGate !IO !Net {
+    let c = idm_require_admin(ctx, db)?
+    if c.ok == 0 {
+        return ReportGate { ok: 0, db: db, user_id: 0, lang: "bg", fmt: "json", out: c.out }
+    }
+    let fmt = report_format_norm(str_trim(fmr_query(ctx, "format")))
+    if report_format_ok(fmt) == 0 {
+        return ReportGate {
+            ok: 0,
+            db: db,
+            user_id: c.id,
+            lang: "bg",
+            fmt: fmt,
+            out: act_err(db, 400, "unknown format")
+        }
+    }
+    let lang = report_lang(query_decode_val(fmr_query(ctx, "lang")))
+    return ReportGate { ok: 1, db: db, user_id: c.id, lang: lang, fmt: fmt, out: c.out }
+}
+
+fn report_storage_sheet(db: OrmDb, user_id: i64, lang: str) -> ReportBuilt !IO !Net {
+    let ens = ws_personal_ensure(db, user_id)?
+    if ens.err != "" {
+        return report_built_fail(ens.db, ens.err)
+    }
+    let q = ws_list_all(ens.db, user_id)?
+    if orm_ok_q(q) == 0 {
+        return report_built_fail(orm_db_q(q), orm_err_q(q))
+    }
+    let rows = report_take_ws(q)
+    let mut d = orm_db_q(q)
+    let mut cells: Vec<str> = vec_new()
+    cells = report_push_header(cells, report_kind_storage(), lang)
+    let mut arr = jarr_new()
+    let mut files_sum: i64 = 0
+    let mut bytes_sum: i64 = 0
+    let mut i: i64 = 0
+    while i < rows.n {
+        let ws = vec_get(rows.ids, i)
+        let label = vec_get(rows.labels, i)
+        let slug = vec_get(rows.slugs, i)
+        let personal = vec_get(rows.personal, i)
+        let fc = tree_file_count(d, ws)?
+        if orm_ok_c(fc) == 0 {
+            return report_built_fail(orm_db_c(fc), orm_err_c(fc))
+        }
+        let files = orm_count_n(fc)
+        d = orm_db_c(fc)
+        let uc = tree_usage(d, ws)?
+        if orm_ok_c(uc) == 0 {
+            return report_built_fail(orm_db_c(uc), orm_err_c(uc))
+        }
+        let bytes = orm_count_n(uc)
+        d = orm_db_c(uc)
+        let mc = ws_member_count(d, ws)?
+        if orm_ok_c(mc) == 0 {
+            return report_built_fail(orm_db_c(mc), orm_err_c(mc))
+        }
+        let members = orm_count_n(mc)
+        d = orm_db_c(mc)
+        vec_push(cells, int_to_str(ws))
+        vec_push(cells, label)
+        vec_push(cells, slug)
+        vec_push(cells, int_to_str(personal))
+        vec_push(cells, int_to_str(files))
+        vec_push(cells, int_to_str(bytes))
+        vec_push(cells, int_to_str(members))
+        let mut o = jobj_new()
+        o = jobj_i64(o, "id", ws)
+        o = jobj_str(o, "label", label)
+        o = jobj_str(o, "slug", slug)
+        o = jobj_i64(o, "is_personal", personal)
+        o = jobj_i64(o, "files", files)
+        o = jobj_i64(o, "bytes", bytes)
+        o = jobj_i64(o, "members", members)
+        arr = jarr_obj(arr, o)
+        files_sum = files_sum + files
+        bytes_sum = bytes_sum + bytes
+        i = i + 1
+    }
+    let mut body = jobj_new()
+    body = jobj_raw(body, "items", jarr_encode(arr))
+    body = jobj_i64(body, "count", rows.n)
+    body = jobj_i64(body, "files", files_sum)
+    body = jobj_i64(body, "bytes", bytes_sum)
+    return ReportBuilt {
+        ok: 1,
+        err: "",
+        db: d,
+        table: csv_ok(report_storage_cols(), cells),
+        body: body,
+        title: report_storage_title(lang),
+        meta: report_storage_meta(lang)
+    }
+}
+
+fn report_activity_sheet(db: OrmDb, user_id: i64, lang: str) -> ReportBuilt !IO !Net {
+    let ens = ws_personal_ensure(db, user_id)?
+    if ens.err != "" {
+        return report_built_fail(ens.db, ens.err)
+    }
+    let q = ws_list_all(ens.db, user_id)?
+    if orm_ok_q(q) == 0 {
+        return report_built_fail(orm_db_q(q), orm_err_q(q))
+    }
+    let rows = report_take_ws(q)
+    let mut d = orm_db_q(q)
+    let mut cells: Vec<str> = vec_new()
+    cells = report_push_header(cells, report_kind_activity(), lang)
+    let mut arr = jarr_new()
+    let verb_n = report_activity_verb_n()
+    let mut i: i64 = 0
+    while i < rows.n {
+        let ws = vec_get(rows.ids, i)
+        let label = vec_get(rows.labels, i)
+        let mut counts = report_counts_new()
+        let mut vi: i64 = 0
+        while vi < verb_n {
+            let verb = report_activity_verb(vi)
+            let c = activity_verb_count(d, ws, verb)?
+            if orm_ok_c(c) == 0 {
+                return report_built_fail(orm_db_c(c), orm_err_c(c))
+            }
+            counts = report_count_set(counts, verb, orm_count_n(c))
+            d = orm_db_c(c)
+            vi = vi + 1
+        }
+        let total = report_tally_total(counts)
+        vec_push(cells, int_to_str(ws))
+        vec_push(cells, label)
+        vec_push(cells, int_to_str(total))
+        vi = 0
+        while vi < verb_n {
+            vec_push(cells, int_to_str(vec_get(counts, vi)))
+            vi = vi + 1
+        }
+        let mut o = jobj_new()
+        o = jobj_i64(o, "id", ws)
+        o = jobj_str(o, "label", label)
+        o = jobj_i64(o, "total", total)
+        vi = 0
+        while vi < verb_n {
+            o = jobj_i64(o, report_activity_verb(vi), vec_get(counts, vi))
+            vi = vi + 1
+        }
+        arr = jarr_obj(arr, o)
+        i = i + 1
+    }
+    let mut body = jobj_new()
+    body = jobj_raw(body, "items", jarr_encode(arr))
+    body = jobj_i64(body, "count", rows.n)
+    return ReportBuilt {
+        ok: 1,
+        err: "",
+        db: d,
+        table: csv_ok(report_activity_cols(), cells),
+        body: body,
+        title: report_activity_title(lang),
+        meta: report_activity_meta(lang)
+    }
+}
+
+fn act_report_storage(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let g = report_open(ctx, db)?
+    if g.ok == 0 {
+        return g.out
+    }
+    let built = report_storage_sheet(g.db, g.user_id, g.lang)?
+    if built.ok == 0 {
+        return act_err(built.db, 500, built.err)
+    }
+    return report_send(built.db, built, report_kind_storage(), g.fmt)?
+}
+
+fn act_report_activity(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let g = report_open(ctx, db)?
+    if g.ok == 0 {
+        return g.out
+    }
+    let built = report_activity_sheet(g.db, g.user_id, g.lang)?
+    if built.ok == 0 {
+        return act_err(built.db, 500, built.err)
+    }
+    return report_send(built.db, built, report_kind_activity(), g.fmt)?
+}

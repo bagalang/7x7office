@@ -30,6 +30,11 @@ fn ws_members_table() -> str {
     return "idm_workspace_members"
 }
 
+fn ws_member_count(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
+    let sql = "SELECT COUNT(*) AS count FROM idm_workspace_members WHERE workspace_id = "
+    return orm_count_sql(db, concat(sql, int_to_str(ws)))?
+}
+
 fn ws_cols() -> str {
     return "id, slug, label, description, is_personal, owner_id, created_at"
 }
