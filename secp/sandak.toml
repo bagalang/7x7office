@@ -3,6 +3,8 @@ name = "secp"
 version = "0.1.0"
 entry = "start.baga"
 kind = "bin"
+# refcount памет: без --rc тече ~1 MB/req (виж commit 7288ac1)
+rc = true
 
 [dependencies]
 std = { path = "../../../std" }
