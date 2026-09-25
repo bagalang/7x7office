@@ -46,7 +46,8 @@
 secp/
   start.baga            entrypoint: migrate → seed admin → ops_start → fmr_run
   routes.baga           route table + fmr_dispatch
-  schema.baga           миграции (собственост на приложението)
+  schema.baga           миграции, Postgres набор (собственост на приложението)
+  schema_boila.baga     миграции, BoilaSQL набор (PK задължителен; без SERIAL)
   lib/pass.baga         PBKDF2-HMAC-SHA256 (gaps G1 → passbaga)
   lib/mail_welcome.baga welcome писмо при създаване на потребител
   idm/                  идентичности: users, workspaces, auth, поща

@@ -1,0 +1,277 @@
+// schema_boila.baga — BoilaSQL наборът миграции (изнесен от schema.baga).
+//
+// ЗАЩО ОТДЕЛЕН ФАЙЛ: schema.baga удари гейта от 600 реда. Двата набора
+// (Postgres и BoilaSQL) са независими — разликата е само в DDL-а, не в
+// реда на миграциите. Разделянето държи всеки набор под лимита и прави
+// ясно, че промяна в единия не пипа другия.
+//
+// BoilaSQL: PRIMARY KEY е задължителен; без SERIAL/DEFAULT/NOT NULL/REFERENCES.
+
+import "ormbaga/migrate.baga"
+
+fn secp_boila_migrations() -> MigrationSet {
+    let mut set = migrate_set_new()
+    set = migrate_add(
+        set,
+        20260924001,
+        "create_idm_users",
+        "CREATE TABLE IF NOT EXISTS idm_users (id BIGINT, email TEXT, name TEXT, pass_hash TEXT, pass_salt TEXT, pass_iters BIGINT, is_admin BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_users"
+    )
+    set = migrate_add(
+        set,
+        20260924002,
+        "create_idm_sessions",
+        "CREATE TABLE IF NOT EXISTS idm_sessions (id BIGINT, user_id BIGINT, token_hash TEXT, created_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_sessions"
+    )
+    set = migrate_add(
+        set,
+        20260924003,
+        "index_idm_sessions_user_id",
+        "CREATE INDEX index_idm_sessions_on_user_id ON idm_sessions (user_id)",
+        "DROP INDEX IF EXISTS index_idm_sessions_on_user_id ON idm_sessions"
+    )
+    set = migrate_add(
+        set,
+        20260924004,
+        "create_tree_nodes",
+        "CREATE TABLE IF NOT EXISTS tree_nodes (id BIGINT, owner_id BIGINT, path TEXT, parent_path TEXT, name TEXT, is_dir BIGINT, size BIGINT, hash TEXT, thumb_hash TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS tree_nodes"
+    )
+    set = migrate_add(
+        set,
+        20260924005,
+        "index_tree_nodes_owner_parent",
+        "CREATE INDEX index_tree_nodes_on_owner_parent ON tree_nodes (owner_id, parent_path)",
+        "DROP INDEX IF EXISTS index_tree_nodes_on_owner_parent ON tree_nodes"
+    )
+    set = migrate_add(
+        set,
+        20260924006,
+        "create_tree_versions",
+        "CREATE TABLE IF NOT EXISTS tree_versions (id BIGINT, node_id BIGINT, owner_id BIGINT, path TEXT, size BIGINT, hash TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS tree_versions"
+    )
+    set = migrate_add(
+        set,
+        20260924007,
+        "index_tree_versions_node",
+        "CREATE INDEX index_tree_versions_on_node ON tree_versions (node_id)",
+        "DROP INDEX IF EXISTS index_tree_versions_on_node ON tree_versions"
+    )
+    set = migrate_add(
+        set,
+        20260924008,
+        "create_tree_text",
+        "CREATE TABLE IF NOT EXISTS tree_text (node_id BIGINT, owner_id BIGINT, text TEXT, updated_at TIMESTAMPTZ, PRIMARY KEY (node_id))",
+        "DROP TABLE IF EXISTS tree_text"
+    )
+    set = migrate_add(
+        set,
+        20260924009,
+        "index_tree_text_owner",
+        "CREATE INDEX IF NOT EXISTS index_tree_text_on_owner ON tree_text (owner_id)",
+        "DROP INDEX IF EXISTS index_tree_text_on_owner ON tree_text"
+    )
+    // Фаза 6: фонови задачи (scheduler). Персистентни, за да преживеят
+    // рестарт; tick-ът ги взима партидно и ги маркира running/done/failed.
+    set = migrate_add(
+        set,
+        20260924010,
+        "create_ops_jobs",
+        "CREATE TABLE IF NOT EXISTS ops_jobs (id BIGINT, kind TEXT, payload TEXT, status TEXT, attempts BIGINT, run_at BIGINT, last_error TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS ops_jobs"
+    )
+    set = migrate_add(
+        set,
+        20260924011,
+        "index_ops_jobs_status",
+        "CREATE INDEX IF NOT EXISTS index_ops_jobs_on_status ON ops_jobs (status)",
+        "DROP INDEX IF EXISTS index_ops_jobs_on_status ON ops_jobs"
+    )
+    // Фаза 6.3: reset на парола (boila: без SERIAL/FK/DEFAULT).
+    set = migrate_add(
+        set,
+        20260924012,
+        "create_idm_resets",
+        "CREATE TABLE IF NOT EXISTS idm_resets (id BIGINT, user_id BIGINT, token_hash TEXT, expires_at TIMESTAMPTZ, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_resets"
+    )
+    set = migrate_add(
+        set,
+        20260924013,
+        "index_idm_resets_user_id",
+        "CREATE INDEX IF NOT EXISTS index_idm_resets_on_user_id ON idm_resets (user_id)",
+        "DROP INDEX IF EXISTS index_idm_resets_on_user_id ON idm_resets"
+    )
+    // Фаза 2: workspaces + членство (boila: без SERIAL/FK/DEFAULT/UNIQUE).
+    set = migrate_add(
+        set,
+        20260924014,
+        "create_idm_workspaces",
+        "CREATE TABLE IF NOT EXISTS idm_workspaces (id BIGINT, slug TEXT, label TEXT, description TEXT, is_personal BIGINT, owner_id BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_workspaces"
+    )
+    set = migrate_add(
+        set,
+        20260924015,
+        "create_idm_workspace_members",
+        "CREATE TABLE IF NOT EXISTS idm_workspace_members (id BIGINT, workspace_id BIGINT, user_id BIGINT, role TEXT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_workspace_members"
+    )
+    set = migrate_add(
+        set,
+        20260924016,
+        "index_idm_workspace_members_user",
+        "CREATE INDEX IF NOT EXISTS index_idm_workspace_members_on_user ON idm_workspace_members (user_id)",
+        "DROP INDEX IF EXISTS index_idm_workspace_members_on_user ON idm_workspace_members"
+    )
+    // Фаза 2 (стъпка files): скоупът на възлите става workspace, не owner.
+    // boila: ALTER ADD е nullable-only (без DEFAULT/NOT NULL), затова колоната
+    // се добавя празна и backfill-ът при boot я пълни. UNIQUE няма изобщо
+    // (виж gaps G26), така че няма и какво да се маха — за разлика от PG,
+    // където старият UNIQUE (owner_id, path) вече е грешен.
+    set = migrate_add(
+        set,
+        20260924017,
+        "add_tree_nodes_workspace_id",
+        "ALTER TABLE tree_nodes ADD COLUMN workspace_id BIGINT",
+        "ALTER TABLE tree_nodes DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924019,
+        "index_tree_nodes_workspace_parent",
+        "CREATE INDEX IF NOT EXISTS index_tree_nodes_on_workspace_parent ON tree_nodes (workspace_id, parent_path)",
+        "DROP INDEX IF EXISTS index_tree_nodes_on_workspace_parent ON tree_nodes"
+    )
+    // Производните таблици (версии, текстов индекс) — също на workspace.
+    // boila: nullable-only ADD, пълни се от backfill-а при boot.
+    set = migrate_add(
+        set,
+        20260924020,
+        "add_tree_versions_workspace_id",
+        "ALTER TABLE tree_versions ADD COLUMN workspace_id BIGINT",
+        "ALTER TABLE tree_versions DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924021,
+        "add_tree_text_workspace_id",
+        "ALTER TABLE tree_text ADD COLUMN workspace_id BIGINT",
+        "ALTER TABLE tree_text DROP COLUMN workspace_id"
+    )
+    set = migrate_add(
+        set,
+        20260924022,
+        "index_tree_text_workspace",
+        "CREATE INDEX IF NOT EXISTS index_tree_text_on_workspace ON tree_text (workspace_id)",
+        "DROP INDEX IF EXISTS index_tree_text_on_workspace ON tree_text"
+    )
+    // Фаза 2 (ACL): изрични права по път. boila: без SERIAL/FK/DEFAULT/
+    // UNIQUE — id-то се дава с MAX(id)+1, subject-ът е в две колони.
+    set = migrate_add(
+        set,
+        20260924023,
+        "create_tree_acl",
+        "CREATE TABLE IF NOT EXISTS tree_acl (id BIGINT, workspace_id BIGINT, path TEXT, kind TEXT, subject_user_id BIGINT, subject_role TEXT, acl_level BIGINT, inherit BIGINT, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS tree_acl"
+    )
+    set = migrate_add(
+        set,
+        20260924024,
+        "index_tree_acl_ws_path",
+        "CREATE INDEX IF NOT EXISTS index_tree_acl_on_ws_path ON tree_acl (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_tree_acl_on_ws_path ON tree_acl"
+    )
+    // Фаза 3 (share): публичен линк към възел (boila вариант — без
+    // SERIAL/DEFAULT/NOT NULL/REFERENCES; id-то се дава с MAX(id)+1).
+    set = migrate_add(
+        set,
+        20260924025,
+        "create_share_links",
+        "CREATE TABLE IF NOT EXISTS share_links (id BIGINT, token_hash TEXT, workspace_id BIGINT, path TEXT, level BIGINT, expires_at TIMESTAMPTZ, pass_hash TEXT, pass_salt TEXT, pass_iters BIGINT, downloads BIGINT, max_downloads BIGINT, created_by BIGINT, revoked_at TIMESTAMPTZ, created_at TIMESTAMPTZ, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS share_links"
+    )
+    set = migrate_add(
+        set,
+        20260924026,
+        "index_share_links_token",
+        "CREATE INDEX IF NOT EXISTS index_share_links_on_token ON share_links (token_hash)",
+        "DROP INDEX IF EXISTS index_share_links_on_token"
+    )
+    set = migrate_add(
+        set,
+        20260924027,
+        "index_share_links_ws_path",
+        "CREATE INDEX IF NOT EXISTS index_share_links_on_ws_path ON share_links (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_share_links_on_ws_path"
+    )
+    // Фаза 3 (activity feed): boila вариант — без SERIAL/DEFAULT/NOT NULL,
+    // id-то се дава с MAX(id)+1 (виж activity_model.baga).
+    set = migrate_add(
+        set,
+        20260924028,
+        "create_activity",
+        "CREATE TABLE IF NOT EXISTS activity (id BIGINT, workspace_id BIGINT, actor_id BIGINT, verb TEXT, node_id BIGINT, path TEXT, meta TEXT, ts BIGINT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS activity"
+    )
+    set = migrate_add(
+        set,
+        20260924029,
+        "index_activity_ws_ts",
+        "CREATE INDEX IF NOT EXISTS index_activity_on_ws_ts ON activity (workspace_id, ts)",
+        "DROP INDEX IF EXISTS index_activity_on_ws_ts"
+    )
+    set = migrate_add(
+        set,
+        20260924030,
+        "index_activity_ws_path",
+        "CREATE INDEX IF NOT EXISTS index_activity_on_ws_path ON activity (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_activity_on_ws_path"
+    )
+    set = migrate_add(
+        set,
+        20260924031,
+        "create_chat_messages",
+        "CREATE TABLE IF NOT EXISTS chat_messages (id BIGINT, workspace_id BIGINT, author_id BIGINT, body TEXT, ts BIGINT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS chat_messages"
+    )
+    set = migrate_add(
+        set,
+        20260924032,
+        "index_chat_messages_ws_id",
+        "CREATE INDEX IF NOT EXISTS index_chat_messages_on_ws_id ON chat_messages (workspace_id, id)",
+        "DROP INDEX IF EXISTS index_chat_messages_on_ws_id"
+    )
+    set = migrate_add(
+        set,
+        20260925033,
+        "create_dav_locks",
+        "CREATE TABLE IF NOT EXISTS dav_locks (id BIGINT, workspace_id BIGINT, path TEXT, token TEXT, owner_id BIGINT, depth BIGINT, expires_at BIGINT, owner_xml TEXT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS dav_locks"
+    )
+    set = migrate_add(
+        set,
+        20260925034,
+        "index_dav_locks_ws",
+        "CREATE INDEX IF NOT EXISTS index_dav_locks_on_ws ON dav_locks (workspace_id, path)",
+        "DROP INDEX IF EXISTS index_dav_locks_on_ws"
+    )
+    set = migrate_add(
+        set,
+        20260925035,
+        "create_data_keys",
+        "CREATE TABLE IF NOT EXISTS data_keys (workspace_id BIGINT, wrapped TEXT, PRIMARY KEY (workspace_id))",
+        "DROP TABLE IF EXISTS data_keys"
+    )
+    set = migrate_add(
+        set,
+        20260925036,
+        "create_wopi_locks",
+        "CREATE TABLE IF NOT EXISTS wopi_locks (file_id BIGINT, lock_id TEXT, expires_at BIGINT, PRIMARY KEY (file_id))",
+        "DROP TABLE IF EXISTS wopi_locks"
+    )
+    return set
+}
