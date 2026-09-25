@@ -9,6 +9,7 @@ import "idm/user_actions.baga"
 import "idm/ws_actions.baga"
 import "idm/ws_members.baga"
 import "tree/actions.baga"
+import "tree/upload_actions.baga"
 import "tree/docs.baga"
 import "tree/versions_files.baga"
 import "tree/search_actions.baga"
@@ -81,6 +82,11 @@ fn secp_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_FS_STAT() { return act_fs_stat(ctx, db)? }
     if id == RID_FS_MKDIR() { return act_fs_mkdir(ctx, db)? }
     if id == RID_FS_PUT() { return act_fs_put(ctx, db)? }
+    if id == RID_FS_FORM() { return act_fs_form(ctx, db)? }
+    if id == RID_UP_CREATE() { return act_up_create(ctx, db)? }
+    if id == RID_UP_PATCH() { return act_up_patch(ctx, db)? }
+    if id == RID_UP_STATUS() { return act_up_status(ctx, db)? }
+    if id == RID_UP_DROP() { return act_up_drop(ctx, db)? }
     if id == RID_FS_GET() { return act_fs_get(ctx, db)? }
     if id == RID_FS_DELETE() { return act_fs_delete(ctx, db)? }
     if id == RID_FS_MOVE() { return act_fs_move(ctx, db)? }

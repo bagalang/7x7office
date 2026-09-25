@@ -1,0 +1,307 @@
+// tree/upload.baga — части на качването, без база и без диск.
+//
+// Две неща, които суровият PUT не прави: multipart/form-data (браузърна
+// форма) и сесия с Upload-Offset. Клиентът праща парчета; ако offset-ът
+// не е точно колкото вече е прието, отговорът е 409 с текущия offset и
+// качването продължава от него. Дупка в средата не се пълни.
+
+import "std/str/str.baga"
+import "std/bytes/bytes.baga"
+import "std/random/random.baga"
+
+struct UpStep {
+    status: i64,
+    offset: i64,
+    done: i64,
+    err: str
+}
+
+struct UpPart {
+    ok: i64,
+    filename: str,
+    body: bytes,
+    err: str
+}
+
+struct UpMeta {
+    ok: i64,
+    ws: i64,
+    owner: i64,
+    length: i64,
+    offset: i64,
+    path: str
+}
+
+fn up_fail_part(err: str) -> UpPart {
+    return UpPart { ok: 0, filename: "", body: bytes_new(0), err: err }
+}
+
+fn up_ascii_lower(s: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let c = char_at(s, i)
+        if c >= 65 && c <= 90 {
+            out = concat(out, chr(c + 32))
+        } else {
+            out = concat(out, chr(c))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Празно, отрицателно и по-дълго от 15 цифри са -1 (прелив на i64).
+fn up_u64(s: str) -> i64 {
+    let t = str_trim(s)
+    if t == "" {
+        return 0 - 1
+    }
+    if len(t) > 15 {
+        return 0 - 1
+    }
+    let mut i: i64 = 0
+    while i < len(t) {
+        let c = char_at(t, i)
+        if c < 48 || c > 57 {
+            return 0 - 1
+        }
+        i = i + 1
+    }
+    return parse_int(t)
+}
+
+fn up_hex_digit(c: i64) -> i64 {
+    if c >= 48 && c <= 57 {
+        return 1
+    }
+    if c >= 97 && c <= 102 {
+        return 1
+    }
+    return 0
+}
+
+// 64 hex знака. Името на файла на диска е само това — без „../".
+fn up_id_ok(id: str) -> i64 {
+    if len(id) != 64 {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < 64 {
+        if up_hex_digit(char_at(id, i)) == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn up_id_new() -> str !Random {
+    return bytes_to_hex(random_bytes(32))
+}
+
+fn up_path_ok(path: str) -> i64 {
+    if path == "" {
+        return 0
+    }
+    if path == "/" {
+        return 0
+    }
+    if str_find(path, "\n") >= 0 {
+        return 0
+    }
+    if str_find(path, "\r") >= 0 {
+        return 0
+    }
+    return 1
+}
+
+// have е приетият offset. chunk 0 само отваря сесията. 409 носи have.
+fn up_step(have: i64, length: i64, offset: i64, chunk: i64, max_file: i64) -> UpStep {
+    if length < 1 {
+        return UpStep { status: 400, offset: have, done: 0, err: "empty" }
+    }
+    if length > max_file {
+        return UpStep { status: 413, offset: have, done: 0, err: "file too large" }
+    }
+    if offset < 0 {
+        return UpStep { status: 400, offset: have, done: 0, err: "bad offset" }
+    }
+    if chunk < 0 {
+        return UpStep { status: 400, offset: have, done: 0, err: "bad chunk" }
+    }
+    if offset != have {
+        return UpStep { status: 409, offset: have, done: 0, err: "offset mismatch" }
+    }
+    if offset + chunk > length {
+        return UpStep { status: 400, offset: have, done: 0, err: "range" }
+    }
+    if chunk == 0 {
+        return UpStep { status: 200, offset: have, done: 0, err: "" }
+    }
+    if offset + chunk == length {
+        return UpStep { status: 201, offset: length, done: 1, err: "" }
+    }
+    return UpStep { status: 200, offset: offset + chunk, done: 0, err: "" }
+}
+
+fn up_boundary(ct: str) -> str {
+    let low = up_ascii_lower(ct)
+    if str_find(low, "multipart/form-data") < 0 {
+        return ""
+    }
+    let key = "boundary="
+    let at = str_find(low, key)
+    if at < 0 {
+        return ""
+    }
+    let mut rest = str_trim(substr(ct, at + len(key), len(ct)))
+    if rest == "" {
+        return ""
+    }
+    if char_at(rest, 0) == 34 {
+        let mut i: i64 = 1
+        let mut out = ""
+        while i < len(rest) {
+            if char_at(rest, i) == 34 {
+                return out
+            }
+            out = concat(out, chr(char_at(rest, i)))
+            i = i + 1
+        }
+        return ""
+    }
+    let semi = str_find(rest, ";")
+    if semi >= 0 {
+        rest = substr(rest, 0, semi)
+    }
+    return str_trim(rest)
+}
+
+fn up_find_bytes(buf: bytes, from: i64, needle: bytes) -> i64 {
+    let n = bytes_len(needle)
+    let m = bytes_len(buf)
+    if n < 1 {
+        return 0 - 1
+    }
+    let mut i: i64 = from
+    while i + n <= m {
+        let mut ok: i64 = 1
+        let mut j: i64 = 0
+        while j < n {
+            if bytes_at(buf, i + j) != bytes_at(needle, j) {
+                ok = 0
+            }
+            j = j + 1
+        }
+        if ok == 1 {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn up_filename(headers: str) -> str {
+    let low = up_ascii_lower(headers)
+    let key = "filename="
+    let at = str_find(low, key)
+    if at < 0 {
+        return ""
+    }
+    let rest = str_trim(substr(headers, at + len(key), len(headers)))
+    if rest == "" {
+        return ""
+    }
+    if char_at(rest, 0) == 34 {
+        let mut i: i64 = 1
+        let mut out = ""
+        while i < len(rest) {
+            if char_at(rest, i) == 34 {
+                return out
+            }
+            out = concat(out, chr(char_at(rest, i)))
+            i = i + 1
+        }
+        return ""
+    }
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(rest) {
+        let c = char_at(rest, i)
+        if c == 59 || c == 13 || c == 10 {
+            return str_trim(out)
+        }
+        out = concat(out, chr(c))
+        i = i + 1
+    }
+    return str_trim(out)
+}
+
+// Първата част с filename. Текстово поле преди файла се прескача.
+fn up_part(body: bytes, boundary: str) -> UpPart {
+    if boundary == "" {
+        return up_fail_part("not multipart")
+    }
+    let mark = bytes_concat(bytes_of_str("--"), bytes_of_str(boundary))
+    let mut at = up_find_bytes(body, 0, mark)
+    while at >= 0 {
+        let after = at + bytes_len(mark)
+        if after + 1 < bytes_len(body) {
+            if bytes_at(body, after) == 45 {
+                if bytes_at(body, after + 1) == 45 {
+                    return up_fail_part("no file")
+                }
+            }
+        }
+        let line_end = up_find_bytes(body, after, bytes_of_str("\n"))
+        if line_end < 0 {
+            return up_fail_part("truncated")
+        }
+        let head_at = line_end + 1
+        let sep = up_find_bytes(body, head_at, bytes_of_str("\r\n\r\n"))
+        if sep < 0 {
+            return up_fail_part("truncated")
+        }
+        let headers = str_of_bytes(bytes_slice(body, head_at, sep))
+        let data_at = sep + 4
+        let next = up_find_bytes(body, data_at, bytes_concat(bytes_of_str("\r\n"), mark))
+        if next < 0 {
+            return up_fail_part("truncated")
+        }
+        let name = up_filename(headers)
+        if name != "" {
+            return UpPart { ok: 1, filename: name, body: bytes_slice(body, data_at, next), err: "" }
+        }
+        at = up_find_bytes(body, data_at, mark)
+    }
+    return up_fail_part("no file")
+}
+
+fn up_meta_text(ws: i64, owner: i64, length: i64, offset: i64, path: str) -> str {
+    let a = concat(int_to_str(ws), "\n")
+    let b = concat(a, concat(int_to_str(owner), "\n"))
+    let c = concat(b, concat(int_to_str(length), "\n"))
+    let d = concat(c, concat(int_to_str(offset), "\n"))
+    return concat(d, path)
+}
+
+fn up_meta_parse(s: str) -> UpMeta {
+    let bad = UpMeta { ok: 0, ws: 0, owner: 0, length: 0, offset: 0, path: "" }
+    let lines = str_split(s, "\n")
+    if vec_len(lines) != 5 {
+        return bad
+    }
+    let ws = up_u64(vec_get(lines, 0))
+    let owner = up_u64(vec_get(lines, 1))
+    let length = up_u64(vec_get(lines, 2))
+    let offset = up_u64(vec_get(lines, 3))
+    let path = vec_get(lines, 4)
+    if ws < 1 || owner < 1 || length < 1 || offset < 0 {
+        return bad
+    }
+    if up_path_ok(path) == 0 {
+        return bad
+    }
+    return UpMeta { ok: 1, ws: ws, owner: owner, length: length, offset: offset, path: path }
+}

@@ -1,0 +1,76 @@
+// tree/upload_disk.baga — недовършено качване под <корен>/uploads/<id>.
+// Коренът е SECP_DATA_ROOT. id е 64 hex, затова пътят не излиза от папката.
+// Крайният blob минава през data_save (и S3, ако е включен). Тук е само
+// черновата, за да може следващата заявка да продължи от offset-а.
+
+import "upload.baga"
+import "../data/blobs.baga"
+import "std/os/os.baga"
+
+fn up_root() -> str !IO {
+    return data_root()?
+}
+
+fn up_join(root: str, id: str, ext: str) -> str {
+    return concat(concat(concat(root, "/uploads/"), id), ext)
+}
+
+fn up_write_at(root: str, id: str, offset: i64, chunk: bytes) -> i64 !IO {
+    if up_id_ok(id) == 0 {
+        return 0 - 1
+    }
+    if bytes_len(chunk) == 0 {
+        return 0
+    }
+    let dir = concat(root, "/uploads")
+    if data_mkdir_p(dir) != 0 {
+        return 0 - 1
+    }
+    let fd = open(up_join(root, id, ".part"), 66, 420)?
+    if fd < 0 {
+        return 0 - 1
+    }
+    let rc = fd_pwrite_bytes(fd, chunk, offset)?
+    close(fd)
+    return rc
+}
+
+fn up_read_part(root: str, id: str) -> bytes !IO {
+    if up_id_ok(id) == 0 {
+        return bytes_new(0)
+    }
+    return read_file_bytes(up_join(root, id, ".part"))?
+}
+
+fn up_write_meta(root: str, id: str, ws: i64, owner: i64, length: i64, offset: i64, path: str) -> i64 !IO {
+    if up_id_ok(id) == 0 {
+        return 0 - 1
+    }
+    let dir = concat(root, "/uploads")
+    if data_mkdir_p(dir) != 0 {
+        return 0 - 1
+    }
+    let text = up_meta_text(ws, owner, length, offset, path)
+    return write_file(up_join(root, id, ".meta"), text)?
+}
+
+fn up_read_meta(root: str, id: str) -> UpMeta !IO {
+    let bad = UpMeta { ok: 0, ws: 0, owner: 0, length: 0, offset: 0, path: "" }
+    if up_id_ok(id) == 0 {
+        return bad
+    }
+    let text = read_file(up_join(root, id, ".meta"))?
+    if text == "" {
+        return bad
+    }
+    return up_meta_parse(text)
+}
+
+fn up_remove(root: str, id: str) -> i64 !IO {
+    if up_id_ok(id) == 0 {
+        return 0 - 1
+    }
+    unlink(up_join(root, id, ".part"))?
+    unlink(up_join(root, id, ".meta"))?
+    return 0
+}

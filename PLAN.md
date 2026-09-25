@@ -42,8 +42,13 @@
 
 - [x] Модул `data`: datasource `local-fs` (blobs на диска, content-addressed по SHA-256 от std/crypto). Коренът е `SECP_DATA_ROOT` (`./storage`)
 - [x] Модул `tree`: таблица `tree_nodes`, виртуални пътища чрез pathbaga
-- [x] REST: `PUT/GET/DELETE /v1/fs/file?path=`, list/stat/mkdir/move/thumb/usage. Тялото се чете цяло (още няма streaming); paging на списъка липсва
-- [ ] Upload: multipart + resumable — v1 е суров PUT на тялото
+- [x] REST: `PUT/GET/DELETE /v1/fs/file?path=`, list/stat/mkdir/move/thumb/usage. Една заявка носи цялото си тяло (няма streaming по сокета); paging на списъка липсва
+- [x] Upload: multipart + resumable (2026-09-25). `PUT` остава суровото тяло.
+      `POST /v1/fs/file` е `multipart/form-data` (първата част с `filename`).
+      `POST/PATCH /v1/fs/upload` режат файла по `Upload-Offset` / `Upload-Length`;
+      `GET` връща offset-а, `DELETE` маха черновата. Несъвпадащ offset е 409
+      с текущия. UI-то праща по 1 MiB и след презареждане продължава същия
+      път и размер. Чист тест `tests/upload_test.baga`
 - [x] imgbaga има `img_resize_bilinear`; thumbnails го ползват
 - [x] Thumbnail при качване (PNG, дългата страна 256px), кеш в blob store. Опашка в queuebaga остава за по-късно
 - [x] Квота (`SECP_QUOTA_MB`, подразбиране 1 GiB) и горна граница (`SECP_MAX_FILE_MB`)

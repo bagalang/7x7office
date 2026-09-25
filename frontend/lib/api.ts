@@ -174,11 +174,98 @@ export function qpath(path: string): string {
   return encodeURIComponent(path);
 }
 
+const UPLOAD_CHUNK = 1024 * 1024;
+
+function uploadKey(path: string, body: Blob): string {
+  const stamp = body instanceof File ? body.lastModified : 0;
+  return `secp.upload.${getActiveWorkspace()}.${body.size}.${stamp}.${path}`;
+}
+
+function rememberUpload(key: string, id: string): void {
+  try {
+    sessionStorage.setItem(key, id);
+  } catch {
+    // Продължаването след презареждане е по желание. Качването не спира.
+  }
+}
+
+function recallUpload(key: string): string {
+  try {
+    return sessionStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function forgetUpload(key: string): void {
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // същото
+  }
+}
+
+type UploadProgress = { id?: string; offset?: number; length?: number; name?: string; path?: string };
+
+function isFsNode(data: unknown): data is FsNode {
+  if (!data || typeof data !== "object") return false;
+  const row = data as UploadProgress;
+  return typeof row.name === "string" && typeof row.path === "string";
+}
+
+// Качва на части от 1 MiB. Прекъсната сесия със същия път и размер
+// продължава от Upload-Offset. Малък файл минава с една заявка.
 export async function putFile(path: string, body: Blob): Promise<FsNode> {
-  const res = await authedFetchWs(`/v1/fs/file?path=${qpath(path)}`, { method: "PUT", body });
-  const data = await readBody(res);
-  if (!res.ok) throw new ApiError(res.status, detailOf(data, res.statusText));
-  return data as FsNode;
+  const length = body.size;
+  if (length < 1) throw new ApiError(400, "empty body");
+  const key = uploadKey(path, body);
+  let id = "";
+  let offset = 0;
+  const saved = recallUpload(key);
+  if (saved) {
+    const st = await authedFetchWs(`/v1/fs/upload?id=${encodeURIComponent(saved)}`);
+    const data = (await readBody(st)) as UploadProgress | null;
+    if (st.ok && data && data.length === length && typeof data.offset === "number" && data.offset < length) {
+      id = saved;
+      offset = data.offset;
+    } else {
+      forgetUpload(key);
+    }
+  }
+  while (offset < length) {
+    const next = Math.min(offset + UPLOAD_CHUNK, length);
+    const q = id
+      ? `/v1/fs/upload?id=${encodeURIComponent(id)}`
+      : `/v1/fs/upload?path=${qpath(path)}`;
+    const res = await authedFetchWs(q, {
+      method: id ? "PATCH" : "POST",
+      headers: {
+        "Upload-Length": String(length),
+        "Upload-Offset": String(offset),
+        "Content-Type": "application/octet-stream",
+      },
+      body: body.slice(offset, next),
+    });
+    const data = await readBody(res);
+    if (res.status === 409 && data && typeof data === "object") {
+      const have = (data as UploadProgress).offset;
+      if (typeof have === "number" && have !== offset && have < length) {
+        offset = have;
+        continue;
+      }
+    }
+    if (!res.ok) throw new ApiError(res.status, detailOf(data, res.statusText));
+    if (isFsNode(data)) {
+      forgetUpload(key);
+      return data;
+    }
+    const prog = data as UploadProgress;
+    if (!prog.id || typeof prog.offset !== "number") throw new ApiError(500, "upload");
+    id = prog.id;
+    offset = prog.offset;
+    rememberUpload(key, id);
+  }
+  throw new ApiError(500, "upload");
 }
 
 export async function downloadFile(node: FsNode): Promise<void> {

@@ -71,6 +71,11 @@ fn RID_REPORT_ACTIVITY() -> i64 { return 68 }
 fn RID_WOPI_TOKEN() -> i64 { return 69 }
 fn RID_WOPI_FILE() -> i64 { return 70 }
 fn RID_WOPI_CONTENTS() -> i64 { return 71 }
+fn RID_FS_FORM() -> i64 { return 72 }
+fn RID_UP_CREATE() -> i64 { return 73 }
+fn RID_UP_PATCH() -> i64 { return 74 }
+fn RID_UP_STATUS() -> i64 { return 75 }
+fn RID_UP_DROP() -> i64 { return 76 }
 
 // Всяко id, което dispatch-ът трябва да поеме. Нов маршрут се добавя и тук.
 fn secp_ids() -> Vec<i64> {
@@ -136,6 +141,11 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_WOPI_TOKEN())
     vec_push(v, RID_WOPI_FILE())
     vec_push(v, RID_WOPI_CONTENTS())
+    vec_push(v, RID_FS_FORM())
+    vec_push(v, RID_UP_CREATE())
+    vec_push(v, RID_UP_PATCH())
+    vec_push(v, RID_UP_STATUS())
+    vec_push(v, RID_UP_DROP())
     return v
 }
 
@@ -172,6 +182,12 @@ fn secp_routes() -> Router {
     r = secp_add(r, "GET", "/v1/fs/stat", RID_FS_STAT(), "fs", 0, "", "Node", "200", "path")
     r = secp_add(r, "POST", "/v1/fs/mkdir", RID_FS_MKDIR(), "fs", 0, "", "Node", "201", "path")
     r = secp_add(r, "PUT", "/v1/fs/file", RID_FS_PUT(), "fs", 0, "bytes", "Node", "200", "path")
+    r = secp_add(r, "POST", "/v1/fs/file", RID_FS_FORM(), "fs", 0, "multipart", "Node", "200", "path")
+    r = secp_add(r, "POST", "/v1/fs/upload", RID_UP_CREATE(), "fs", 0, "bytes", "Upload", "200", "path")
+    r = secp_add(r, "PATCH", "/v1/fs/upload", RID_UP_PATCH(), "fs", 0, "bytes", "Upload", "200", "id")
+    r = secp_add(r, "GET", "/v1/fs/upload", RID_UP_STATUS(), "fs", 0, "", "Upload", "200", "id")
+    r = secp_add(r, "HEAD", "/v1/fs/upload", RID_UP_STATUS(), "fs", 0, "", "-", "200", "id")
+    r = secp_add(r, "DELETE", "/v1/fs/upload", RID_UP_DROP(), "fs", 0, "", "-", "204", "id")
     r = secp_add(r, "GET", "/v1/fs/file", RID_FS_GET(), "fs", 0, "", "bytes", "200", "path")
     r = secp_add(r, "DELETE", "/v1/fs/file", RID_FS_DELETE(), "fs", 0, "", "-", "204", "path")
     r = secp_add(r, "POST", "/v1/fs/move", RID_FS_MOVE(), "fs", 0, "", "Node", "200", "from,to")

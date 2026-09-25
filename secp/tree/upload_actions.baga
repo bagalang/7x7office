@@ -1,0 +1,242 @@
+// tree/upload_actions.baga — multipart POST и сесия с Upload-Offset.
+// PUT /v1/fs/file остава суровото тяло. POST /v1/fs/file е форма.
+// POST/PATCH /v1/fs/upload режат файла на части; GET връща offset-а,
+// за да може презаредена страница да продължи.
+
+import "auth.baga"
+import "model.baga"
+import "store.baga"
+import "upload.baga"
+import "upload_disk.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/jsonx.baga"
+import "fmrbaga/respond.baga"
+import "httpdbaga/http.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct UpGate {
+    db: OrmDb,
+    status: i64,
+    err: str
+}
+
+fn up_gate(db: OrmDb, ws: i64, path: str, length: i64) -> UpGate !IO !Net {
+    let existing = tree_find(db, ws, path)?
+    if orm_ok_q(existing) == 0 {
+        return UpGate { db: orm_db_q(existing), status: 500, err: orm_err_q(existing) }
+    }
+    let mut old_size: i64 = 0
+    if orm_nrows(existing) > 0 {
+        if orm_cell_by_i64(existing, 0, "is_dir") == 1 {
+            return UpGate { db: orm_db_q(existing), status: 409, err: "is a directory" }
+        }
+        old_size = orm_cell_by_i64(existing, 0, "size")
+    }
+    let usage = tree_usage(orm_db_q(existing), ws)?
+    if orm_ok_c(usage) == 0 {
+        return UpGate { db: orm_db_c(usage), status: 500, err: orm_err_c(usage) }
+    }
+    let quota = tree_quota_bytes()?
+    if orm_count_n(usage) + length - old_size > quota {
+        return UpGate { db: orm_db_c(usage), status: 413, err: "quota exceeded" }
+    }
+    return UpGate { db: orm_db_c(usage), status: 0, err: "" }
+}
+
+fn up_progress(db: OrmDb, id: str, offset: i64, length: i64) -> FmrOut {
+    let mut o = jobj_new()
+    o = jobj_str(o, "id", id)
+    o = jobj_i64(o, "offset", offset)
+    o = jobj_i64(o, "length", length)
+    let mut r = fmr_jobj(200, o)
+    r = http_set_header(r, "Upload-Offset", int_to_str(offset))
+    r = http_set_header(r, "Upload-Length", int_to_str(length))
+    return fmr_out(r, db)
+}
+
+fn up_mismatch(db: OrmDb, have: i64) -> FmrOut {
+    let mut o = jobj_new()
+    o = jobj_str(o, "detail", "offset mismatch")
+    o = jobj_i64(o, "offset", have)
+    let mut r = fmr_jobj(409, o)
+    r = http_set_header(r, "Upload-Offset", int_to_str(have))
+    return fmr_out(r, db)
+}
+
+fn up_stamp(out: FmrOut, length: i64) -> FmrOut {
+    let mut r = out.resp
+    r = http_set_header(r, "Upload-Offset", int_to_str(length))
+    r = http_set_header(r, "Upload-Length", int_to_str(length))
+    return fmr_out(r, out.db)
+}
+
+fn up_commit(db: OrmDb, ws: i64, owner: i64, path: str, root: str, id: str, length: i64) -> FmrOut !IO !Net !Time !Random {
+    let body = up_read_part(root, id)?
+    if bytes_len(body) != length {
+        return act_err(db, 500, "short upload")
+    }
+    let out = tree_store_file(db, ws, owner, path, body, 1)?
+    if out.resp.status == 200 {
+        up_remove(root, id)?
+    }
+    return up_stamp(out, length)
+}
+
+fn up_owned(meta: UpMeta, ws: i64, owner: i64) -> i64 {
+    if meta.ws != ws {
+        return 0
+    }
+    if meta.owner != owner {
+        return 0
+    }
+    return 1
+}
+
+fn up_apply(db: OrmDb, ws: i64, owner: i64, id: str, path: str, have: i64, length: i64, offset: i64, chunk: bytes) -> FmrOut !IO !Net !Time !Random {
+    let maxf = tree_max_file_bytes()?
+    let step = up_step(have, length, offset, bytes_len(chunk), maxf)
+    if step.status == 409 {
+        return up_mismatch(db, step.offset)
+    }
+    if step.status >= 400 {
+        return act_err(db, step.status, step.err)
+    }
+    let root = up_root()?
+    if bytes_len(chunk) > 0 {
+        if up_write_at(root, id, offset, chunk) != 0 {
+            return act_err(db, 500, "upload write failed")
+        }
+    }
+    if step.done == 1 {
+        return up_commit(db, ws, owner, path, root, id, length)?
+    }
+    if up_write_meta(root, id, ws, owner, length, step.offset, path) != 0 {
+        return act_err(db, 500, "upload meta failed")
+    }
+    return up_progress(db, id, step.offset, length)
+}
+
+fn act_fs_form(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
+    let path = tree_qpath(ctx, "path")
+    let t = tree_auth(ctx, db, 2, path)?
+    if t.ok == 0 {
+        return t.out
+    }
+    if up_path_ok(path) == 0 {
+        return act_err(db, 400, "bad path")
+    }
+    let boundary = up_boundary(http_header(ctx.req, "Content-Type"))
+    if boundary == "" {
+        return act_err(db, 415, "expected multipart/form-data")
+    }
+    let part = up_part(http_body_bytes(ctx.req), boundary)
+    if part.ok == 0 {
+        return act_err(db, 400, part.err)
+    }
+    let size = bytes_len(part.body)
+    if size < 1 {
+        return act_err(db, 400, "empty body")
+    }
+    let maxf = tree_max_file_bytes()?
+    if size > maxf {
+        return act_err(db, 413, "file too large")
+    }
+    let gate = up_gate(t.out.db, t.ws, path, size)?
+    if gate.status != 0 {
+        return act_err(gate.db, gate.status, gate.err)
+    }
+    return tree_store_file(gate.db, t.ws, t.owner, path, part.body, 1)?
+}
+
+fn act_up_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
+    let path = tree_qpath(ctx, "path")
+    let t = tree_auth(ctx, db, 2, path)?
+    if t.ok == 0 {
+        return t.out
+    }
+    if up_path_ok(path) == 0 {
+        return act_err(db, 400, "bad path")
+    }
+    let length = up_u64(http_header(ctx.req, "Upload-Length"))
+    let mut offset = up_u64(http_header(ctx.req, "Upload-Offset"))
+    let chunk = http_body_bytes(ctx.req)
+    if offset < 0 {
+        if bytes_len(chunk) == 0 {
+            offset = 0
+        }
+    }
+    let gate = up_gate(t.out.db, t.ws, path, length)?
+    if gate.status != 0 {
+        return act_err(gate.db, gate.status, gate.err)
+    }
+    let id = up_id_new()?
+    return up_apply(gate.db, t.ws, t.owner, id, path, 0, length, offset, chunk)?
+}
+
+struct UpOpen {
+    ok: i64,
+    db: OrmDb,
+    meta: UpMeta,
+    out: FmrOut
+}
+
+fn up_open(ctx: FmrCtx, db: OrmDb) -> UpOpen !IO !Net {
+    let id = str_trim(fmr_query(ctx, "id"))
+    if up_id_ok(id) == 0 {
+        let err = act_err(db, 400, "bad upload id")
+        return UpOpen { ok: 0, db: db, meta: up_meta_parse(""), out: err }
+    }
+    let root = up_root()?
+    let meta = up_read_meta(root, id)?
+    if meta.ok == 0 {
+        let err = act_404(db, "upload not found")
+        return UpOpen { ok: 0, db: db, meta: meta, out: err }
+    }
+    let t = tree_auth(ctx, db, 2, meta.path)?
+    if t.ok == 0 {
+        return UpOpen { ok: 0, db: t.out.db, meta: meta, out: t.out }
+    }
+    if up_owned(meta, t.ws, t.owner) == 0 {
+        let err = act_404(t.out.db, "upload not found")
+        return UpOpen { ok: 0, db: t.out.db, meta: meta, out: err }
+    }
+    return UpOpen { ok: 1, db: t.out.db, meta: meta, out: t.out }
+}
+
+fn act_up_patch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
+    let opened = up_open(ctx, db)?
+    if opened.ok == 0 {
+        return opened.out
+    }
+    let meta = opened.meta
+    let length_h = up_u64(http_header(ctx.req, "Upload-Length"))
+    if length_h >= 0 {
+        if length_h != meta.length {
+            return act_err(opened.db, 400, "length mismatch")
+        }
+    }
+    let offset = up_u64(http_header(ctx.req, "Upload-Offset"))
+    let id = str_trim(fmr_query(ctx, "id"))
+    return up_apply(opened.db, meta.ws, meta.owner, id, meta.path, meta.offset, meta.length, offset, http_body_bytes(ctx.req))?
+}
+
+fn act_up_status(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let opened = up_open(ctx, db)?
+    if opened.ok == 0 {
+        return opened.out
+    }
+    let id = str_trim(fmr_query(ctx, "id"))
+    return up_progress(opened.db, id, opened.meta.offset, opened.meta.length)
+}
+
+fn act_up_drop(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let opened = up_open(ctx, db)?
+    if opened.ok == 0 {
+        return opened.out
+    }
+    let root = up_root()?
+    up_remove(root, str_trim(fmr_query(ctx, "id")))?
+    return act_no_content(opened.db)
+}
