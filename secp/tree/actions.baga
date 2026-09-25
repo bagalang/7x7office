@@ -150,7 +150,7 @@ fn act_fs_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     return tree_store_file(db, t.ws, t.owner, path, body, 1)?
 }
 
-fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 1, path)?
     if t.ok == 0 {
@@ -209,7 +209,7 @@ fn tree_office_text(body: bytes) -> str {
     return office_plain_text(opened.doc)
 }
 
-fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 1, path)?
     if t.ok == 0 {
@@ -296,7 +296,7 @@ fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(hold, o)
 }
 
-fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 1, path)?
     if t.ok == 0 {
@@ -323,7 +323,7 @@ fn act_fs_thumb(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return fmr_out(r, got.db)
 }
 
-fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 2, path)?
     if t.ok == 0 {

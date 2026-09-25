@@ -21,6 +21,7 @@ wsbaga = { path = "../../wsbaga" }
 chatbaga = { path = "../../chatbaga" }
 davbaga = { path = "../../davbaga" }
 wopibaga = { path = "../../wopibaga" }
+s3baga = { path = "../../s3baga" }
 reportbaga = { path = "../../reportbaga" }
 csvbaga = { path = "../../csvbaga" }
 pdfbaga = { path = "../../pdfbaga" }

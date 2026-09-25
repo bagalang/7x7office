@@ -300,7 +300,13 @@
       и CheckFileInfo. secp издава `GET /v1/wopi/token` и обслужва
       `/wopi/files/{id}` и `/contents`. X-WOPI-Proof и PutRelative остават
       (gaps W1/W2). UI: бутон „WOPI" в прегледа. Жив `tools/wopi_smoke.sh`
-- [ ] **s3baga** datasource; blobs в rocksbaga или директно в **boilaDB** (rocksbaga storage под нея — може да се допълва при нужда) като алтернативи на FS
+- [x] **s3baga** (2026-09-25): `SECP_BLOB=s3` праща blob-овете към path-style S3
+      (SigV4). Ключовете са `blobs/<aa>/<bb>/<hash>` и при шифроване
+      `blobs/w<id>/…/<hash>`. Променливи: `S3_ENDPOINT`, `S3_BUCKET`,
+      `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION` (us-east-1), `S3_TIMEOUT_S`.
+      Без `SECP_BLOB` остава локалният FS. Чист тест `tests/s3_sign_test.baga`,
+      жив `tools/s3_smoke.sh`. Пакетът е в дървото, докато няма bagalang/s3baga
+- [ ] blobs в rocksbaga или директно в boilaDB — по желание, когато потрябват
 - [ ] otelbaga traceparent през целия път; rate limiting (relbaga bulkhead)
 
 ---

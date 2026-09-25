@@ -237,7 +237,7 @@ fn act_share_unlock(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
 }
 
 // GET /s/{token}/view?path= — списък за папка, съдържание за файл.
-fn act_share_view(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_share_view(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let o = share_open_resolve(ctx, db, share_path_token(ctx))?
     if o.ok == 0 {
         return o.out
@@ -301,7 +301,7 @@ fn act_share_view(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
 
 // GET /s/{token}/download?path= — файлът като attachment. Тук се брои
 // сваляне (виж max_downloads).
-fn act_share_download(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_share_download(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let o = share_open_resolve(ctx, db, share_path_token(ctx))?
     if o.ok == 0 {
         return o.out

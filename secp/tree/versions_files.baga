@@ -91,7 +91,7 @@ fn act_fs_versions(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(orm_db_q(q), o)
 }
 
-fn act_fs_version_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_version_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let r = tree_ver_req(ctx, db, 1, 1)?
     if r.ok == 0 {
         return r.out
@@ -206,7 +206,7 @@ struct TreeZipReq {
     out: FmrOut
 }
 
-fn tree_zip_req(ctx: FmrCtx, db: OrmDb) -> TreeZipReq !IO !Net {
+fn tree_zip_req(ctx: FmrCtx, db: OrmDb) -> TreeZipReq !IO !Net !Random !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 1, path)?
     if t.ok == 0 {
@@ -231,7 +231,7 @@ fn tree_zip_req(ctx: FmrCtx, db: OrmDb) -> TreeZipReq !IO !Net {
     return TreeZipReq { ok: 1, db: got.db, zip: z, out: fmr_out(http_response(200, ""), got.db) }
 }
 
-fn act_fs_zip_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_zip_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let r = tree_zip_req(ctx, db)?
     if r.ok == 0 {
         return r.out
@@ -259,7 +259,7 @@ fn act_fs_zip_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return act_ok(r.db, o)
 }
 
-fn act_fs_zip_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_fs_zip_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let r = tree_zip_req(ctx, db)?
     if r.ok == 0 {
         return r.out

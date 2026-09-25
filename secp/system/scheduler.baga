@@ -223,7 +223,7 @@ struct OpsExtract {
 }
 
 // extract-text: payload е node id, job е id-то на задачата.
-fn ops_run_extract(db: OrmDb, job: i64, payload: str) -> OpsExtract !IO !Net !Time {
+fn ops_run_extract(db: OrmDb, job: i64, payload: str) -> OpsExtract !IO !Net !Time !Random {
     let nid = parse_int(payload)
     if nid < 1 {
         return OpsExtract { ok: 0, db: db, err: "bad node id" }

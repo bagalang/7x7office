@@ -63,7 +63,7 @@ fn tree_conflict_path(path: str, hash: str) -> str {
     return concat(concat(dir, "/"), p)
 }
 
-fn act_doc_load(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_doc_load(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let path = tree_qpath(ctx, "path")
     let t = tree_auth(ctx, db, 1, path)?
     if t.ok == 0 {

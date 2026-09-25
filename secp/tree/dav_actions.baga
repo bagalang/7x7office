@@ -111,7 +111,7 @@ fn dav_propfind(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     return dav_xml(d, 207, dav_multistatus(inner))
 }
 
-fn dav_get(ctx: FmrCtx, db: OrmDb, head: i64) -> FmrOut !IO !Net {
+fn dav_get(ctx: FmrCtx, db: OrmDb, head: i64) -> FmrOut !IO !Net !Random !Time {
     let t = dav_enter(ctx, db, 1)?
     if t.ok == 0 {
         return t.out
@@ -184,7 +184,7 @@ fn dav_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     return dav_plain(stored.db, code, "")
 }
 
-fn dav_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn dav_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let t = dav_enter(ctx, db, 2)?
     if t.ok == 0 {
         return t.out
@@ -349,7 +349,7 @@ fn dav_copy(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     return dav_plain(d, 201, "")
 }
 
-fn dav_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn dav_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let t = dav_enter(ctx, db, 2)?
     if t.ok == 0 {
         return t.out

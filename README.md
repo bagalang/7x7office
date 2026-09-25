@@ -39,8 +39,8 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
                         │              · acl · policies (jwtbaga)  │
                         │  tree         виртуално дърво nodes +    │
                         │              versions + meta (ormbaga)   │
-                        │  data         datasources: local FS →    │
-                        │              blobs (rocksbaga по-късно)  │
+                        │  data         datasources: локален FS    │
+                        │              или s3baga (SECP_BLOB=s3)   │
                         │  office       преглед и индекс чрез     │
                         │              officebaga · pdfbaga ·      │
                         │              imgbaga · csvbaga · mdbaga  │
@@ -53,7 +53,7 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
                         └──────┬───────────────────────┬───────────┘
                                ▼                       ▼
                      ormbaga → pgbaga → Postgres    локален FS
-                     (или boilabaga → boilaDB)      (blobs)
+                     (или boilabaga → boilaDB)      или S3 (blobs)
 ```
 
 ### Съответствие Cells → secp
@@ -68,7 +68,7 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
 | `idm/workspace · acl` | workspaces + ACL | ormbaga, pathbaga |
 | `idm/share` | share links / cells | uuidbaga, jwtbaga |
 | `data/tree · versions · meta` | tree + versions | ormbaga, chronobaga |
-| `data/source` | datasources | std FS → rocksbaga / **s3baga (по-късно)** |
+| `data/source` | datasources | локален FS или **s3baga** (`SECP_BLOB=s3`) |
 | `data/search` | търсене | PG FTS чрез pgbaga → **searchbaga (нов)** |
 | `broker/activity · chat · log` | activity + chat | chatbaga, wsbaga, logbaga |
 | `broker/mailer` | поща | **smtpbaga (нов)** ← std TLS |
@@ -112,7 +112,7 @@ secp остава **един процес**. Модулите са границ�
 | **smtpbaga** | SMTP клиент за покани/ресет на парола (pure TLS от std) | std/net | 6 |
 | **searchbaga** | full-text индекс върху rocksbaga (v1: PG FTS е достатъчен) | rocksbaga | 6 |
 | **wopibaga** | WOPI: CheckFileInfo, Get/Put, заключване (Collabora/OnlyOffice) | std | 7 |
-| **s3baga** | S3 datasource за blobs (по желание) | httpdbaga client | 7 |
+| **s3baga** | S3 datasource за blobs (path-style SigV4, `SECP_BLOB=s3`) | std | 7 |
 
 Възможна дупка: **resize в imgbaga** за thumbnails — проверява се във фаза 1;
 ако липсва, добавя се nearest/bilinear там (пакетът вече decode/encode PNG/JPEG).
@@ -211,6 +211,19 @@ Collabora или OnlyOffice викат secp като WOPI host.
 
 Бутон „WOPI" в прегледа на файла показва адреса и токена.
 Презентациите PPTX, PPSX, PPT и ODP минават оттам. `officebaga` не ги отваря.
+
+## S3 за blob-ове (Фаза 7)
+
+Без `SECP_BLOB` файловете стоят на локалния диск (`SECP_DATA_ROOT`).
+`SECP_BLOB=s3` праща същите ключове към path-style S3:
+
+- `S3_ENDPOINT` (например `http://127.0.0.1:9000`), `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
+- `S3_REGION` (ако липсва: `us-east-1`), `S3_TIMEOUT_S` (ако липсва: 30)
+- ключ `blobs/<aa>/<bb>/<sha256>`; при `SECP_MASTER_KEY` — `blobs/w<id>/…/<sha256>`
+
+Подписът е AWS SigV4. Тялото е двоично, включително нулев байт.
+Virtual-hosted bucket, chunked отговор и multipart качване не влизат в 0.1.0.
+rocksbaga и blob вътре в boilaDB остават за по-късно.
 
 ## Работни пространства и роли (Фаза 2)
 

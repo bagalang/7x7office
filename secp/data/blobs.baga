@@ -8,6 +8,51 @@ import "std/os/os.baga"
 import "std/str/str.baga"
 import "std/crypto/sha256.baga"
 import "bufbaga/buf.baga"
+import "s3baga/s3.baga"
+
+fn data_s3_on() -> i64 !IO {
+    let b = str_trim(env("SECP_BLOB")?)
+    if b == "s3" {
+        return 1
+    }
+    return 0
+}
+
+fn data_rel(hash: str) -> str {
+    let mut b = buf_from("blobs/")
+    let mut i: i64 = 0
+    while i < 2 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    b = buf_push(b, "/")
+    while i < 4 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    b = buf_push(b, "/")
+    b = buf_push(b, hash)
+    return buf_str(b)
+}
+
+fn data_rel_ws(ws: i64, hash: str) -> str {
+    let mut b = buf_from("blobs/w")
+    b = buf_push(b, int_to_str(ws))
+    b = buf_push(b, "/")
+    let mut i: i64 = 0
+    while i < 2 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    b = buf_push(b, "/")
+    while i < 4 {
+        b = buf_push_chr(b, char_at(hash, i))
+        i = i + 1
+    }
+    b = buf_push(b, "/")
+    b = buf_push(b, hash)
+    return buf_str(b)
+}
 
 fn data_root() -> str !IO {
     let r = env("SECP_DATA_ROOT")?
@@ -122,7 +167,20 @@ fn data_blob_dir_ws(root: str, ws: i64, hash: str) -> str {
     return buf_str(b)
 }
 
-fn data_blob_write_ws(ws: i64, hash: str, payload: bytes) -> i64 !IO {
+fn data_blob_write_ws(ws: i64, hash: str, payload: bytes) -> i64 !IO !Net !Random !Time {
+    if data_s3_on()? == 1 {
+        let key = data_rel_ws(ws, hash)
+        let h = s3_head(key)?
+        if h.ok == 1 && h.status == 200 {
+            return 0
+        }
+        let p = s3_put(key, payload)?
+        if p.ok == 0 {
+            eprintln(concat("blob s3: ", p.err))
+            return -1
+        }
+        return 0
+    }
     let root = data_root()?
     let path = data_blob_path_ws(root, ws, hash)
     if file_exists(path) == 1 {
@@ -141,7 +199,39 @@ fn data_blob_write_ws(ws: i64, hash: str, payload: bytes) -> i64 !IO {
     return 0
 }
 
-fn data_blob_delete_ws(ws: i64, hash: str) -> i64 !IO {
+fn data_blob_exists_ws(ws: i64, hash: str) -> i64 !IO !Net !Random !Time {
+    if data_s3_on()? == 1 {
+        let h = s3_head(data_rel_ws(ws, hash))?
+        if h.ok == 1 && h.status == 200 {
+            return 1
+        }
+        return 0
+    }
+    let root = data_root()?
+    return file_exists(data_blob_path_ws(root, ws, hash))
+}
+
+fn data_blob_read_ws(ws: i64, hash: str) -> bytes !IO !Net !Random !Time {
+    if data_s3_on()? == 1 {
+        let g = s3_get(data_rel_ws(ws, hash))?
+        if g.ok == 0 || g.status != 200 {
+            return bytes_new(0)
+        }
+        return g.body
+    }
+    let root = data_root()?
+    return read_file_bytes(data_blob_path_ws(root, ws, hash))?
+}
+
+fn data_blob_delete_ws(ws: i64, hash: str) -> i64 !IO !Net !Random !Time {
+    if data_s3_on()? == 1 {
+        let d = s3_delete(data_rel_ws(ws, hash))?
+        if d.ok == 0 {
+            eprintln(concat("blob s3: ", d.err))
+            return -1
+        }
+        return 0
+    }
     let root = data_root()?
     let path = data_blob_path_ws(root, ws, hash)
     if file_exists(path) == 0 {
@@ -167,8 +257,21 @@ fn data_blob_dir(root: str, hash: str) -> str {
 }
 
 // Store content; returns the sha256 hex id. Idempotent (same content → same blob).
-fn data_blob_put(content: bytes) -> str !IO {
+fn data_blob_put(content: bytes) -> str !IO !Net !Random !Time {
     let hash = sha256_b_hex(content)
+    if data_s3_on()? == 1 {
+        let key = data_rel(hash)
+        let h = s3_head(key)?
+        if h.ok == 1 && h.status == 200 {
+            return hash
+        }
+        let p = s3_put(key, content)?
+        if p.ok == 0 {
+            eprintln(concat("blob s3: ", p.err))
+            return ""
+        }
+        return hash
+    }
     let root = data_root()?
     let path = data_blob_path(root, hash)
     if file_exists(path) == 1 {
@@ -189,7 +292,14 @@ fn data_blob_put(content: bytes) -> str !IO {
 }
 
 // Read a blob by id; empty bytes when missing (callers check hash != "").
-fn data_blob_get(hash: str) -> bytes !IO {
+fn data_blob_get(hash: str) -> bytes !IO !Net !Random !Time {
+    if data_s3_on()? == 1 {
+        let g = s3_get(data_rel(hash))?
+        if g.ok == 0 || g.status != 200 {
+            return bytes_new(0)
+        }
+        return g.body
+    }
     let root = data_root()?
     let path = data_blob_path(root, hash)
     if file_exists(path) == 0 {
@@ -199,7 +309,15 @@ fn data_blob_get(hash: str) -> bytes !IO {
 }
 
 // Remove a blob; callers must verify it is unreferenced first.
-fn data_blob_delete(hash: str) -> i64 !IO {
+fn data_blob_delete(hash: str) -> i64 !IO !Net !Random !Time {
+    if data_s3_on()? == 1 {
+        let d = s3_delete(data_rel(hash))?
+        if d.ok == 0 {
+            eprintln(concat("blob s3: ", d.err))
+            return -1
+        }
+        return 0
+    }
     let root = data_root()?
     let path = data_blob_path(root, hash)
     if file_exists(path) == 0 {

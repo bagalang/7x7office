@@ -66,7 +66,7 @@ struct ThumbOut {
 }
 
 // 256px-max PNG thumbnail into the blob store; hash "" when not an image.
-fn tree_make_thumb(db: OrmDb, ws: i64, content: bytes) -> ThumbOut !IO !Net !Random {
+fn tree_make_thumb(db: OrmDb, ws: i64, content: bytes) -> ThumbOut !IO !Net !Random !Time {
     if bytes_len(content) > 20971520 {
         return ThumbOut { db: db, hash: "" }
     }

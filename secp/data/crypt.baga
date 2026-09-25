@@ -41,7 +41,7 @@ fn data_master() -> DataMaster !IO {
     return DataMaster { on: 1, key: bytes_from_vec(bytes_from_hex(h)), err: "" }
 }
 
-fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random {
+fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random !Time {
     let master = data_master()?
     if master.err != "" {
         return DataSaved { db: db, hash: "", err: master.err }
@@ -54,9 +54,7 @@ fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random {
         return DataSaved { db: db, hash: hash, err: "" }
     }
     let hash = sha256_b_hex(content)
-    let root = data_root()?
-    let path = data_blob_path_ws(root, ws, hash)
-    if file_exists(path) == 1 {
+    if data_blob_exists_ws(ws, hash)? == 1 {
         return DataSaved { db: db, hash: hash, err: "" }
     }
     let key = data_key_ensure(db, ws, master.key)?
@@ -78,13 +76,11 @@ fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random {
     return DataSaved { db: key.db, hash: hash, err: "" }
 }
 
-fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net {
+fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net !Random !Time {
     if hash == "" {
         return DataGot { db: db, body: bytes_new(0), err: "" }
     }
-    let root = data_root()?
-    let path = data_blob_path_ws(root, ws, hash)
-    if file_exists(path) == 0 {
+    if data_blob_exists_ws(ws, hash)? == 0 {
         let body = data_blob_get(hash)?
         return DataGot { db: db, body: body, err: "" }
     }
@@ -95,7 +91,7 @@ fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net {
     if master.on == 0 {
         return DataGot { db: db, body: bytes_new(0), err: "blob is encrypted" }
     }
-    let packed = read_file_bytes(path)?
+    let packed = data_blob_read_ws(ws, hash)?
     let key = data_key_load(db, ws, master.key)?
     if key.err != "" {
         return DataGot { db: key.db, body: bytes_new(0), err: key.err }

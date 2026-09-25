@@ -17,7 +17,7 @@ import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
 import "std/str/str.baga"
 
-fn tree_remove(db: OrmDb, ws: i64, owner: i64, path: str) -> FmrOut !IO !Net !Time {
+fn tree_remove(db: OrmDb, ws: i64, owner: i64, path: str) -> FmrOut !IO !Net !Time !Random {
     if path == "/" {
         return act_err(db, 400, "cannot delete root")
     }
