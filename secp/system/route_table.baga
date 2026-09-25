@@ -1,0 +1,337 @@
+// system/route_table.baga — таблицата на HTTP маршрутите. ЧИСТ модул.
+//
+// fmr_build_app само я монтира. Тестът (tests/secp_routes_test.baga) я
+// пуска през router_match без база: грешен public отваря път без Bearer,
+// а шаблон, регистриран преди по-специфичния, гълта съседния URL
+// (/wopi/files/{id} срещу /contents, /dav/{ws} срещу {*path}).
+//
+// Id-тата са стабилни — OpenAPI operationId ги ползва. Дупка в номерацията
+// (8, 9, 13–19, 29) е нарочна, не се запълва със следващия маршрут.
+
+import "fmrbaga/core/route.baga"
+
+fn RID_HEALTH() -> i64 { return 1 }
+fn RID_READY() -> i64 { return 2 }
+fn RID_META() -> i64 { return 3 }
+fn RID_OPENAPI() -> i64 { return 4 }
+fn RID_METRICS() -> i64 { return 5 }
+fn RID_UI_HOME() -> i64 { return 6 }
+fn RID_UI_LOGIN() -> i64 { return 7 }
+fn RID_LOGIN() -> i64 { return 10 }
+fn RID_LOGOUT() -> i64 { return 11 }
+fn RID_ME() -> i64 { return 12 }
+fn RID_FS_LIST() -> i64 { return 20 }
+fn RID_FS_STAT() -> i64 { return 21 }
+fn RID_FS_MKDIR() -> i64 { return 22 }
+fn RID_FS_PUT() -> i64 { return 23 }
+fn RID_FS_GET() -> i64 { return 24 }
+fn RID_FS_DELETE() -> i64 { return 25 }
+fn RID_FS_MOVE() -> i64 { return 26 }
+fn RID_FS_THUMB() -> i64 { return 27 }
+fn RID_FS_USAGE() -> i64 { return 28 }
+fn RID_USERS_LIST() -> i64 { return 30 }
+fn RID_USERS_CREATE() -> i64 { return 31 }
+fn RID_FS_PREVIEW() -> i64 { return 32 }
+fn RID_DOC_LOAD() -> i64 { return 33 }
+fn RID_DOC_SAVE() -> i64 { return 34 }
+fn RID_FS_VERSIONS() -> i64 { return 35 }
+fn RID_FS_VERSION_GET() -> i64 { return 36 }
+fn RID_FS_VERSION_RESTORE() -> i64 { return 37 }
+fn RID_FS_ZIP_LIST() -> i64 { return 38 }
+fn RID_FS_ZIP_GET() -> i64 { return 39 }
+fn RID_SEARCH() -> i64 { return 40 }
+fn RID_SEARCH_REINDEX() -> i64 { return 41 }
+fn RID_FORGOT() -> i64 { return 42 }
+fn RID_RESET() -> i64 { return 43 }
+fn RID_WS_LIST() -> i64 { return 44 }
+fn RID_WS_CREATE() -> i64 { return 45 }
+fn RID_WS_UPDATE() -> i64 { return 46 }
+fn RID_WS_DELETE() -> i64 { return 47 }
+fn RID_WS_MEMBERS() -> i64 { return 48 }
+fn RID_WS_MEMBER_ADD() -> i64 { return 49 }
+fn RID_WS_MEMBER_UPDATE() -> i64 { return 50 }
+fn RID_WS_MEMBER_REMOVE() -> i64 { return 51 }
+fn RID_FS_ACL_LIST() -> i64 { return 52 }
+fn RID_FS_ACL_SET() -> i64 { return 53 }
+fn RID_FS_ACL_DELETE() -> i64 { return 54 }
+fn RID_FS_SHARE_LIST() -> i64 { return 55 }
+fn RID_FS_SHARE_CREATE() -> i64 { return 56 }
+fn RID_FS_SHARE_REVOKE() -> i64 { return 57 }
+fn RID_SHARE_META() -> i64 { return 58 }
+fn RID_SHARE_UNLOCK() -> i64 { return 59 }
+fn RID_SHARE_VIEW() -> i64 { return 60 }
+fn RID_SHARE_DOWNLOAD() -> i64 { return 61 }
+fn RID_SHARE_UPLOAD() -> i64 { return 62 }
+fn RID_ACTIVITY() -> i64 { return 63 }
+fn RID_CHAT_LIST() -> i64 { return 64 }
+fn RID_CHAT_POST() -> i64 { return 65 }
+fn RID_DAV() -> i64 { return 66 }
+fn RID_REPORT_STORAGE() -> i64 { return 67 }
+fn RID_REPORT_ACTIVITY() -> i64 { return 68 }
+fn RID_WOPI_TOKEN() -> i64 { return 69 }
+fn RID_WOPI_FILE() -> i64 { return 70 }
+fn RID_WOPI_CONTENTS() -> i64 { return 71 }
+
+// Всяко id, което dispatch-ът трябва да поеме. Нов маршрут се добавя и тук.
+fn secp_ids() -> Vec<i64> {
+    let v = vec_new()
+    vec_push(v, RID_HEALTH())
+    vec_push(v, RID_READY())
+    vec_push(v, RID_META())
+    vec_push(v, RID_OPENAPI())
+    vec_push(v, RID_METRICS())
+    vec_push(v, RID_UI_HOME())
+    vec_push(v, RID_UI_LOGIN())
+    vec_push(v, RID_LOGIN())
+    vec_push(v, RID_LOGOUT())
+    vec_push(v, RID_ME())
+    vec_push(v, RID_FS_LIST())
+    vec_push(v, RID_FS_STAT())
+    vec_push(v, RID_FS_MKDIR())
+    vec_push(v, RID_FS_PUT())
+    vec_push(v, RID_FS_GET())
+    vec_push(v, RID_FS_DELETE())
+    vec_push(v, RID_FS_MOVE())
+    vec_push(v, RID_FS_THUMB())
+    vec_push(v, RID_FS_USAGE())
+    vec_push(v, RID_USERS_LIST())
+    vec_push(v, RID_USERS_CREATE())
+    vec_push(v, RID_FS_PREVIEW())
+    vec_push(v, RID_DOC_LOAD())
+    vec_push(v, RID_DOC_SAVE())
+    vec_push(v, RID_FS_VERSIONS())
+    vec_push(v, RID_FS_VERSION_GET())
+    vec_push(v, RID_FS_VERSION_RESTORE())
+    vec_push(v, RID_FS_ZIP_LIST())
+    vec_push(v, RID_FS_ZIP_GET())
+    vec_push(v, RID_SEARCH())
+    vec_push(v, RID_SEARCH_REINDEX())
+    vec_push(v, RID_FORGOT())
+    vec_push(v, RID_RESET())
+    vec_push(v, RID_WS_LIST())
+    vec_push(v, RID_WS_CREATE())
+    vec_push(v, RID_WS_UPDATE())
+    vec_push(v, RID_WS_DELETE())
+    vec_push(v, RID_WS_MEMBERS())
+    vec_push(v, RID_WS_MEMBER_ADD())
+    vec_push(v, RID_WS_MEMBER_UPDATE())
+    vec_push(v, RID_WS_MEMBER_REMOVE())
+    vec_push(v, RID_FS_ACL_LIST())
+    vec_push(v, RID_FS_ACL_SET())
+    vec_push(v, RID_FS_ACL_DELETE())
+    vec_push(v, RID_FS_SHARE_LIST())
+    vec_push(v, RID_FS_SHARE_CREATE())
+    vec_push(v, RID_FS_SHARE_REVOKE())
+    vec_push(v, RID_SHARE_META())
+    vec_push(v, RID_SHARE_UNLOCK())
+    vec_push(v, RID_SHARE_VIEW())
+    vec_push(v, RID_SHARE_DOWNLOAD())
+    vec_push(v, RID_SHARE_UPLOAD())
+    vec_push(v, RID_ACTIVITY())
+    vec_push(v, RID_CHAT_LIST())
+    vec_push(v, RID_CHAT_POST())
+    vec_push(v, RID_DAV())
+    vec_push(v, RID_REPORT_STORAGE())
+    vec_push(v, RID_REPORT_ACTIVITY())
+    vec_push(v, RID_WOPI_TOKEN())
+    vec_push(v, RID_WOPI_FILE())
+    vec_push(v, RID_WOPI_CONTENTS())
+    return v
+}
+
+fn secp_add(r: Router, method: str, pattern: str, id: i64, tag: str, public: i64, body: str, ok: str, code: str, query: str) -> Router {
+    return router_add_meta(r, method, pattern, id, "", tag, public, body, ok, code, query)
+}
+
+fn secp_routes() -> Router {
+    let mut r = router_new()
+    r = secp_add(r, "GET", "/health", RID_HEALTH(), "system", 1, "", "Status", "200", "")
+    r = secp_add(r, "GET", "/ready", RID_READY(), "system", 1, "", "Ready", "200", "")
+    r = secp_add(r, "GET", "/readyz", RID_READY(), "system", 1, "", "Ready", "200", "")
+    r = secp_add(r, "GET", "/v1/meta", RID_META(), "system", 1, "", "Meta", "200", "")
+    r = secp_add(r, "GET", "/openapi.json", RID_OPENAPI(), "system", 1, "", "-", "200", "")
+    r = secp_add(r, "GET", "/metrics", RID_METRICS(), "system", 0, "", "-", "200", "")
+    r = secp_add(r, "GET", "/", RID_UI_HOME(), "ui", 1, "", "HomePage", "200", "")
+    r = secp_add(r, "GET", "/login", RID_UI_LOGIN(), "ui", 1, "", "LoginPage", "200", "error")
+    r = secp_add(r, "POST", "/v1/auth/login", RID_LOGIN(), "auth", 1, "LoginRequest", "TokenResponse", "200", "")
+    r = secp_add(r, "POST", "/v1/auth/logout", RID_LOGOUT(), "auth", 1, "", "-", "303", "")
+    r = secp_add(r, "POST", "/v1/auth/forgot", RID_FORGOT(), "auth", 1, "ForgotRequest", "Message", "200", "")
+    r = secp_add(r, "POST", "/v1/auth/reset", RID_RESET(), "auth", 1, "ResetRequest", "Message", "200", "")
+    r = secp_add(r, "GET", "/v1/me", RID_ME(), "auth", 0, "", "Me", "200", "")
+    r = secp_add(r, "GET", "/v1/users", RID_USERS_LIST(), "idm", 0, "", "UserList", "200", "")
+    r = secp_add(r, "POST", "/v1/users", RID_USERS_CREATE(), "idm", 0, "UserCreate", "User", "201", "")
+    r = secp_add(r, "GET", "/v1/workspaces", RID_WS_LIST(), "idm", 0, "", "WorkspaceList", "200", "")
+    r = secp_add(r, "POST", "/v1/workspaces", RID_WS_CREATE(), "idm", 0, "WorkspaceCreate", "Workspace", "201", "")
+    r = secp_add(r, "PATCH", "/v1/workspaces", RID_WS_UPDATE(), "idm", 0, "WorkspaceUpdate", "Workspace", "200", "workspace_id")
+    r = secp_add(r, "DELETE", "/v1/workspaces", RID_WS_DELETE(), "idm", 0, "", "-", "204", "workspace_id")
+    r = secp_add(r, "GET", "/v1/workspaces/members", RID_WS_MEMBERS(), "idm", 0, "", "MemberList", "200", "workspace_id")
+    r = secp_add(r, "POST", "/v1/workspaces/members", RID_WS_MEMBER_ADD(), "idm", 0, "MemberAdd", "Member", "201", "workspace_id")
+    r = secp_add(r, "PATCH", "/v1/workspaces/members", RID_WS_MEMBER_UPDATE(), "idm", 0, "MemberUpdate", "Member", "200", "workspace_id,member_id")
+    r = secp_add(r, "DELETE", "/v1/workspaces/members", RID_WS_MEMBER_REMOVE(), "idm", 0, "", "-", "204", "workspace_id,member_id")
+    r = secp_add(r, "GET", "/v1/fs/list", RID_FS_LIST(), "fs", 0, "", "NodeList", "200", "path")
+    r = secp_add(r, "GET", "/v1/fs/stat", RID_FS_STAT(), "fs", 0, "", "Node", "200", "path")
+    r = secp_add(r, "POST", "/v1/fs/mkdir", RID_FS_MKDIR(), "fs", 0, "", "Node", "201", "path")
+    r = secp_add(r, "PUT", "/v1/fs/file", RID_FS_PUT(), "fs", 0, "bytes", "Node", "200", "path")
+    r = secp_add(r, "GET", "/v1/fs/file", RID_FS_GET(), "fs", 0, "", "bytes", "200", "path")
+    r = secp_add(r, "DELETE", "/v1/fs/file", RID_FS_DELETE(), "fs", 0, "", "-", "204", "path")
+    r = secp_add(r, "POST", "/v1/fs/move", RID_FS_MOVE(), "fs", 0, "", "Node", "200", "from,to")
+    r = secp_add(r, "GET", "/v1/fs/thumb", RID_FS_THUMB(), "fs", 0, "", "bytes", "200", "path")
+    r = secp_add(r, "GET", "/v1/fs/usage", RID_FS_USAGE(), "fs", 0, "", "Usage", "200", "")
+    r = secp_add(r, "GET", "/v1/fs/preview", RID_FS_PREVIEW(), "fs", 0, "", "Preview", "200", "path")
+    r = secp_add(r, "GET", "/v1/doc/load", RID_DOC_LOAD(), "doc", 0, "", "DocContent", "200", "path")
+    r = secp_add(r, "PUT", "/v1/doc/save", RID_DOC_SAVE(), "doc", 0, "text", "Node", "200", "path")
+    r = secp_add(r, "GET", "/v1/fs/versions", RID_FS_VERSIONS(), "fs", 0, "", "VersionList", "200", "path")
+    r = secp_add(r, "GET", "/v1/fs/version/get", RID_FS_VERSION_GET(), "fs", 0, "", "bytes", "200", "path,version")
+    r = secp_add(r, "POST", "/v1/fs/version/restore", RID_FS_VERSION_RESTORE(), "fs", 0, "", "Node", "200", "path,version")
+    r = secp_add(r, "GET", "/v1/fs/zip/list", RID_FS_ZIP_LIST(), "fs", 0, "", "ZipList", "200", "path")
+    r = secp_add(r, "GET", "/v1/fs/zip/get", RID_FS_ZIP_GET(), "fs", 0, "", "bytes", "200", "path,entry")
+    r = secp_add(r, "GET", "/v1/search", RID_SEARCH(), "fs", 0, "", "SearchList", "200", "q")
+    r = secp_add(r, "POST", "/v1/search/reindex", RID_SEARCH_REINDEX(), "fs", 0, "", "ReindexResult", "200", "")
+    r = secp_add(r, "GET", "/v1/fs/acl", RID_FS_ACL_LIST(), "fs", 0, "", "AclList", "200", "path")
+    r = secp_add(r, "POST", "/v1/fs/acl", RID_FS_ACL_SET(), "fs", 0, "AclSet", "AclRow", "200", "workspace_id")
+    r = secp_add(r, "DELETE", "/v1/fs/acl", RID_FS_ACL_DELETE(), "fs", 0, "", "-", "204", "acl_id")
+    r = secp_add(r, "GET", "/v1/activity", RID_ACTIVITY(), "fs", 0, "", "ActivityList", "200", "limit,path,actor_id")
+    r = secp_add(r, "GET", "/v1/reports/storage", RID_REPORT_STORAGE(), "reports", 0, "", "StorageReport", "200", "format,lang")
+    r = secp_add(r, "GET", "/v1/reports/activity", RID_REPORT_ACTIVITY(), "reports", 0, "", "ActivityReport", "200", "format,lang")
+    r = secp_add(r, "GET", "/v1/wopi/token", RID_WOPI_TOKEN(), "wopi", 0, "", "WopiToken", "200", "path")
+    r = secp_add(r, "GET", "/wopi/files/{id}", RID_WOPI_FILE(), "wopi", 1, "", "CheckFileInfo", "200", "")
+    r = secp_add(r, "POST", "/wopi/files/{id}", RID_WOPI_FILE(), "wopi", 1, "", "-", "200", "")
+    r = secp_add(r, "GET", "/wopi/files/{id}/contents", RID_WOPI_CONTENTS(), "wopi", 1, "", "bytes", "200", "")
+    r = secp_add(r, "POST", "/wopi/files/{id}/contents", RID_WOPI_CONTENTS(), "wopi", 1, "bytes", "-", "200", "")
+    r = secp_add(r, "GET", "/v1/chat", RID_CHAT_LIST(), "chat", 0, "", "ChatList", "200", "limit")
+    r = secp_add(r, "POST", "/v1/chat", RID_CHAT_POST(), "chat", 0, "ChatPost", "ChatMessage", "201", "")
+    // WebDAV: един id. Коренът е преди {*path}, иначе /dav/0 пада в остатъка.
+    r = secp_add(r, "OPTIONS", "/dav/{ws}", RID_DAV(), "dav", 1, "", "-", "200", "")
+    r = secp_add(r, "OPTIONS", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "200", "")
+    r = secp_add(r, "PROPFIND", "/dav/{ws}", RID_DAV(), "dav", 1, "", "-", "207", "")
+    r = secp_add(r, "PROPFIND", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "207", "")
+    r = secp_add(r, "GET", "/dav/{ws}", RID_DAV(), "dav", 1, "", "-", "200", "")
+    r = secp_add(r, "GET", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "200", "")
+    r = secp_add(r, "HEAD", "/dav/{ws}", RID_DAV(), "dav", 1, "", "-", "200", "")
+    r = secp_add(r, "HEAD", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "200", "")
+    r = secp_add(r, "PUT", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "201", "")
+    r = secp_add(r, "DELETE", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "204", "")
+    r = secp_add(r, "MKCOL", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "201", "")
+    r = secp_add(r, "COPY", "/dav/{ws}", RID_DAV(), "dav", 1, "", "-", "201", "")
+    r = secp_add(r, "COPY", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "201", "")
+    r = secp_add(r, "MOVE", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "201", "")
+    r = secp_add(r, "PROPPATCH", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "405", "")
+    r = secp_add(r, "LOCK", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "405", "")
+    r = secp_add(r, "UNLOCK", "/dav/{ws}/{*path}", RID_DAV(), "dav", 1, "", "-", "405", "")
+    r = secp_add(r, "GET", "/v1/fs/share", RID_FS_SHARE_LIST(), "fs", 0, "", "ShareList", "200", "path")
+    r = secp_add(r, "POST", "/v1/fs/share", RID_FS_SHARE_CREATE(), "fs", 0, "ShareCreate", "ShareLink", "201", "workspace_id")
+    r = secp_add(r, "DELETE", "/v1/fs/share", RID_FS_SHARE_REVOKE(), "fs", 0, "", "-", "204", "share_id")
+    r = secp_add(r, "GET", "/s/{token}", RID_SHARE_META(), "share", 1, "", "ShareMeta", "200", "")
+    r = secp_add(r, "POST", "/s/{token}/unlock", RID_SHARE_UNLOCK(), "share", 1, "ShareUnlock", "SharePass", "200", "")
+    r = secp_add(r, "GET", "/s/{token}/view", RID_SHARE_VIEW(), "share", 1, "", "ShareView", "200", "path")
+    r = secp_add(r, "GET", "/s/{token}/download", RID_SHARE_DOWNLOAD(), "share", 1, "", "bytes", "200", "path")
+    r = secp_add(r, "PUT", "/s/{token}/upload", RID_SHARE_UPLOAD(), "share", 1, "bytes", "Node", "200", "path,name")
+    return r
+}
+
+fn secp_id_known(id: i64) -> i64 {
+    let ids = secp_ids()
+    let mut i: i64 = 0
+    while i < vec_len(ids) {
+        if vec_get(ids, i) == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn secp_id_mounted(r: Router, id: i64) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(r.ids) {
+        if vec_get(r.ids, i) == id {
+            return 1
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+// 1, когато всяко монтирано id е от списъка и всяко id от списъка е монтирано.
+fn secp_ids_ok(r: Router) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(r.ids) {
+        if secp_id_known(vec_get(r.ids, i)) == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    let ids = secp_ids()
+    i = 0
+    while i < vec_len(ids) {
+        if secp_id_mounted(r, vec_get(ids, i)) == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// 1, когато всеки public е 0 или 1. -1 би пуснал евристиката на fmr.
+fn secp_publics_set(r: Router) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(r.publics) {
+        let p = vec_get(r.publics, i)
+        if p != 0 {
+            if p != 1 {
+                return 0
+            }
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// Точният шаблон. -2, ако метод+шаблон липсват.
+fn secp_flag(r: Router, method: str, pattern: str) -> i64 {
+    let mut i: i64 = 0
+    while i < vec_len(r.ids) {
+        if vec_get(r.methods, i) == method {
+            if vec_get(r.patterns, i) == pattern {
+                return vec_get(r.publics, i)
+            }
+        }
+        i = i + 1
+    }
+    return 0 - 2
+}
+
+fn secp_hit(r: Router, method: str, path: str) -> i64 {
+    let m = router_match(r, method, path)
+    if m.ok == 0 {
+        return 0
+    }
+    return m.id
+}
+
+fn secp_matched_pattern(r: Router, method: str, path: str) -> str {
+    let mut i: i64 = 0
+    while i < vec_len(r.ids) {
+        let m = route_match_one(method, path, vec_get(r.methods, i), vec_get(r.patterns, i), vec_get(r.ids, i))
+        if m.ok == 1 {
+            return vec_get(r.patterns, i)
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+fn secp_param(r: Router, method: str, path: str, name: str) -> str {
+    let m = router_match(r, method, path)
+    if m.ok == 0 {
+        return ""
+    }
+    let mut i: i64 = 0
+    while i < vec_len(m.pnames) {
+        if vec_get(m.pnames, i) == name {
+            return vec_get(m.pvals, i)
+        }
+        i = i + 1
+    }
+    return ""
+}

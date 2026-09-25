@@ -28,7 +28,11 @@
 - [x] Конфиг по 12-factor (`.env.example`), health/ready/meta/openapi/metrics endpoint-и
 - [x] `tplbaga` базов layout + login страница (SSR, cookie→JWT)
 - [x] Smoke: билд, миграции, seed admin, login (JSON + форма), me, logout, UI страници — **на Postgres 5432 и на boilaDB :6575** (ORM_BACKEND=boila, MAX(id)+1 път)
-- [ ] Тестове: testbaga smoke по маршрутите (остава — `tests/` в baga монорепото)
+- [x] Тестове: testbaga smoke по маршрутите (2026-09-25, `tests/secp_routes_test.baga`
+      в монорепото). Таблицата е `system/route_table.baga`. Хваща отворен
+      `public`, дублиран метод+шаблон и шаблон, който гълта съседния път
+      (`/wopi/files/{id}` срещу `/contents`, `/dav/{ws}` срещу `{*path}`).
+      Живите handler-и остават в `tools/*_smoke.sh`
 
 **Зависимости:** fmrbaga, jwtbaga, ormbaga, pgbaga, logbaga, metbaga, flagbaga, tplbaga
 
@@ -305,7 +309,7 @@
       `blobs/w<id>/…/<hash>`. Променливи: `S3_ENDPOINT`, `S3_BUCKET`,
       `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION` (us-east-1), `S3_TIMEOUT_S`.
       Без `SECP_BLOB` остава локалният FS. Чист тест `tests/s3_sign_test.baga`,
-      жив `tools/s3_smoke.sh`. Пакетът е в дървото, докато няма bagalang/s3baga
+      жив `tools/s3_smoke.sh`. Пакетът е submodule към bagalang/s3baga
 - [ ] blobs в rocksbaga или директно в boilaDB — по желание, когато потрябват
 - [x] otelbaga + relbaga (2026-09-25): всеки HTTP отговор, включително 404,
       носи `traceparent` (дете на входящия, ако е валиден). `SECP_OTEL_URL`
