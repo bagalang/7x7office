@@ -57,6 +57,7 @@ export const de: Record<string, string> = {
 
   "preview.close": "Schließen",
   "preview.no_text": "Für diese Datei gibt es keine Textvorschau.",
+  "preview.presentation": "Präsentation (PPTX, PPT, ODP). Die Bearbeitung ist in Collabora.",
   "preview.opening": "Wird geöffnet…",
   "preview.size": "Größe",
   "preview.modified": "Geändert",

@@ -30,6 +30,13 @@ export const IconFile = (p: P) => (
   </svg>
 );
 
+export const IconSlides = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3" y="4" width="18" height="12" rx="1.5" />
+    <path d="M8 20h8M12 16v4" />
+  </svg>
+);
+
 export const IconFileText = (p: P) => (
   <svg {...base(p)}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />

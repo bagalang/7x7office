@@ -128,6 +128,7 @@ export function FilePreview({
         {kind === "sheet" ? <PreviewTable text={text} sep={"\t"} /> : null}
         {kind === "zip" ? <ZipPreview node={node} onError={onError} /> : null}
         {kind === "text" ? <pre>{text}</pre> : null}
+        {kind === "presentation" ? <p className="muted">{t("preview.presentation")}</p> : null}
         {kind === "empty" ? <p className="muted">{t("preview.no_text")}</p> : null}
         {kind === "" && !err ? <p className="muted">{t("preview.opening")}</p> : null}
 
@@ -159,7 +160,7 @@ export function FilePreview({
           {node.is_dir !== 1 ? (
             <button
               type="button"
-              className="btn ghost"
+              className={kind === "presentation" ? "btn" : "btn ghost"}
               onClick={() => {
                 setCopied("");
                 void api

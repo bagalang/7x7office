@@ -13,6 +13,7 @@ import {
   IconDownload,
   IconFile,
   IconFileText,
+  IconSlides,
   IconFolder,
   IconGridView,
   IconImage,
@@ -67,10 +68,12 @@ function joinPath(dir: string, name: string): string {
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 const TEXT_EXT = /\.(txt|md|markdown|csv|json|ya?ml|xml|log|baga|ts|tsx|js|css|html)$/i;
+const SLIDE_EXT = /\.(pptx|ppsx|ppt|odp)$/i;
 
 function FileIcon({ node }: { node: FsNode }) {
   if (node.is_dir) return <IconFolder />;
   if (IMAGE_EXT.test(node.name)) return <IconImage />;
+  if (SLIDE_EXT.test(node.name)) return <IconSlides />;
   if (TEXT_EXT.test(node.name)) return <IconFileText />;
   return <IconFile />;
 }

@@ -56,6 +56,7 @@ export const bg: Record<string, string> = {
 
   "preview.close": "Затвори",
   "preview.no_text": "Няма текстов преглед за този файл.",
+  "preview.presentation": "Презентация (PPTX, PPT, ODP). Редакцията е в Collabora.",
   "preview.opening": "Отваряне…",
   "preview.size": "Размер",
   "preview.modified": "Променен",

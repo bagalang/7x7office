@@ -17,7 +17,8 @@
 
 Самохоствана платформа за **файлове + офис документи за организации**:
 workspaces, споделени „клетки" (cells), ACL права, версии, WebDAV достъп,
-преглед/редакция на DOCX/XLSX/ODT/ODS директно чрез `officebaga`,
+преглед на DOCX/XLSX/ODT/ODS чрез `officebaga`, редакция в Collabora (WOPI),
+включително презентации PPTX/PPT/ODP/PPSX,
 realtime събития по WebSocket и фонови задачи.
 
 ## От Cells микросервизи → към Baga модули
@@ -40,9 +41,10 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
                         │              versions + meta (ormbaga)   │
                         │  data         datasources: local FS →    │
                         │              blobs (rocksbaga по-късно)  │
-                        │  office       preview/edit чрез          │
+                        │  office       преглед и индекс чрез     │
                         │              officebaga · pdfbaga ·      │
                         │              imgbaga · csvbaga · mdbaga  │
+                        │              редакция: Collabora (WOPI)  │
                         │  share        публични линкове · cells   │
                         │  broker       activity · chat (chatbaga) │
                         │              · mail (smtpbaga – нов)     │
@@ -72,7 +74,7 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
 | `broker/mailer` | поща | **smtpbaga (нов)** ← std TLS |
 | `scheduler/jobs · tasks · timer` | scheduler | queuebaga, relbaga, ctxbaga |
 | `common/crypto` | енкрипция | std/crypto (AES-GCM, X25519) |
-| — | офис документи | **officebaga** (DOCX/XLSX/ODT/ODS) — тук сме по-силни от Cells, което разчита на външен Collabora |
+| — | офис документи | `officebaga` за преглед и текст; редакцията е Collabora през WOPI |
 
 ## Модулен монолит (архитектурно решение)
 
@@ -208,6 +210,7 @@ Collabora или OnlyOffice викат secp като WOPI host.
   Чужд lock връща 409 и текущия `X-WOPI-Lock`. PutRelative още е 501.
 
 Бутон „WOPI" в прегледа на файла показва адреса и токена.
+Презентациите PPTX, PPSX, PPT и ODP минават оттам. `officebaga` не ги отваря.
 
 ## Работни пространства и роли (Фаза 2)
 

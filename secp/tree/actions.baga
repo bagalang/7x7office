@@ -230,6 +230,9 @@ fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "gif" || ext == "webp" || ext == "bmp" {
         kind = "image"
     } else {
+        if tree_ext_presentation(ext) == 1 {
+            kind = "presentation"
+        } else {
         if ext == "pdf" {
             // pdfbaga is a writer; the browser renders the blob natively.
             kind = "pdf"
@@ -283,6 +286,7 @@ fn act_fs_preview(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
                     text = tree_preview_cap(text)
                 }
             }
+        }
         }
     }
     let mut o = jobj_new()

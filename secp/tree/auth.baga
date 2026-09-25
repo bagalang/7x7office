@@ -174,9 +174,22 @@ fn tree_mime(path: str) -> str {
     if ext == "zip" { return "application/zip" }
     if ext == "docx" { return "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }
     if ext == "xlsx" { return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }
+    if ext == "pptx" { return "application/vnd.openxmlformats-officedocument.presentationml.presentation" }
+    if ext == "ppsx" { return "application/vnd.openxmlformats-officedocument.presentationml.slideshow" }
+    if ext == "ppt" { return "application/vnd.ms-powerpoint" }
     if ext == "odt" { return "application/vnd.oasis.opendocument.text" }
     if ext == "ods" { return "application/vnd.oasis.opendocument.spreadsheet" }
+    if ext == "odp" { return "application/vnd.oasis.opendocument.presentation" }
     return "application/octet-stream"
+}
+
+// Презентациите се отварят в Collabora. officebaga не ги чете.
+fn tree_ext_presentation(ext: str) -> i64 {
+    if ext == "pptx" { return 1 }
+    if ext == "ppsx" { return 1 }
+    if ext == "ppt" { return 1 }
+    if ext == "odp" { return 1 }
+    return 0
 }
 
 fn tree_mime_inline(mime: str) -> i64 {

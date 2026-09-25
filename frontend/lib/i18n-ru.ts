@@ -56,6 +56,7 @@ export const ru: Record<string, string> = {
 
   "preview.close": "Закрыть",
   "preview.no_text": "Для этого файла нет текстового просмотра.",
+  "preview.presentation": "Презентация (PPTX, PPT, ODP). Редактирование в Collabora.",
   "preview.opening": "Открытие…",
   "preview.size": "Размер",
   "preview.modified": "Изменён",
