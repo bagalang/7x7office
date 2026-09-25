@@ -429,7 +429,7 @@ rclone copyto ./file.txt :webdav:inbox/file.txt \
   --webdav-pass "$(rclone obscure 'admin123')"
 ```
 
-`0` е личното пространство. За екипно се слага неговото id (`/dav/12`). Входът е Basic (имейл и парола) или `Authorization: Bearer`. LOCK и PROPPATCH още отговарят 405.
+`0` е личното пространство. За екипно се слага неговото id (`/dav/12`). Входът е Basic (имейл и парола) или `Authorization: Bearer`. Клас 2 е наличен: `LOCK`/`UNLOCK` (изключително заключване, `If`/`Lock-Token`; без токен писането е 423) и `PROPPATCH` (207 с 403 за всяко свойство — не се пазят). Пълният `If` с `Not` и или-списъци още не се оценява (G — виж `davbaga/gaps.md`). Жив тест: `secp/tools/dav_smoke.sh`.
 
 ### Realtime каналът (WS) — как се стига до него
 

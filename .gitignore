@@ -16,3 +16,7 @@ frontend/.next/
 # Секрети
 .env
 **/.env
+
+# Python кеш от инструментите (tools/*.py се пускат от smoke тестовете)
+__pycache__/
+*.pyc
