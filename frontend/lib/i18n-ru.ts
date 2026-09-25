@@ -310,4 +310,12 @@ export const ru: Record<string, string> = {
   "reports.format_ods": "ODS",
   "reports.format_html": "HTML",
   "reports.format_pdf": "PDF",
+
+  "wopi.open": "WOPI",
+  "wopi.title": "Открыть в Collabora / OnlyOffice",
+  "wopi.hint": "Передайте эти два значения офисному серверу. Токен временный.",
+  "wopi.src": "Адрес файла",
+  "wopi.token": "Токен",
+  "wopi.copy": "Копировать",
+  "wopi.copied": "Скопировано",
 };

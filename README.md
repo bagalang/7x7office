@@ -61,7 +61,7 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
 | `gateway/restv2` | REST API | fmrbaga, httpdbaga, jsonrpcbaga |
 | `gateway/dav` | WebDAV gateway | **davbaga (нов)** ← httpdbaga + xmlbaga |
 | `gateway/websocket` | events/нотификации | wsbaga |
-| `gateway/wopi` | WOPI (Collabora/OnlyOffice) | **wopibaga (нов, фаза 7)** |
+| `gateway/wopi` | WOPI (Collabora/OnlyOffice) | wopibaga |
 | `idm/user · role · policy` | idm | jwtbaga, otpbaga, oauthbaga, ormbaga |
 | `idm/workspace · acl` | workspaces + ACL | ormbaga, pathbaga |
 | `idm/share` | share links / cells | uuidbaga, jwtbaga |
@@ -109,7 +109,7 @@ secp остава **един процес**. Модулите са границ�
 | **davbaga** | WebDAV сървър (PROPFIND/PROPPATCH/MKCOL/COPY/MOVE/LOCK) — Finder/Explorer/rclone монтиране | httpdbaga, xmlbaga | 4 |
 | **smtpbaga** | SMTP клиент за покани/ресет на парола (pure TLS от std) | std/net | 6 |
 | **searchbaga** | full-text индекс върху rocksbaga (v1: PG FTS е достатъчен) | rocksbaga | 6 |
-| **wopibaga** | WOPI протокол за Collabora/OnlyOffice (по желание — имаме officebaga) | httpdbaga | 7 |
+| **wopibaga** | WOPI: CheckFileInfo, Get/Put, заключване (Collabora/OnlyOffice) | std | 7 |
 | **s3baga** | S3 datasource за blobs (по желание) | httpdbaga client | 7 |
 
 Възможна дупка: **resize в imgbaga** за thumbnails — проверява се във фаза 1;
@@ -196,6 +196,18 @@ UI: `/reports` в менюто на админа, 4 езика. PDF иска ш�
 (32 байта) всеки нов запис е AES-GCM. Ключът на пространството се пази
 увит в `data_keys`. ETag-ът си остава SHA-256 на съдържанието. Файл,
 качен преди ключа, се чете от стария път.
+
+## WOPI (Фаза 7)
+
+Collabora или OnlyOffice викат secp като WOPI host.
+
+- `GET /v1/wopi/token?path=` (с вход) дава `file_id`, `access_token` и `wopi_src`.
+  Адресът ползва `SECP_PUBLIC_URL`, ако е зададен. Срок: `SECP_WOPI_TTL_MIN` (60).
+- `GET /wopi/files/{id}` е CheckFileInfo. `GET/POST …/contents` са GetFile и PutFile.
+- `POST /wopi/files/{id}` с `X-WOPI-Override: LOCK|UNLOCK|REFRESH_LOCK|GET_LOCK`.
+  Чужд lock връща 409 и текущия `X-WOPI-Lock`. PutRelative още е 501.
+
+Бутон „WOPI" в прегледа на файла показва адреса и токена.
 
 ## Работни пространства и роли (Фаза 2)
 

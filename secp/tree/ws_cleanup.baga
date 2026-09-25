@@ -20,6 +20,7 @@ import "share_model.baga"
 import "versions.baga"
 import "../data/blobs.baga"
 import "../data/keys.baga"
+import "../wopi/locks.baga"
 import "ormbaga/orm.baga"
 import "std/str/str.baga"
 
@@ -86,6 +87,11 @@ fn tree_ws_purge(db: OrmDb, ws: i64) -> TreeWsPurge !IO !Net !Time {
         return TreeWsPurge { db: orm_db_exec(v), nodes: 0, err: orm_err_exec(v) }
     }
     d = orm_db_exec(v)
+    let wl = wopi_lock_purge_ws(d, ws)?
+    if wl.err != "" {
+        return TreeWsPurge { db: wl.db, nodes: 0, err: wl.err }
+    }
+    d = wl.db
     let nd = tree_ws_purge_nodes(d, ws)
     if nd < 0 {
         return TreeWsPurge { db: d, nodes: 0, err: "delete nodes failed" }

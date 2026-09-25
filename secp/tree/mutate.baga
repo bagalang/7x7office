@@ -11,6 +11,7 @@ import "activity_model.baga"
 import "share_model.baga"
 import "versions.baga"
 import "text.baga"
+import "../wopi/locks.baga"
 import "fmrbaga/action.baga"
 import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
@@ -58,6 +59,11 @@ fn tree_remove(db: OrmDb, ws: i64, owner: i64, path: str) -> FmrOut !IO !Net !Ti
         }
         d = orm_db_exec(vd)
         tree_text_drop(d, nid)?
+        let ld = wopi_lock_del(d, nid)?
+        if orm_ok(ld) == 0 {
+            return act_err(orm_db_exec(ld), 500, orm_err_exec(ld))
+        }
+        d = orm_db_exec(ld)
         i = i + 1
     }
     let del = tree_delete_subtree(d, ws, path)?

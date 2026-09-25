@@ -1,0 +1,96 @@
+// wopi/locks.baga — ред за WOPI заключване на файл (node id).
+// Изтекъл ред се смята за липса от wopi_apply. Тук само се пази.
+
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct WopiRow {
+    db: OrmDb,
+    found: i64,
+    lock: str,
+    exp: i64,
+    err: str
+}
+
+fn wopi_row_fail(db: OrmDb, err: str) -> WopiRow {
+    return WopiRow { db: db, found: 0, lock: "", exp: 0, err: err }
+}
+
+fn wopi_lock_load(db: OrmDb, file_id: i64) -> WopiRow !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(file_id))
+    let q = orm_query_params_str(db, "SELECT lock_id, expires_at FROM wopi_locks WHERE file_id = $1", vals)?
+    if orm_ok_q(q) == 0 {
+        return wopi_row_fail(orm_db_q(q), orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return WopiRow { db: orm_db_q(q), found: 0, lock: "", exp: 0, err: "" }
+    }
+    return WopiRow {
+        db: orm_db_q(q),
+        found: 1,
+        lock: orm_cell_by(q, 0, "lock_id"),
+        exp: orm_cell_by_i64(q, 0, "expires_at"),
+        err: ""
+    }
+}
+
+fn wopi_lock_save(db: OrmDb, file_id: i64, lock: str, exp: i64) -> WopiRow !IO !Net {
+    let cur = wopi_lock_load(db, file_id)?
+    if cur.err != "" {
+        return cur
+    }
+    let vals = vec_new()
+    vec_push(vals, lock)
+    vec_push(vals, int_to_str(exp))
+    vec_push(vals, int_to_str(file_id))
+    if cur.found == 1 {
+        let u = orm_exec_params_str(cur.db, "UPDATE wopi_locks SET lock_id = $1, expires_at = $2 WHERE file_id = $3", vals)?
+        if orm_ok(u) == 0 {
+            return wopi_row_fail(orm_db_exec(u), orm_err_exec(u))
+        }
+        return WopiRow { db: orm_db_exec(u), found: 1, lock: lock, exp: exp, err: "" }
+    }
+    let ins = orm_exec_params_str(cur.db, "INSERT INTO wopi_locks (file_id, lock_id, expires_at) VALUES ($3, $1, $2)", vals)?
+    if orm_ok(ins) == 0 {
+        let again = wopi_lock_load(orm_db_exec(ins), file_id)?
+        if again.found == 1 {
+            return wopi_lock_save(again.db, file_id, lock, exp)?
+        }
+        return wopi_row_fail(orm_db_exec(ins), orm_err_exec(ins))
+    }
+    return WopiRow { db: orm_db_exec(ins), found: 1, lock: lock, exp: exp, err: "" }
+}
+
+fn wopi_lock_del(db: OrmDb, file_id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(file_id))
+    return orm_exec_params_str(db, "DELETE FROM wopi_locks WHERE file_id = $1", vals)?
+}
+
+fn wopi_lock_purge_ws(db: OrmDb, ws: i64) -> WopiRow !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    let q = orm_query_params_str(db, "SELECT id FROM tree_nodes WHERE workspace_id = $1", vals)?
+    if orm_ok_q(q) == 0 {
+        return wopi_row_fail(orm_db_q(q), orm_err_q(q))
+    }
+    let ids: Vec<i64> = vec_new()
+    let mut i: i64 = 0
+    let n = orm_nrows(q)
+    while i < n {
+        vec_push(ids, orm_cell_by_i64(q, i, "id"))
+        i = i + 1
+    }
+    let mut d = orm_db_q(q)
+    i = 0
+    while i < n {
+        let del = wopi_lock_del(d, vec_get(ids, i))?
+        if orm_ok(del) == 0 {
+            return wopi_row_fail(orm_db_exec(del), orm_err_exec(del))
+        }
+        d = orm_db_exec(del)
+        i = i + 1
+    }
+    return WopiRow { db: d, found: 0, lock: "", exp: 0, err: "" }
+}

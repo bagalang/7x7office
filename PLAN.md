@@ -296,7 +296,10 @@
       в `data_keys` (увит с `SECP_MASTER_KEY`). Без променливата записът е
       открит текст. Старите файлове се четат от стария път. Чист тест
       `tests/data_seal_test.baga`, жив `tools/crypt_smoke.sh`
-- [ ] WOPI: **wopibaga** за Collabora/OnlyOffice (допълнение към officebaga)
+- [x] WOPI (2026-09-25): **wopibaga** решава LOCK/UNLOCK/REFRESH/GET_LOCK/PUT
+      и CheckFileInfo. secp издава `GET /v1/wopi/token` и обслужва
+      `/wopi/files/{id}` и `/contents`. X-WOPI-Proof и PutRelative остават
+      (gaps W1/W2). UI: бутон „WOPI" в прегледа. Жив `tools/wopi_smoke.sh`
 - [ ] **s3baga** datasource; blobs в rocksbaga или директно в **boilaDB** (rocksbaga storage под нея — може да се допълва при нужда) като алтернативи на FS
 - [ ] otelbaga traceparent през целия път; rate limiting (relbaga bulkhead)
 

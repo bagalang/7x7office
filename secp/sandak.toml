@@ -20,6 +20,7 @@ smtpbaga = { path = "../../smtpbaga" }
 wsbaga = { path = "../../wsbaga" }
 chatbaga = { path = "../../chatbaga" }
 davbaga = { path = "../../davbaga" }
+wopibaga = { path = "../../wopibaga" }
 reportbaga = { path = "../../reportbaga" }
 csvbaga = { path = "../../csvbaga" }
 pdfbaga = { path = "../../pdfbaga" }

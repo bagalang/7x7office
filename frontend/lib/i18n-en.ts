@@ -309,4 +309,12 @@ export const en: Record<string, string> = {
   "reports.format_ods": "ODS",
   "reports.format_html": "HTML",
   "reports.format_pdf": "PDF",
+
+  "wopi.open": "WOPI",
+  "wopi.title": "Open in Collabora / OnlyOffice",
+  "wopi.hint": "Give these two values to the office server. The token expires.",
+  "wopi.src": "File address",
+  "wopi.token": "Token",
+  "wopi.copy": "Copy",
+  "wopi.copied": "Copied",
 };

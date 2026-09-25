@@ -58,6 +58,8 @@ export function FilePreview({
   // (преглед). Отваря се с един бутон и се презарежда при смяна на файла —
   // затова е state тук, а не отделен диалог.
   const [showHistory, setShowHistory] = useState(false);
+  const [wopi, setWopi] = useState<{ wopi_src: string; access_token: string } | null>(null);
+  const [copied, setCopied] = useState("");
   const editable = /\.(docx|odt|txt|md|xlsx|ods|csv)$/i.test(node.name);
 
   // Нов файл → историята се затваря. Иначе редът „кой промени файла" остава
@@ -154,6 +156,21 @@ export function FilePreview({
         ) : null}
 
         <div className="preview-actions">
+          {node.is_dir !== 1 ? (
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => {
+                setCopied("");
+                void api
+                  .get<{ wopi_src: string; access_token: string }>(`/v1/wopi/token?path=${qpath(node.path)}`)
+                  .then(setWopi)
+                  .catch((e) => onError(messageOf(e, t("common.error"))));
+              }}
+            >
+              {t("wopi.open")}
+            </button>
+          ) : null}
           {editable && writable ? (
             <button
               type="button"
@@ -198,6 +215,31 @@ export function FilePreview({
           ) : null}
         </div>
       </div>
+      {wopi ? (
+        <Dialog title={t("wopi.title")} onClose={() => setWopi(null)}>
+          <p className="muted">{t("wopi.hint")}</p>
+          <div className="field">
+            <label>{t("wopi.src")}</label>
+            <input className="input" readOnly value={wopi.wopi_src} />
+          </div>
+          <div className="field">
+            <label>{t("wopi.token")}</label>
+            <input className="input" readOnly value={wopi.access_token} />
+          </div>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                const text = `${wopi.wopi_src}\n${wopi.access_token}`;
+                void navigator.clipboard.writeText(text).then(() => setCopied(t("wopi.copied")));
+              }}
+            >
+              {copied || t("wopi.copy")}
+            </button>
+          </div>
+        </Dialog>
+      ) : null}
     </aside>
   );
 }

@@ -73,7 +73,8 @@ function scoped(path: string): string {
     path.startsWith("/v1/doc/") ||
     path.startsWith("/v1/search") ||
     path.startsWith("/v1/activity") ||
-    path.startsWith("/v1/chat")
+    path.startsWith("/v1/chat") ||
+    path.startsWith("/v1/wopi")
   ) {
     return withWs(path);
   }

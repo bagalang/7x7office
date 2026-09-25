@@ -306,6 +306,13 @@ fn secp_migrations() -> MigrationSet {
         "CREATE TABLE data_keys (workspace_id BIGINT PRIMARY KEY, wrapped TEXT NOT NULL)",
         "DROP TABLE IF EXISTS data_keys"
     )
+    set = migrate_add(
+        set,
+        20260925036,
+        "create_wopi_locks",
+        "CREATE TABLE wopi_locks (file_id BIGINT PRIMARY KEY, lock_id TEXT NOT NULL, expires_at BIGINT NOT NULL)",
+        "DROP TABLE IF EXISTS wopi_locks"
+    )
     return set
 }
 
@@ -566,6 +573,13 @@ fn secp_boila_migrations() -> MigrationSet {
         "create_data_keys",
         "CREATE TABLE IF NOT EXISTS data_keys (workspace_id BIGINT, wrapped TEXT, PRIMARY KEY (workspace_id))",
         "DROP TABLE IF EXISTS data_keys"
+    )
+    set = migrate_add(
+        set,
+        20260925036,
+        "create_wopi_locks",
+        "CREATE TABLE IF NOT EXISTS wopi_locks (file_id BIGINT, lock_id TEXT, expires_at BIGINT, PRIMARY KEY (file_id))",
+        "DROP TABLE IF EXISTS wopi_locks"
     )
     return set
 }

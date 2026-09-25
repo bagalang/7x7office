@@ -312,4 +312,12 @@ export const bg: Record<string, string> = {
   "reports.format_ods": "ODS",
   "reports.format_html": "HTML",
   "reports.format_pdf": "PDF",
+
+  "wopi.open": "WOPI",
+  "wopi.title": "Отваряне в Collabora / OnlyOffice",
+  "wopi.hint": "Дайте тези два адреса на офис сървъра. Токенът е временен.",
+  "wopi.src": "Адрес на файла",
+  "wopi.token": "Токен",
+  "wopi.copy": "Копирай",
+  "wopi.copied": "Копирано",
 };
