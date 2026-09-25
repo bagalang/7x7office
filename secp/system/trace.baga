@@ -1,0 +1,78 @@
+// system/trace.baga — span към OTLP/JSON, ако SECP_OTEL_URL е зададен.
+// Празен адрес не прави нищо. Грешка при пращане не проваля заявката.
+
+import "otelbaga/otel.baga"
+import "fmrbaga/ctx.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn secp_otel_timeout() -> i64 !IO {
+    let raw = str_trim(env("SECP_OTEL_TIMEOUT_S")?)
+    if raw == "" {
+        return 2
+    }
+    let n = parse_int(raw)
+    if n < 1 {
+        return 2
+    }
+    if n > 30 {
+        return 30
+    }
+    return n
+}
+
+fn secp_parent_span(header: str, own: str) -> str {
+    let t = otel_parse_traceparent(header)
+    if t.ok == 0 {
+        return ""
+    }
+    if t.span_id == own {
+        return ""
+    }
+    return t.span_id
+}
+
+fn secp_trace_send(name: str, trace_id: str, span_id: str, parent_header: str, kind: i64) -> i64 !IO !Net !Random !Time {
+    let url = str_trim(env("SECP_OTEL_URL")?)
+    if url == "" {
+        return 0
+    }
+    let mut t = otel_empty()
+    if trace_id != "" && span_id != "" {
+        let hdr = concat(concat(concat(concat("00-", trace_id), "-"), span_id), "-01")
+        t = otel_parse_traceparent(hdr)
+    }
+    if t.ok == 0 {
+        t = otel_new_trace()?
+    }
+    let mut sp = otel_span_now(name, t, kind)?
+    sp.parent_span_id = secp_parent_span(parent_header, sp.trace.span_id)
+    sp = otel_span_end(sp)?
+    let body = otel_span_to_otlp_json(sp, "secp")
+    let st = otel_export_http(url, body, secp_otel_timeout()?)?
+    if st != 200 {
+        if st != 202 {
+            eprintln(concat("otel: ", int_to_str(st)))
+        }
+    }
+    return 0
+}
+
+fn secp_trace_http(ctx: FmrCtx) -> i64 {
+    let name = concat(concat(fmr_method(ctx), " "), fmr_path(ctx))
+    let n = secp_trace_send(name, ctx.trace_id, ctx.span_id, fmr_header(ctx, "traceparent"), 2)
+        catch !IO => 0
+        catch !Net => 0
+        catch !Random => 0
+        catch !Time => 0
+    return n
+}
+
+fn secp_trace_tick() -> i64 {
+    let n = secp_trace_send("secp.scheduler", "", "", "", 1)
+        catch !IO => 0
+        catch !Net => 0
+        catch !Random => 0
+        catch !Time => 0
+    return n
+}

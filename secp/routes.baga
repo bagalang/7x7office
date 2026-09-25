@@ -19,6 +19,8 @@ import "tree/dav_actions.baga"
 import "reports/actions.baga"
 import "wopi/actions.baga"
 import "system/chat_actions.baga"
+import "system/guard.baga"
+import "system/trace.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
@@ -192,7 +194,7 @@ fn fmr_grpc_handle(path: str, body: bytes, db: OrmDb) -> FmrOut !IO !Net !Time {
     return fmr_out(r, db)
 }
 
-fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+fn secp_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     let id = ctx.route_id
     if id == RID_HEALTH() { return act_health(ctx, db) }
     if id == RID_READY() { return act_ready(ctx, db)? }
@@ -256,4 +258,20 @@ fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_SHARE_DOWNLOAD() { return act_share_download(ctx, db)? }
     if id == RID_SHARE_UPLOAD() { return act_share_upload(ctx, db)? }
     return fmr_out(fmr_500("unhandled route"), db)
+}
+
+fn fmr_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let admit = secp_guard_take(ctx)
+    if admit == 0 {
+        secp_trace_http(ctx)
+        let mut r = fmr_error(429, "rate limit")
+        r = http_set_header(r, "Retry-After", "1")
+        return fmr_out(r, db)
+    }
+    let out = secp_dispatch(ctx, db)?
+    if admit == 1 {
+        secp_guard_put(ctx)
+    }
+    secp_trace_http(ctx)
+    return out
 }

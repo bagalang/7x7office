@@ -1,0 +1,151 @@
+// system/guard.baga — таван на едновременните заявки (relbaga bulkhead).
+// Слотът е канал в процеса. Дръжката се пази във файл с pid, за да я
+// видят worker-ите без глобална променлива. 0 изключва тавана.
+
+import "relbaga/rel.baga"
+import "fmrbaga/ctx.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn secp_guard_exempt(path: str) -> i64 {
+    if path == "/health" {
+        return 1
+    }
+    if path == "/ready" {
+        return 1
+    }
+    if path == "/readyz" {
+        return 1
+    }
+    if path == "/metrics" {
+        return 1
+    }
+    return 0
+}
+
+// 2 = не държи слот (изключен таван или проба). 1 = слотът е взет. 0 = пълен.
+fn secp_guard_verdict(path: str, enabled: i64, got_slot: i64) -> i64 {
+    if secp_guard_exempt(path) == 1 {
+        return 2
+    }
+    if enabled == 0 {
+        return 2
+    }
+    if got_slot == 1 {
+        return 1
+    }
+    return 0
+}
+
+fn secp_rel_ok(_x: i64) -> i64 {
+    return 0
+}
+
+// rel_retry е генерик. Без конкретен T компилаторът оставя b_T в C.
+fn secp_rel_pin() -> i64 !Par {
+    let a = rel_retry(secp_rel_ok, 0, 1, 1, 1, 2)?
+    let b = rel_retry_jitter(secp_rel_ok, 0, 1, 1, 1, 2, 1)?
+    return a + b
+}
+
+fn secp_bh_path() -> str !IO {
+    return concat("/tmp/secp.bh.", int_to_str(getpid()?))
+}
+
+fn secp_bh_cap() -> i64 !IO {
+    let raw = str_trim(env("SECP_BULKHEAD")?)
+    if raw == "" {
+        return 64
+    }
+    let n = parse_int(raw)
+    if n < 0 {
+        return 64
+    }
+    return n
+}
+
+fn secp_hold_ms() -> i64 !IO {
+    let raw = str_trim(env("SECP_BULKHEAD_HOLD_MS")?)
+    if raw == "" {
+        return 0
+    }
+    let n = parse_int(raw)
+    if n < 1 {
+        return 0
+    }
+    if n > 5000 {
+        return 5000
+    }
+    return n
+}
+
+fn secp_bh_load() -> Bulkhead !IO {
+    let p = secp_bh_path()?
+    if file_exists(p)? == 0 {
+        return Bulkhead { tokens: 0, cap: 0 }
+    }
+    let s = str_trim(read_file(p)?)
+    let sp = str_find(s, " ")
+    if sp < 1 {
+        return Bulkhead { tokens: 0, cap: 0 }
+    }
+    let tok = parse_int(substr(s, 0, sp))
+    let cap = parse_int(substr(s, sp + 1, len(s)))
+    if tok == 0 || cap < 1 {
+        return Bulkhead { tokens: 0, cap: 0 }
+    }
+    return Bulkhead { tokens: tok, cap: cap }
+}
+
+// Връща капацитета (0 = изключен, -1 = не се записа).
+fn secp_bh_init() -> i64 !Par !IO {
+    secp_rel_pin()?
+    let cap = secp_bh_cap()?
+    if cap < 1 {
+        return 0
+    }
+    let bh = bh_new(cap)?
+    let body = concat(concat(int_to_str(bh.tokens), " "), int_to_str(bh.cap))
+    let rc = write_file(secp_bh_path()?, body)?
+    if rc < 0 {
+        return -1
+    }
+    return cap
+}
+
+fn secp_guard_enter(ctx: FmrCtx) -> i64 !Par !IO {
+    if secp_guard_exempt(fmr_path(ctx)) == 1 {
+        return 2
+    }
+    let bh = secp_bh_load()?
+    if bh.cap < 1 {
+        return 2
+    }
+    let n = bh_try_acquire(bh)?
+    if n < 0 {
+        return 0
+    }
+    let hold = secp_hold_ms()?
+    if hold > 0 {
+        sleep_ms(hold)
+    }
+    return 1
+}
+
+fn secp_guard_leave(ctx: FmrCtx) -> i64 !Par !IO {
+    let bh = secp_bh_load()?
+    if bh.cap < 1 {
+        return 0
+    }
+    return bh_release(bh)?
+}
+
+fn secp_guard_take(ctx: FmrCtx) -> i64 {
+    let n = secp_guard_enter(ctx) catch !Par => 2 catch !IO => 2
+    return n
+}
+
+fn secp_guard_put(ctx: FmrCtx) -> i64 {
+    let n = secp_guard_leave(ctx) catch !Par => 0 catch !IO => 0
+    return n
+}

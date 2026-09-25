@@ -22,6 +22,8 @@ chatbaga = { path = "../../chatbaga" }
 davbaga = { path = "../../davbaga" }
 wopibaga = { path = "../../wopibaga" }
 s3baga = { path = "../../s3baga" }
+otelbaga = { path = "../../otelbaga" }
+relbaga = { path = "../../relbaga" }
 reportbaga = { path = "../../reportbaga" }
 csvbaga = { path = "../../csvbaga" }
 pdfbaga = { path = "../../pdfbaga" }

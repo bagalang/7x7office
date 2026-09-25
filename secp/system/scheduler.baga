@@ -17,6 +17,7 @@
 import "ormbaga/orm.baga"
 import "../data/crypt.baga"
 import "mail_jobs.baga"
+import "trace.baga"
 import "std/str/str.baga"
 import "std/os/os.baga"
 import "std/time/time.baga"
@@ -289,6 +290,7 @@ fn ops_loop(tick_ms: i64) -> i64 !IO !Net !Par !Time !Random {
                 eprintln(concat("secp scheduler: изпълнени ", int_to_str(n)))
             }
         }
+        secp_trace_tick()
         orm_close(db)?
         sleep_ms(tick_ms)
     }

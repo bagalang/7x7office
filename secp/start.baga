@@ -6,6 +6,7 @@ import "schema.baga"
 import "lib/pass.baga"
 import "idm/user_model.baga"
 import "system/scheduler.baga"
+import "system/guard.baga"
 import "system/ws_gateway_serve.baga"
 import "tree/backfill.baga"
 import "fmrbaga/app.baga"
@@ -101,5 +102,13 @@ fn main() -> i64 !Net !IO !Par !Random !Time {
     // Realtime канал (Фаза 3): един poll worker за WS. SECP_WS_PORT=0 го
     // изключва (тестове, `--check`); без променлива слуша на HTTP порт + 1.
     wsg_start()?
+    let bh = secp_bh_init()?
+    if bh < 0 {
+        print("secp bulkhead: не мога да запиша слотовете")
+        return 1
+    }
+    if bh > 0 {
+        print(concat("secp bulkhead cap=", int_to_str(bh)))
+    }
     return fmr_run()?
 }

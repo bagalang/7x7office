@@ -8,6 +8,7 @@ import "fmrbaga/jsonx.baga"
 import "fmrbaga/openapi.baga"
 import "fmrbaga/respond.baga"
 import "metbaga/met.baga"
+import "guard.baga"
 import "ormbaga/orm.baga"
 import "httpdbaga/http.baga"
 
@@ -62,6 +63,7 @@ fn act_metrics(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO {
     let h_done = met_gauge(m, "fmr_completed_connections", "Total completed TCP connections")
     let h_w = met_gauge(m, "fmr_workers", "Configured worker pool size (0 = go_bg or sync)")
     let h_mode = met_gauge(m, "fmr_serve_mode", "0=go_bg 1=sync 2=worker_pool")
+    let h_bh = met_gauge(m, "secp_bulkhead_cap", "Concurrent request slots (0 = off)")
     if fmr_shutting_down() == 1 {
         met_set(m, h_up, 0)
         met_set(m, h_ready, 0)
@@ -75,6 +77,8 @@ fn act_metrics(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO {
     met_set(m, h_done, fmr_rt_completed()?)
     met_set(m, h_w, fmr_rt_workers()?)
     met_set(m, h_mode, fmr_rt_mode()?)
+    let bh = secp_bh_load()?
+    met_set(m, h_bh, bh.cap)
     let body = met_render(m)
     let mut r = http_response(200, body)
     r = http_set_header(r, "Content-Type", "text/plain; version=0.0.4; charset=utf-8")

@@ -307,7 +307,13 @@
       Без `SECP_BLOB` остава локалният FS. Чист тест `tests/s3_sign_test.baga`,
       жив `tools/s3_smoke.sh`. Пакетът е в дървото, докато няма bagalang/s3baga
 - [ ] blobs в rocksbaga или директно в boilaDB — по желание, когато потрябват
-- [ ] otelbaga traceparent през целия път; rate limiting (relbaga bulkhead)
+- [x] otelbaga + relbaga (2026-09-25): всеки HTTP отговор, включително 404,
+      носи `traceparent` (дете на входящия, ако е валиден). `SECP_OTEL_URL`
+      праща span към OTLP/JSON; scheduler-ът праща `secp.scheduler`.
+      `SECP_BULKHEAD` (64, 0 = изключен) е таван на едновременните заявки
+      през relbaga. `/health`, `/ready` и `/metrics` не взимат слот; пълен
+      таван е 429. Чист тест `tests/secp_guard_test.baga`, жив
+      `tools/otel_smoke.sh`
 
 ---
 
