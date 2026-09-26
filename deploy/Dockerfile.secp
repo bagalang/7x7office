@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1
+# Готовият secp бинарен файл (libc). Преди build: cp ../secp/target/secp ./secp-bin
+FROM debian:trixie-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bash fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
+COPY secp-bin /usr/local/bin/app
+EXPOSE 8085
+CMD ["app"]

@@ -17,6 +17,9 @@ frontend/.next/
 .env
 **/.env
 
+# Бинарният файл до Dockerfile.secp (копие на secp/target/secp)
+deploy/secp-bin
+
 # Python кеш от инструментите (tools/*.py се пускат от smoke тестовете)
 __pycache__/
 *.pyc

@@ -1,0 +1,133 @@
+# Локален тест от корена на baga монорепото.
+# Портовете са други от bagabuch (3000 / 8080 / 6575 / 5050):
+#   UI 3010, API 8085, WebSocket 8086, boilaDB 6585, Collabora 9980, Redis 6385.
+#
+# Collabora слуша на същата машина. Браузърът отваря server_name (тука
+# 127.0.0.1:9980). На VPS server_name и COLLABORA_URL стават публичният
+# адрес на редактора, а aliasgroup1 трябва да съвпада със SECP_PUBLIC_URL:
+# оттам Collabora вика /wopi. Порт 9980 не се пуска навън без TLS.
+#
+#   cp app-product/7x7office/secp/target/secp app-product/7x7office/deploy/secp-bin
+#   docker compose -f app-product/7x7office/deploy/docker-compose.yml up --build -d
+#
+# network_mode: host — слушат директно на машината.
+# Вход: admin@secp.local / admin123
+
+name: 7x7office
+
+services:
+  boiladb:
+    container_name: 7x7office-boiladb
+    image: bagabuch-boiladb:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      BOILA_PGPORT: "6585"
+      BOILA_WORKERS: "8"
+      BOILA_PATH: /data
+    volumes:
+      - boila-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/6585'"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  # Проба: паметна база до стека. secp още не я вика; WOPI lock остава в boilaDB.
+  redis:
+    container_name: 7x7office-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    network_mode: host
+    command: ["redis-server", "--bind", "127.0.0.1", "--port", "6385", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6385", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  secp:
+    container_name: 7x7office-secp
+    build:
+      context: .
+      dockerfile: Dockerfile.secp
+    image: 7x7office-secp
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      boiladb:
+        condition: service_healthy
+    environment:
+      PORT: "8085"
+      SECP_WS_PORT: "8086"
+      ORM_BACKEND: boila
+      BOILA_PGHOST: "127.0.0.1"
+      BOILA_PGPORT: "6585"
+      BOILA_PGUSER: boila
+      # Първото пускане на boilaDB създава каталог `boila`. Отделен volume, не bagabuch.
+      BOILA_PGDATABASE: boila
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-7x7office-local}
+      # BAGA_ALLOC_STATS=1 само за дебъг сесия: backtrace и spinlock на всяка алокация.
+      FMR_WORKERS: "8"
+      FMR_LOG: "1"
+      FMR_TITLE: 7x7office
+      FMR_VERSION: "0.1.0"
+      SECP_DATA_ROOT: /var/lib/secp
+      SECP_PUBLIC_URL: http://127.0.0.1:3010
+      SECP_ADMIN_EMAIL: admin@secp.local
+      SECP_ADMIN_PASSWORD: admin123
+      SECP_ADMIN_NAME: Admin
+    volumes:
+      - secp-data:/var/lib/secp
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/8085'"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  frontend:
+    container_name: 7x7office-frontend
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+      args:
+        SECP_API_PROXY: http://127.0.0.1:8085
+        NEXT_PUBLIC_WS_PORT: "8086"
+    image: 7x7office-frontend
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      secp:
+        condition: service_healthy
+    environment:
+      SECP_API_PROXY: http://127.0.0.1:8085
+      # Как UI сървърът стига до discovery. Iframe адресът идва от самия
+      # discovery и ползва server_name на Collabora.
+      COLLABORA_URL: http://127.0.0.1:9980
+
+  collabora:
+    container_name: 7x7office-collabora
+    image: collabora/code:latest
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - MKNOD
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      aliasgroup1: http://127.0.0.1:3010
+      server_name: 127.0.0.1:9980
+      username: admin
+      password: admin
+      dictionaries: bg_BG en_US de_DE ru_RU
+      DONT_GEN_SSL_CERT: "1"
+      # Автозапис: 5 с след пауза, 30 с докато се пише, и при изход на последния.
+      extra_params: "--o:ssl.enable=false --o:ssl.termination=false --o:welcome.enable=false --o:net.frame_ancestors=127.0.0.1:* localhost:* --o:logging.level=warning --o:per_document.idlesave_duration_secs=5 --o:per_document.autosave_duration_secs=30 --o:per_document.always_save_on_exit=true"
+
+volumes:
+  boila-data:
+  secp-data:

@@ -998,6 +998,17 @@ a { color: var(--accent); text-decoration: none; }
 .editor-name { font-weight: 600; font-size: 15px; }
 .editor-status { font-size: 12px; color: var(--muted); }
 .editor-status.dirty { color: var(--warn); }
+.editor-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.editor-mark.saved { color: var(--ok); }
+.editor-mark.saving { color: var(--muted); }
+.editor-mark.dirty { color: var(--danger); }
 
 .editor-toolbar {
   display: flex;

@@ -1,0 +1,9 @@
+frontend/node_modules
+frontend/.next
+secp/cells-5-dev
+secp/target
+secp/storage
+secp/data/blobs
+.git
+**/.env
+deploy/secp-bin
