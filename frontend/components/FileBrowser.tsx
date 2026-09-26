@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { AppShell } from "./AppShell";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
@@ -78,6 +78,17 @@ function withKindExt(name: string, kind: FileKind): string {
   return `${base}.${kind}`;
 }
 
+function selectionRoots(paths: string[]): string[] {
+  const sorted = [...paths].sort();
+  return sorted.filter((path, index) => {
+    for (let i = 0; i < index; i++) {
+      const earlier = sorted[i];
+      if (path === earlier || path.startsWith(`${earlier}/`)) return false;
+    }
+    return true;
+  });
+}
+
 function uniqueName(name: string, taken: Set<string>): string {
   if (!taken.has(name)) return name;
   const dot = name.lastIndexOf(".");
@@ -136,6 +147,10 @@ export function FileBrowser() {
   const [fileKind, setFileKind] = useState<FileKind>("txt");
   const [fileName, setFileName] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<FsNode | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [lastPick, setLastPick] = useState("");
+  const shiftPick = useRef(false);
+  const [deletePicked, setDeletePicked] = useState(false);
   const [versionsFor, setVersionsFor] = useState<FsNode | null>(null);
   const [shareFor, setShareFor] = useState<FsNode | null>(null);
 
@@ -150,6 +165,7 @@ export function FileBrowser() {
     setPath("/");
     setOpen(null);
     setQuery("");
+    setPicked(new Set());
   }, [wsId]);
 
   function pickView(v: View) {
@@ -264,6 +280,51 @@ export function FileBrowser() {
       await api.post(`/v1/fs/move?from=${qpath(from)}&to=${qpath(dest)}`);
       if (open && open.path === from) setOpen(null);
     });
+  }
+
+  function togglePick(node: FsNode, shift: boolean) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (shift && lastPick) {
+        const paths = sorted.map((item) => item.path);
+        const from = paths.indexOf(lastPick);
+        const to = paths.indexOf(node.path);
+        if (from >= 0 && to >= 0) {
+          const lo = Math.min(from, to);
+          const hi = Math.max(from, to);
+          for (let i = lo; i <= hi; i++) next.add(paths[i]);
+          return next;
+        }
+      }
+      if (next.has(node.path)) next.delete(node.path);
+      else next.add(node.path);
+      return next;
+    });
+    setLastPick(node.path);
+  }
+
+  function toggleAll(on: boolean) {
+    setPicked(on ? new Set(sorted.map((item) => item.path)) : new Set());
+  }
+
+  async function deletePaths(paths: string[]) {
+    const roots = selectionRoots(paths);
+    setBusy(true);
+    setError("");
+    let failed = "";
+    for (const itemPath of roots) {
+      try {
+        await api.del(`/v1/fs/file?path=${qpath(itemPath)}`);
+      } catch (err) {
+        failed = messageOf(err, t("common.error"));
+        break;
+      }
+    }
+    setPicked(new Set());
+    setOpen((current) => (current && paths.includes(current.path) ? null : current));
+    setReload((n) => n + 1);
+    setBusy(false);
+    if (failed) setError(failed);
   }
 
   function activate(node: FsNode) {
@@ -397,6 +458,12 @@ export function FileBrowser() {
               {t("files.new_file")}
             </button>
           ) : null}
+          {writable && picked.size > 0 ? (
+            <button type="button" className="btn danger-ghost" onClick={() => setDeletePicked(true)}>
+              <IconTrash width={16} height={16} />
+              {t("files.delete_selected", { count: picked.size })}
+            </button>
+          ) : null}
           <span className="grow" />
           <select
             className="select"
@@ -434,6 +501,17 @@ export function FileBrowser() {
           <table className="table">
             <thead>
               <tr>
+                {writable ? (
+                  <th style={{ width: 36 }}>
+                    <input
+                      className="pick"
+                      type="checkbox"
+                      aria-label={t("files.select_all")}
+                      checked={sorted.length > 0 && sorted.every((item) => picked.has(item.path))}
+                      onChange={(e) => toggleAll(e.target.checked)}
+                    />
+                  </th>
+                ) : null}
                 <th>{t("files.col_name")}</th>
                 <th style={{ width: 110 }}>{t("files.col_size")}</th>
                 <th style={{ width: 170 }}>{t("files.col_modified")}</th>
@@ -448,6 +526,7 @@ export function FileBrowser() {
                     setPath(parentOf(path));
                   }}
                 >
+                  {writable ? <td /> : null}
                   <td>
                     <span className="cell-name">
                       <span className="cell-icon">
@@ -464,9 +543,23 @@ export function FileBrowser() {
               {sorted.map((node) => (
                 <tr
                   key={node.path}
-                  className={open?.path === node.path ? "selected" : ""}
+                  className={`${open?.path === node.path ? "selected" : ""} ${picked.has(node.path) ? "picked" : ""}`.trim()}
                   onClick={() => activate(node)}
                 >
+                  {writable ? (
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        className="pick"
+                        type="checkbox"
+                        aria-label={t("files.select", { name: node.name })}
+                        checked={picked.has(node.path)}
+                        onClick={(e) => {
+                          shiftPick.current = e.shiftKey;
+                        }}
+                        onChange={() => togglePick(node, shiftPick.current)}
+                      />
+                    </td>
+                  ) : null}
                   <td>
                     {renamePath === node.path ? (
                       <form className="rename-form" onSubmit={onRename} onClick={(e) => e.stopPropagation()}>
@@ -505,9 +598,22 @@ export function FileBrowser() {
             {sorted.map((node) => (
               <div
                 key={node.path}
-                className={`grid-card${open?.path === node.path ? " selected" : ""}`}
+                className={`grid-card${open?.path === node.path ? " selected" : ""}${picked.has(node.path) ? " picked" : ""}`}
                 onClick={() => activate(node)}
               >
+                {writable ? (
+                  <input
+                    className="pick grid-pick"
+                    type="checkbox"
+                    aria-label={t("files.select", { name: node.name })}
+                    checked={picked.has(node.path)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      shiftPick.current = e.shiftKey;
+                    }}
+                    onChange={() => togglePick(node, shiftPick.current)}
+                  />
+                ) : null}
                 <span className="grid-thumb">
                   {node.has_thumb === 1 ? (
                     <Thumb path={node.path} />
@@ -623,6 +729,28 @@ export function FileBrowser() {
               </button>
             </div>
           </form>
+        </Dialog>
+      ) : null}
+
+      {deletePicked ? (
+        <Dialog title={t("files.delete_title")} onClose={() => setDeletePicked(false)}>
+          <p style={{ margin: 0 }}>{t("files.delete_selected_confirm", { count: picked.size })}</p>
+          <div className="dialog-actions">
+            <button type="button" className="btn ghost" onClick={() => setDeletePicked(false)}>
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              className="btn danger-ghost"
+              onClick={() => {
+                const paths = [...picked];
+                setDeletePicked(false);
+                void deletePaths(paths);
+              }}
+            >
+              {t("common.delete")}
+            </button>
+          </div>
         </Dialog>
       ) : null}
 

@@ -1287,6 +1287,16 @@ a { color: var(--accent); text-decoration: none; }
   gap: 0 16px;
 }
 .settings-grid .check { margin: 8px 0 12px; }
+.pick {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.table tr.picked td { background: var(--accent-soft); }
+.grid-card { position: relative; }
+.grid-card.picked { outline: 2px solid var(--accent); }
+.grid-pick { position: absolute; top: 8px; left: 8px; z-index: 1; background: var(--surface); }
 @media (max-width: 720px) {
   .settings-grid { grid-template-columns: 1fr; }
 }
