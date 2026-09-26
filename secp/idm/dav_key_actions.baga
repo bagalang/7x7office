@@ -37,15 +37,26 @@ struct DavUrl {
     err: str
 }
 
+// Dolphin: http → dav://, https → davs://. Пътят си остава /dav/0.
+fn dav_client_url(raw: str) -> str {
+    if str_starts_with(raw, "https://") == 1 {
+        return concat("davs://", substr(raw, 8, len(raw)))
+    }
+    if str_starts_with(raw, "http://") == 1 {
+        return concat("dav://", substr(raw, 7, len(raw)))
+    }
+    return raw
+}
+
 fn dav_folder_url(db: OrmDb) -> DavUrl !IO !Net {
     let site = site_public(db)?
     if site.ok == 0 {
         return DavUrl { db: site.db, url: "", err: site.err }
     }
     if site.url == "" {
-        return DavUrl { db: site.db, url: "http://127.0.0.1:3010/dav/0", err: "" }
+        return DavUrl { db: site.db, url: "dav://127.0.0.1:3010/dav/0", err: "" }
     }
-    return DavUrl { db: site.db, url: concat(site.url, "/dav/0"), err: "" }
+    return DavUrl { db: site.db, url: dav_client_url(concat(site.url, "/dav/0")), err: "" }
 }
 
 fn dav_key_json(url: str, email: str, has: i64, prefix: str, key: str) -> JObj {

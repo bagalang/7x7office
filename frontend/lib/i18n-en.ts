@@ -415,7 +415,7 @@ export const en: Record<string, string> = {
   "profile.tab_s3": "S3 bucket",
   "profile.tab_dav": "Folder",
   "profile.dav": "Folder on this computer",
-  "profile.dav_hint": "In Dolphin the address starts with dav://, not http://. The folder is for copying files onto the computer, not for working inside the mount. The user is the email. The password is the long key, not the sign-in password. The 2FA code is not entered.",
+  "profile.dav_hint": "In Dolphin a plain address is dav:// and an encrypted one is davs://. The folder is for copying files onto the computer, not for working inside the mount. The user is the email. The password is the long key, not the sign-in password. The 2FA code is not entered.",
   "profile.dav_url": "Address",
   "profile.dav_user": "User",
   "profile.dav_key": "Key",

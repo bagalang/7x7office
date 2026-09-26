@@ -417,7 +417,7 @@ export const de: Record<string, string> = {
   "profile.tab_s3": "S3-Bucket",
   "profile.tab_dav": "Ordner",
   "profile.dav": "Ordner auf dem Computer",
-  "profile.dav_hint": "In Dolphin beginnt die Adresse mit dav://, nicht mit http://. Der Ordner dient zum Kopieren auf den Computer, nicht zum Arbeiten darin. Der Benutzer ist die E-Mail. Das Passwort ist der lange Schlüssel, nicht das Anmeldepasswort. Der 2FA-Code wird nicht eingegeben.",
+  "profile.dav_hint": "In Dolphin ist eine einfache Adresse dav:// und eine verschlüsselte davs://. Der Ordner dient zum Kopieren auf den Computer, nicht zum Arbeiten darin. Der Benutzer ist die E-Mail. Das Passwort ist der lange Schlüssel, nicht das Anmeldepasswort. Der 2FA-Code wird nicht eingegeben.",
   "profile.dav_url": "Adresse",
   "profile.dav_user": "Benutzer",
   "profile.dav_key": "Schlüssel",
