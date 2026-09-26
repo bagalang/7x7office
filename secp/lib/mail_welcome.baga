@@ -11,6 +11,7 @@
 import "../idm/mail.baga"
 import "../idm/mail_text.baga"
 import "../system/scheduler.baga"
+import "../system/site.baga"
 import "ormbaga/orm.baga"
 import "std/str/str.baga"
 
@@ -18,12 +19,22 @@ import "std/str/str.baga"
 // потребителя: ако планирането се провали, се логва и се продължава —
 // потребителят вече е създаден и това е важното. Виж gaps G21.
 fn mw_enqueue(db: OrmDb, email: str, name: str) -> OrmDb !IO !Net {
-    if mail_enabled()? == 0 {
-        return db
+    let view = mail_view(db)?
+    if view.ok == 0 {
+        eprintln(concat("secp mail: настройките не се четат: ", view.err))
+        return view.db
     }
-    let link = concat(mail_public_url()?, "/login")
+    if view.on == 0 {
+        return view.db
+    }
+    let site = site_public(view.db)?
+    if site.ok == 0 {
+        eprintln(concat("secp mail: адресът не се чете: ", site.err))
+        return site.db
+    }
+    let link = concat(site.url, "/login")
     let body = mt_welcome_text(email, link)
-    let job = ops_enqueue_mail(db, email, "Добре дошли в 7x7office", body)?
+    let job = ops_enqueue_mail(site.db, email, "Добре дошли в 7x7office", body)?
     if orm_ok(job) == 0 {
         eprintln(concat("secp mail: welcome не се нареди: ", orm_err_exec(job)))
         return orm_db_exec(job)

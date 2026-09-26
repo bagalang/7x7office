@@ -17,8 +17,7 @@
 
 Самохоствана платформа за **файлове + офис документи за организации**:
 workspaces, споделени „клетки" (cells), ACL права, версии, WebDAV достъп,
-преглед на DOCX/XLSX/ODT/ODS чрез `officebaga`, редакция в Collabora (WOPI),
-включително презентации PPTX/PPT/ODP/PPSX,
+редакция на офис файлове в Collabora (DOCX, XLSX, ODT, ODS, PPTX, PPT, ODP),
 realtime събития по WebSocket и фонови задачи.
 
 ## От Cells микросервизи → към Baga модули
@@ -74,7 +73,7 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
 | `broker/mailer` | поща | **smtpbaga (нов)** ← std TLS |
 | `scheduler/jobs · tasks · timer` | scheduler | queuebaga, relbaga, ctxbaga |
 | `common/crypto` | енкрипция | std/crypto (AES-GCM, X25519) |
-| — | офис документи | `officebaga` за преглед и текст; редакцията е Collabora през WOPI |
+| — | офис документи | индексът е `officebaga`; редакцията е Collabora през WOPI |
 
 ## Модулен монолит (архитектурно решение)
 
@@ -209,8 +208,13 @@ Collabora или OnlyOffice викат secp като WOPI host.
 - `POST /wopi/files/{id}` с `X-WOPI-Override: LOCK|UNLOCK|REFRESH_LOCK|GET_LOCK`.
   Чужд lock връща 409 и текущия `X-WOPI-Lock`. PutRelative още е 501.
 
-Бутон „WOPI" в прегледа на файла показва адреса и токена.
-Презентациите PPTX, PPSX, PPT и ODP минават оттам. `officebaga` не ги отваря.
+Клик върху docx, odt, xlsx, ods, pptx, ppsx, ppt, odp, doc или xls
+отваря `/office`: страницата взима токен и пуска Collabora в iframe.
+Контейнерът е `collabora/code` на порт 9980 (`deploy/docker-compose.yml`).
+`COLLABORA_URL` е адресът, от който UI сървърът чете `/hosting/discovery`.
+Вграденият редактор остава само за txt, md и csv. Кликът не вика
+`/v1/fs/preview` и `/v1/doc/load` за тези офис формати: те разгъват целия
+файл в secp. `officebaga` остава за търсене и за преглед на текст.
 
 ## S3 за blob-ове (Фаза 7)
 

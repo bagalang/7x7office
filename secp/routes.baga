@@ -23,6 +23,7 @@ import "wopi/actions.baga"
 import "system/chat_actions.baga"
 import "system/guard.baga"
 import "system/trace.baga"
+import "system/settings_actions.baga"
 import "system/route_table.baga"
 import "ui/actions.baga"
 import "fmrbaga/app.baga"
@@ -106,6 +107,8 @@ fn secp_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_FS_ACL_SET() { return act_fs_acl_set(ctx, db)? }
     if id == RID_FS_ACL_DELETE() { return act_fs_acl_delete(ctx, db)? }
     if id == RID_ACTIVITY() { return act_activity_list(ctx, db)? }
+    if id == RID_SETTINGS_GET() { return act_settings_get(ctx, db)? }
+    if id == RID_SETTINGS_PUT() { return act_settings_put(ctx, db)? }
     if id == RID_REPORT_STORAGE() { return act_report_storage(ctx, db)? }
     if id == RID_REPORT_ACTIVITY() { return act_report_activity(ctx, db)? }
     if id == RID_WOPI_TOKEN() { return act_wopi_token(ctx, db)? }

@@ -11,6 +11,7 @@ import { RequireAuth } from "../../components/RequireAuth";
 import { useI18n } from "../../components/I18nProvider";
 import { useWorkspace } from "../../components/WorkspaceProvider";
 import { api, downloadFile, FsNode, SearchHit } from "../../lib/api";
+import { isOfficeName, officeHref } from "../../lib/office";
 import { formatBytes, messageOf } from "../../components/FileBrowser";
 import { IconDownload, IconFileText, IconSearch } from "../../components/icons";
 
@@ -161,7 +162,12 @@ function SearchInner() {
                       <td>
                         <span className="name-cell">
                           <IconFileText width={16} height={16} />
-                          <Link href={`/edit?path=${encodeURIComponent(hit.path)}`} className="link">
+                          <Link
+                            href={isOfficeName(hit.name) ? officeHref(hit.path) : `/edit?path=${encodeURIComponent(hit.path)}`}
+                            className="link"
+                            target={isOfficeName(hit.name) ? "_blank" : undefined}
+                            rel={isOfficeName(hit.name) ? "noopener noreferrer" : undefined}
+                          >
                             {hit.name}
                           </Link>
                         </span>

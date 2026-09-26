@@ -308,7 +308,11 @@
 - [x] WOPI (2026-09-25): **wopibaga** решава LOCK/UNLOCK/REFRESH/GET_LOCK/PUT
       и CheckFileInfo. secp издава `GET /v1/wopi/token` и обслужва
       `/wopi/files/{id}` и `/contents`. X-WOPI-Proof и PutRelative остават
-      (gaps W1/W2). UI: бутон „WOPI" в прегледа. Жив `tools/wopi_smoke.sh`
+      (gaps W1/W2). Жив `tools/wopi_smoke.sh`
+- [x] Collabora в стека (2026-09-25): клик върху офис файл отваря `/office`
+      (iframe). Не вика preview/doc load — те разгъват целия ODS и блокират
+      машината. txt/md/csv остават във вградения редактор. Контейнер
+      `collabora/code` на 9980; `aliasgroup1` = `SECP_PUBLIC_URL`
 - [x] **s3baga** (2026-09-25): `SECP_BLOB=s3` праща blob-овете към path-style S3
       (SigV4). Ключовете са `blobs/<aa>/<bb>/<hash>` и при шифроване
       `blobs/w<id>/…/<hash>`. Променливи: `S3_ENDPOINT`, `S3_BUCKET`,

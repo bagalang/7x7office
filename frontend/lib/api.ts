@@ -101,6 +101,7 @@ export async function request<T>(path: string, method: string, body?: unknown): 
 export const api = {
   get: <T>(path: string) => request<T>(path, "GET"),
   post: <T>(path: string, body?: unknown) => request<T>(path, "POST", body),
+  put: <T>(path: string, body?: unknown) => request<T>(path, "PUT", body),
   del: <T>(path: string) => request<T>(path, "DELETE"),
   // Preview връща типизиран `kind`; текстовото съдържание (ако има) е в `text`.
   preview: (path: string) =>

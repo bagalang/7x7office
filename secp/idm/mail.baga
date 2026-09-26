@@ -9,6 +9,8 @@
 // тестове: няма реален доставчик, няма и мрежа навън.
 
 import "smtpbaga/smtp.baga"
+import "../system/settings.baga"
+import "ormbaga/orm.baga"
 import "std/os/os.baga"
 import "std/str/str.baga"
 import "std/bytes/bytes.baga"
@@ -51,6 +53,16 @@ fn mail_lower(s: str) -> str {
         i = i + 1
     }
     return str_of_bytes(bytes_from_vec(v))
+}
+
+fn mail_tls_of(name: str) -> i64 {
+    if name == "plain" {
+        return SMTP_PLAIN()
+    }
+    if name == "tls" {
+        return SMTP_TLS()
+    }
+    return SMTP_STARTTLS()
 }
 
 // Име на режима за транспорта. Изрично, не „по подразбиране TLS".
@@ -136,6 +148,129 @@ fn mail_public_url() -> str !IO {
 struct MailSend {
     ok: i64,
     err: str
+}
+
+struct MailView {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    source: str,
+    on: i64,
+    host: str,
+    port: str,
+    tls: str,
+    from: str,
+    user: str,
+    pass: str,
+    helo: str,
+    timeout_s: str,
+    insecure: str,
+    cfg: SmtpCfg
+}
+
+fn mail_view_bad(db: OrmDb, err: str) -> MailView {
+    return MailView {
+        ok: 0,
+        db: db,
+        err: err,
+        source: "",
+        on: 0,
+        host: "",
+        port: "",
+        tls: "",
+        from: "",
+        user: "",
+        pass: "",
+        helo: "",
+        timeout_s: "",
+        insecure: "",
+        cfg: smtp_cfg("", 25, "")
+    }
+}
+
+fn mail_tls_name(raw: str) -> str {
+    let low = mail_lower(raw)
+    if low == "" {
+        return "starttls"
+    }
+    if low == "none" {
+        return "plain"
+    }
+    if low == "implicit" {
+        return "tls"
+    }
+    if low == "ssl" {
+        return "tls"
+    }
+    return low
+}
+
+// Ефективната поща: базата, ако админът я е записал, иначе средата.
+fn mail_view(db: OrmDb) -> MailView !IO !Net {
+    let q = set_all(db)?
+    if orm_ok_q(q) == 0 {
+        return mail_view_bad(orm_db_q(q), orm_err_q(q))
+    }
+    let saved = set_saved(q, "smtp.saved")
+    let mut source = "env"
+    if saved == 1 {
+        source = "db"
+    }
+    let host = str_trim(set_pick(saved, set_get(q, "smtp.host"), env("SMTP_HOST")?))
+    let tls = mail_tls_name(set_pick(saved, set_get(q, "smtp.tls"), env("SMTP_TLS")?))
+    let mode = mail_tls_of(tls)
+    let port_raw = str_trim(set_pick(saved, set_get(q, "smtp.port"), env("SMTP_PORT")?))
+    let mut port_n = mail_default_port(mode)
+    if port_raw != "" {
+        let p = parse_int(port_raw)
+        if p >= 1 {
+            if p <= 65535 {
+                port_n = p
+            }
+        }
+    }
+    let from = str_trim(set_pick(saved, set_get(q, "smtp.from"), env("SMTP_FROM")?))
+    let user = set_pick(saved, set_get(q, "smtp.user"), env("SMTP_USER")?)
+    let pass = set_pick(saved, set_get(q, "smtp.pass"), env("SMTP_PASS")?)
+    let helo = set_pick(saved, set_get(q, "smtp.helo"), env("SMTP_HELO")?)
+    let mut timeout_s = str_trim(set_pick(saved, set_get(q, "smtp.timeout_s"), env("SMTP_TIMEOUT_S")?))
+    if timeout_s == "" {
+        timeout_s = "20"
+    }
+    let insecure = set_pick(saved, set_get(q, "smtp.insecure"), env("SMTP_INSECURE")?)
+    let mut cfg = smtp_cfg(host, port_n, from)
+    cfg.tls = mode
+    cfg.user = user
+    cfg.pass = pass
+    cfg.helo = helo
+    let t = parse_int(timeout_s)
+    if t > 0 {
+        cfg.timeout_s = t
+    }
+    if insecure == "1" {
+        cfg.anchor_der = bytes_of_str("")
+    }
+    let mut on: i64 = 0
+    if host != "" {
+        on = 1
+    }
+    return MailView {
+        ok: 1,
+        db: orm_db_q(q),
+        err: "",
+        source: source,
+        on: on,
+        host: host,
+        port: int_to_str(port_n),
+        tls: tls,
+        from: from,
+        user: user,
+        pass: pass,
+        helo: helo,
+        timeout_s: timeout_s,
+        insecure: insecure,
+        cfg: cfg
+    }
 }
 
 fn mail_send_one(cfg: SmtpCfg, to: str, subject: str, text: str) -> MailSend !Net !IO !Random !Time {

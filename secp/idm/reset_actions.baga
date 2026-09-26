@@ -16,6 +16,7 @@ import "user_model.baga"
 import "mail.baga"
 import "mail_text.baga"
 import "../system/scheduler.baga"
+import "../system/site.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -58,9 +59,15 @@ fn act_forgot(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
         let tok = idm_reset_new(d, uid)?
         d = idm_reset_db(tok)
         if idm_reset_ok(tok) == 1 {
-            let link = concat(concat(mail_public_url()?, "/reset?token="), idm_reset_token(tok))
+            let site = site_public(d)?
+            let mut base = site_local()
+            if site.ok == 1 {
+                base = site.url
+            }
+            let dmail = site.db
+            let link = concat(concat(base, "/reset?token="), idm_reset_token(tok))
             let body = mt_reset_text(link, idm_reset_ttl_min()?)
-            let job = ops_enqueue_mail(d, orm_cell_by(q, 0, "email"), "Смяна на паролата — 7x7office", body)?
+            let job = ops_enqueue_mail(dmail, orm_cell_by(q, 0, "email"), "Смяна на паролата — 7x7office", body)?
             d = orm_db_exec(job)
         } else {
             // Не издаваме токен, но не казваме и защо — иначе отговорът

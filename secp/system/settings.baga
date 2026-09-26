@@ -1,0 +1,135 @@
+// system/settings.baga — глобални настройки в sys_settings.
+//
+// Ред smtp.saved или s3.saved със стойност "1" значи, че админът е
+// записал секцията. Тогава тя печели пред променливите на средата.
+// Без такъв ред пощата и S3 остават както досега (SMTP_* и S3_*).
+
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+
+fn set_table() -> str {
+    return "sys_settings"
+}
+
+fn set_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" {
+        return 1
+    }
+    if be == "boiladb" {
+        return 1
+    }
+    if be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn set_all(db: OrmDb) -> OrmQuery !IO !Net {
+    return orm_query(db, "SELECT id, skey, sval FROM sys_settings")?
+}
+
+fn set_find(q: OrmQuery, key: str) -> i64 {
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by(q, i, "skey") == key {
+            return i
+        }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn set_get(q: OrmQuery, key: str) -> str {
+    let i = set_find(q, key)
+    if i < 0 {
+        return ""
+    }
+    return orm_cell_by(q, i, "sval")
+}
+
+fn set_saved(q: OrmQuery, flag: str) -> i64 {
+    if set_get(q, flag) == "1" {
+        return 1
+    }
+    return 0
+}
+
+// saved=1 връща стойността от базата, дори празна. Иначе — средата.
+fn set_pick(saved: i64, dbv: str, envv: str) -> str {
+    if saved == 1 {
+        return dbv
+    }
+    return envv
+}
+
+fn set_one(db: OrmDb, key: str) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, skey, sval FROM sys_settings WHERE skey = $1"
+    let vals = vec_new()
+    vec_push(vals, key)
+    let nulls = vec_new()
+    vec_push(nulls, 0)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn set_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM sys_settings")?
+}
+
+struct SetWrite {
+    ok: i64,
+    db: OrmDb,
+    err: str
+}
+
+fn set_write(db: OrmDb, key: str, value: str) -> SetWrite !IO !Net {
+    let q = set_one(db, key)?
+    if orm_ok_q(q) == 0 {
+        return SetWrite { ok: 0, db: orm_db_q(q), err: orm_err_q(q) }
+    }
+    if orm_nrows(q) > 0 {
+        let id = orm_cell_by_i64(q, 0, "id")
+        let cols = vec_new()
+        vec_push(cols, "sval")
+        let vals = vec_new()
+        vec_push(vals, value)
+        let up = orm_update_by_id(orm_db_q(q), set_table(), id, cols, vals)?
+        if orm_ok(up) == 0 {
+            return SetWrite { ok: 0, db: orm_db_exec(up), err: orm_err_exec(up) }
+        }
+        return SetWrite { ok: 1, db: orm_db_exec(up), err: "" }
+    }
+    let mut d = orm_db_q(q)
+    if set_boila()? == 1 {
+        let c = set_next_id(d)?
+        if orm_ok_c(c) == 0 {
+            return SetWrite { ok: 0, db: orm_db_c(c), err: orm_err_c(c) }
+        }
+        let nid = orm_count_n(c) + 1
+        d = orm_db_c(c)
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "skey")
+        vec_push(cols, "sval")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(nid))
+        vec_push(vals, key)
+        vec_push(vals, value)
+        let ins = orm_insert_strs(d, set_table(), cols, vals)?
+        if orm_ok(ins) == 0 {
+            return SetWrite { ok: 0, db: orm_db_exec(ins), err: orm_err_exec(ins) }
+        }
+        return SetWrite { ok: 1, db: orm_db_exec(ins), err: "" }
+    }
+    let cols = vec_new()
+    vec_push(cols, "skey")
+    vec_push(cols, "sval")
+    let vals = vec_new()
+    vec_push(vals, key)
+    vec_push(vals, value)
+    let ins = orm_insert_strs(d, set_table(), cols, vals)?
+    if orm_ok(ins) == 0 {
+        return SetWrite { ok: 0, db: orm_db_exec(ins), err: orm_err_exec(ins) }
+    }
+    return SetWrite { ok: 1, db: orm_db_exec(ins), err: "" }
+}

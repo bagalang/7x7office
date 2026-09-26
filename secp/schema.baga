@@ -314,6 +314,22 @@ fn secp_migrations() -> MigrationSet {
         "CREATE TABLE wopi_locks (file_id BIGINT PRIMARY KEY, lock_id TEXT NOT NULL, expires_at BIGINT NOT NULL)",
         "DROP TABLE IF EXISTS wopi_locks"
     )
+    // Глобални настройки (SMTP, S3). skey е уникален; празна стойност е
+    // валидна. Флаговете smtp.saved и s3.saved казват, че секцията е от админа.
+    set = migrate_add(
+        set,
+        20260926037,
+        "create_sys_settings",
+        "CREATE TABLE sys_settings (id BIGSERIAL PRIMARY KEY, skey TEXT NOT NULL UNIQUE, sval TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS sys_settings"
+    )
+    set = migrate_add(
+        set,
+        20260926038,
+        "index_sys_settings_skey",
+        "CREATE INDEX index_sys_settings_on_skey ON sys_settings (skey)",
+        "DROP INDEX IF EXISTS index_sys_settings_on_skey"
+    )
     return set
 }
 

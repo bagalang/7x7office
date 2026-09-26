@@ -221,6 +221,13 @@ export const IconActivity = (p: P) => (
   </svg>
 );
 
+export const IconSettings = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6" />
+  </svg>
+);
+
 export const IconChat = (p: P) => (
   <svg {...base(p)}>
     <path d="M5 6h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />

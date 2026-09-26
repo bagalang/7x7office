@@ -21,7 +21,7 @@ import "share_roles.baga"
 import "activity_kinds.baga"
 import "activity_model.baga"
 import "../lib/pass.baga"
-import "../idm/mail.baga"
+import "../system/site.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -50,8 +50,8 @@ fn share_qid(ctx: FmrCtx, name: str) -> i64 {
 }
 
 // Пълният публичен URL на линка. Токенът е hex — без нужда от percent-encoding.
-fn share_public_link(token: str) -> str !IO {
-    return concat(concat(mail_public_url()?, "/share/"), token)
+fn share_public_link(base: str, token: str) -> str {
+    return concat(concat(base, "/share/"), token)
 }
 
 fn act_fs_share_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
@@ -205,12 +205,16 @@ fn act_fs_share_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time 
     if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
         return act_err(d, 500, "share link missing after insert")
     }
+    let site = site_public(orm_db_q(q))?
+    if site.ok == 0 {
+        return act_err(site.db, 500, site.err)
+    }
     let mut o = share_to_json(q, 0)
     o = jobj_str(o, "token", token)
-    o = jobj_str(o, "url", share_public_link(token)?)
+    o = jobj_str(o, "url", share_public_link(site.url, token))
     // Одит: издаден линк. node_id не се знае оттук (линкът е по път) —
     // затова е 0 и feed-ът разчита на path-а, който е пълният смисъл.
-    let logged = tree_activity_log(orm_db_q(q), t.ws, t.owner, activity_verb_shared(), 0, path, "")?
+    let logged = tree_activity_log(site.db, t.ws, t.owner, activity_verb_shared(), 0, path, "")?
     return act_created(logged.db, o)
 }
 

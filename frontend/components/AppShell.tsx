@@ -9,7 +9,7 @@ import { PreferencesButton } from "./PreferencesButton";
 import { useWorkspace } from "./WorkspaceProvider";
 import { useActivityBadge, useRealtime } from "./RealtimeProvider";
 import { api, FsUsage } from "../lib/api";
-import { IconActivity, IconChat, IconClose, IconFileText, IconFolder, IconLogout, IconSearch, IconUsers, IconWorkspaces } from "./icons";
+import { IconActivity, IconChat, IconClose, IconFileText, IconFolder, IconLogout, IconSearch, IconSettings, IconUsers, IconWorkspaces } from "./icons";
 import { ActivityFeed } from "./ActivityFeed";
 import { ChatPanel } from "./ChatPanel";
 
@@ -206,6 +206,11 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
         {me?.is_admin === 1 ? (
           <Link href="/reports" className={`nav-item${pathname === "/reports" ? " active" : ""}`}>
             <IconFileText /> {t("nav.reports")}
+          </Link>
+        ) : null}
+        {me?.is_admin === 1 ? (
+          <Link href="/admin" className={`nav-item${pathname === "/admin" ? " active" : ""}`}>
+            <IconSettings /> {t("nav.settings")}
           </Link>
         ) : null}
         <div className="quota">

@@ -76,6 +76,8 @@ fn RID_UP_CREATE() -> i64 { return 73 }
 fn RID_UP_PATCH() -> i64 { return 74 }
 fn RID_UP_STATUS() -> i64 { return 75 }
 fn RID_UP_DROP() -> i64 { return 76 }
+fn RID_SETTINGS_GET() -> i64 { return 77 }
+fn RID_SETTINGS_PUT() -> i64 { return 78 }
 
 // Всяко id, което dispatch-ът трябва да поеме. Нов маршрут се добавя и тук.
 fn secp_ids() -> Vec<i64> {
@@ -146,6 +148,8 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_UP_PATCH())
     vec_push(v, RID_UP_STATUS())
     vec_push(v, RID_UP_DROP())
+    vec_push(v, RID_SETTINGS_GET())
+    vec_push(v, RID_SETTINGS_PUT())
     return v
 }
 
@@ -207,6 +211,8 @@ fn secp_routes() -> Router {
     r = secp_add(r, "POST", "/v1/fs/acl", RID_FS_ACL_SET(), "fs", 0, "AclSet", "AclRow", "200", "workspace_id")
     r = secp_add(r, "DELETE", "/v1/fs/acl", RID_FS_ACL_DELETE(), "fs", 0, "", "-", "204", "acl_id")
     r = secp_add(r, "GET", "/v1/activity", RID_ACTIVITY(), "fs", 0, "", "ActivityList", "200", "limit,path,actor_id")
+    r = secp_add(r, "GET", "/v1/admin/settings", RID_SETTINGS_GET(), "admin", 0, "", "AdminSettings", "200", "")
+    r = secp_add(r, "PUT", "/v1/admin/settings", RID_SETTINGS_PUT(), "admin", 0, "AdminSettings", "AdminSettings", "200", "")
     r = secp_add(r, "GET", "/v1/reports/storage", RID_REPORT_STORAGE(), "reports", 0, "", "StorageReport", "200", "format,lang")
     r = secp_add(r, "GET", "/v1/reports/activity", RID_REPORT_ACTIVITY(), "reports", 0, "", "ActivityReport", "200", "format,lang")
     r = secp_add(r, "GET", "/v1/wopi/token", RID_WOPI_TOKEN(), "wopi", 0, "", "WopiToken", "200", "path")

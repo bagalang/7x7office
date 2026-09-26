@@ -1,0 +1,360 @@
+// system/settings_actions.baga — админ чете и записва SMTP и S3.
+// Само is_admin. Записът вдига smtp.saved и s3.saved, след което
+// пощата и blob-овете четат базата вместо средата.
+
+import "settings.baga"
+import "site.baga"
+import "../idm/mail.baga"
+import "../idm/user_actions.baga"
+import "../data/s3live.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn set_smtp_json(v: MailView) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "host", v.host)
+    o = jobj_str(o, "port", v.port)
+    o = jobj_str(o, "tls", v.tls)
+    o = jobj_str(o, "from", v.from)
+    o = jobj_str(o, "user", v.user)
+    o = jobj_str(o, "pass", v.pass)
+    o = jobj_str(o, "helo", v.helo)
+    o = jobj_str(o, "timeout_s", v.timeout_s)
+    let mut insecure = "0"
+    if v.insecure == "1" {
+        insecure = "1"
+    }
+    o = jobj_str(o, "insecure", insecure)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_s3_json(v: S3View) -> JObj {
+    let mut o = jobj_new()
+    let mut on = "0"
+    if v.on == 1 {
+        on = "1"
+    }
+    o = jobj_str(o, "on", on)
+    o = jobj_str(o, "endpoint", v.endpoint)
+    o = jobj_str(o, "bucket", v.bucket)
+    o = jobj_str(o, "access_key", v.access)
+    o = jobj_str(o, "secret_key", v.secret)
+    o = jobj_str(o, "region", v.region)
+    o = jobj_str(o, "timeout_s", v.timeout_s)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_site_json(v: SiteUrl) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "url", v.url)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_body(mail: MailView, store: S3View, site: SiteUrl) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_raw(o, "site", jobj_encode(set_site_json(site)))
+    o = jobj_raw(o, "smtp", jobj_encode(set_smtp_json(mail)))
+    o = jobj_raw(o, "s3", jobj_encode(set_s3_json(store)))
+    return o
+}
+
+fn act_settings_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let c = idm_require_admin(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let mail = mail_view(db)?
+    if mail.ok == 0 {
+        return act_err(mail.db, 500, mail.err)
+    }
+    let store = data_s3_view(mail.db)?
+    if store.ok == 0 {
+        return act_err(store.db, 500, store.err)
+    }
+    let site = site_public(store.db)?
+    if site.ok == 0 {
+        return act_err(site.db, 500, site.err)
+    }
+    return act_ok(site.db, set_body(mail, store, site))
+}
+
+fn set_obj(doc: JsonDoc, root: i64, key: str) -> i64 {
+    let n = json_get(doc, root, key)
+    if n < 0 {
+        return 0 - 1
+    }
+    if json_tag(doc, n) != 6 {
+        return 0 - 1
+    }
+    return n
+}
+
+fn set_str(doc: JsonDoc, obj: i64, key: str) -> JField {
+    let f = jopt_str(doc, obj, key, "")
+    if f.ok == 0 {
+        return f
+    }
+    if len(f.val) > 400 {
+        return jfield_type(key, "string")
+    }
+    return f
+}
+
+fn set_tls_ok(name: str) -> i64 {
+    if name == "starttls" {
+        return 1
+    }
+    if name == "tls" {
+        return 1
+    }
+    if name == "plain" {
+        return 1
+    }
+    return 0
+}
+
+fn set_port_for(tls: str, raw: str) -> i64 {
+    if raw == "" {
+        return mail_default_port(mail_tls_of(tls))
+    }
+    let p = parse_int(raw)
+    if p < 1 {
+        return 0
+    }
+    if p > 65535 {
+        return 0
+    }
+    return p
+}
+
+fn set_timeout(raw: str, def: str) -> str {
+    if raw == "" {
+        return def
+    }
+    let n = parse_int(raw)
+    if n < 1 {
+        return ""
+    }
+    if n > 600 {
+        return ""
+    }
+    return int_to_str(n)
+}
+
+fn act_settings_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let c = idm_require_admin(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let smtp = set_obj(b.doc, b.root, "smtp")
+    if smtp < 0 {
+        return act_err(db, 400, "smtp object required")
+    }
+    let s3 = set_obj(b.doc, b.root, "s3")
+    if s3 < 0 {
+        return act_err(db, 400, "s3 object required")
+    }
+    let mut domain = "127.0.0.1"
+    let site_n = set_obj(b.doc, b.root, "site")
+    if site_n >= 0 {
+        let url_f = set_str(b.doc, site_n, "url")
+        if url_f.ok == 0 {
+            return act_err(db, 400, url_f.err)
+        }
+        domain = str_trim(url_f.val)
+    }
+    if site_bad(domain) == 1 {
+        return act_err(db, 400, "site.url is invalid")
+    }
+    let site_url = site_norm(domain)
+    let host_f = set_str(b.doc, smtp, "host")
+    if host_f.ok == 0 {
+        return act_err(db, 400, host_f.err)
+    }
+    let port_f = set_str(b.doc, smtp, "port")
+    if port_f.ok == 0 {
+        return act_err(db, 400, port_f.err)
+    }
+    let tls_f = set_str(b.doc, smtp, "tls")
+    if tls_f.ok == 0 {
+        return act_err(db, 400, tls_f.err)
+    }
+    let from_f = set_str(b.doc, smtp, "from")
+    if from_f.ok == 0 {
+        return act_err(db, 400, from_f.err)
+    }
+    let user_f = set_str(b.doc, smtp, "user")
+    if user_f.ok == 0 {
+        return act_err(db, 400, user_f.err)
+    }
+    let pass_f = set_str(b.doc, smtp, "pass")
+    if pass_f.ok == 0 {
+        return act_err(db, 400, pass_f.err)
+    }
+    let helo_f = set_str(b.doc, smtp, "helo")
+    if helo_f.ok == 0 {
+        return act_err(db, 400, helo_f.err)
+    }
+    let sto_f = set_str(b.doc, smtp, "timeout_s")
+    if sto_f.ok == 0 {
+        return act_err(db, 400, sto_f.err)
+    }
+    let ins_f = set_str(b.doc, smtp, "insecure")
+    if ins_f.ok == 0 {
+        return act_err(db, 400, ins_f.err)
+    }
+    let on_f = set_str(b.doc, s3, "on")
+    if on_f.ok == 0 {
+        return act_err(db, 400, on_f.err)
+    }
+    let ep_f = set_str(b.doc, s3, "endpoint")
+    if ep_f.ok == 0 {
+        return act_err(db, 400, ep_f.err)
+    }
+    let bucket_f = set_str(b.doc, s3, "bucket")
+    if bucket_f.ok == 0 {
+        return act_err(db, 400, bucket_f.err)
+    }
+    let ak_f = set_str(b.doc, s3, "access_key")
+    if ak_f.ok == 0 {
+        return act_err(db, 400, ak_f.err)
+    }
+    let sk_f = set_str(b.doc, s3, "secret_key")
+    if sk_f.ok == 0 {
+        return act_err(db, 400, sk_f.err)
+    }
+    let region_f = set_str(b.doc, s3, "region")
+    if region_f.ok == 0 {
+        return act_err(db, 400, region_f.err)
+    }
+    let s3to_f = set_str(b.doc, s3, "timeout_s")
+    if s3to_f.ok == 0 {
+        return act_err(db, 400, s3to_f.err)
+    }
+    let tls = mail_tls_name(str_trim(tls_f.val))
+    if set_tls_ok(tls) == 0 {
+        return act_err(db, 400, "smtp.tls must be starttls, tls or plain")
+    }
+    let port_n = set_port_for(tls, str_trim(port_f.val))
+    if port_n < 1 {
+        return act_err(db, 400, "smtp.port is invalid")
+    }
+    let sto = set_timeout(str_trim(sto_f.val), "20")
+    if sto == "" {
+        return act_err(db, 400, "smtp.timeout_s is invalid")
+    }
+    let mut insecure = "0"
+    if str_trim(ins_f.val) == "1" {
+        insecure = "1"
+    }
+    let mut s3_on = "0"
+    if str_trim(on_f.val) == "1" {
+        s3_on = "1"
+    }
+    let endpoint = str_trim(ep_f.val)
+    let bucket = str_trim(bucket_f.val)
+    let access = str_trim(ak_f.val)
+    let secret = str_trim(sk_f.val)
+    if s3_on == "1" {
+        if endpoint == "" || bucket == "" || access == "" || secret == "" {
+            return act_err(db, 400, "s3 endpoint, bucket, access_key and secret_key are required")
+        }
+    }
+    let s3to = set_timeout(str_trim(s3to_f.val), "30")
+    if s3to == "" {
+        return act_err(db, 400, "s3.timeout_s is invalid")
+    }
+    let mut region = str_trim(region_f.val)
+    if region == "" {
+        region = "us-east-1"
+    }
+    let mut d = db
+    let w1 = set_write(d, "smtp.host", str_trim(host_f.val))?
+    if w1.ok == 0 { return act_err(w1.db, 500, w1.err) }
+    d = w1.db
+    let w2 = set_write(d, "smtp.port", int_to_str(port_n))?
+    if w2.ok == 0 { return act_err(w2.db, 500, w2.err) }
+    d = w2.db
+    let w3 = set_write(d, "smtp.tls", tls)?
+    if w3.ok == 0 { return act_err(w3.db, 500, w3.err) }
+    d = w3.db
+    let w4 = set_write(d, "smtp.from", str_trim(from_f.val))?
+    if w4.ok == 0 { return act_err(w4.db, 500, w4.err) }
+    d = w4.db
+    let w5 = set_write(d, "smtp.user", user_f.val)?
+    if w5.ok == 0 { return act_err(w5.db, 500, w5.err) }
+    d = w5.db
+    let w6 = set_write(d, "smtp.pass", pass_f.val)?
+    if w6.ok == 0 { return act_err(w6.db, 500, w6.err) }
+    d = w6.db
+    let w7 = set_write(d, "smtp.helo", str_trim(helo_f.val))?
+    if w7.ok == 0 { return act_err(w7.db, 500, w7.err) }
+    d = w7.db
+    let w8 = set_write(d, "smtp.timeout_s", sto)?
+    if w8.ok == 0 { return act_err(w8.db, 500, w8.err) }
+    d = w8.db
+    let w9 = set_write(d, "smtp.insecure", insecure)?
+    if w9.ok == 0 { return act_err(w9.db, 500, w9.err) }
+    d = w9.db
+    let w10 = set_write(d, "s3.on", s3_on)?
+    if w10.ok == 0 { return act_err(w10.db, 500, w10.err) }
+    d = w10.db
+    let w11 = set_write(d, "s3.endpoint", endpoint)?
+    if w11.ok == 0 { return act_err(w11.db, 500, w11.err) }
+    d = w11.db
+    let w12 = set_write(d, "s3.bucket", bucket)?
+    if w12.ok == 0 { return act_err(w12.db, 500, w12.err) }
+    d = w12.db
+    let w13 = set_write(d, "s3.access_key", access)?
+    if w13.ok == 0 { return act_err(w13.db, 500, w13.err) }
+    d = w13.db
+    let w14 = set_write(d, "s3.secret_key", secret)?
+    if w14.ok == 0 { return act_err(w14.db, 500, w14.err) }
+    d = w14.db
+    let w15 = set_write(d, "s3.region", region)?
+    if w15.ok == 0 { return act_err(w15.db, 500, w15.err) }
+    d = w15.db
+    let w16 = set_write(d, "s3.timeout_s", s3to)?
+    if w16.ok == 0 { return act_err(w16.db, 500, w16.err) }
+    d = w16.db
+    let w17 = set_write(d, "smtp.saved", "1")?
+    if w17.ok == 0 { return act_err(w17.db, 500, w17.err) }
+    d = w17.db
+    let w18 = set_write(d, "s3.saved", "1")?
+    if w18.ok == 0 { return act_err(w18.db, 500, w18.err) }
+    d = w18.db
+    let w19 = set_write(d, "site.url", site_url)?
+    if w19.ok == 0 { return act_err(w19.db, 500, w19.err) }
+    d = w19.db
+    let w20 = set_write(d, "site.saved", "1")?
+    if w20.ok == 0 { return act_err(w20.db, 500, w20.err) }
+    d = w20.db
+    let mail = mail_view(d)?
+    if mail.ok == 0 {
+        return act_err(mail.db, 500, mail.err)
+    }
+    let store = data_s3_view(mail.db)?
+    if store.ok == 0 {
+        return act_err(store.db, 500, store.err)
+    }
+    let site = site_public(store.db)?
+    if site.ok == 0 {
+        return act_err(site.db, 500, site.err)
+    }
+    return act_ok(site.db, set_body(mail, store, site))
+}

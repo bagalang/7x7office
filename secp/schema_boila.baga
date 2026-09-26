@@ -273,5 +273,19 @@ fn secp_boila_migrations() -> MigrationSet {
         "CREATE TABLE IF NOT EXISTS wopi_locks (file_id BIGINT, lock_id TEXT, expires_at BIGINT, PRIMARY KEY (file_id))",
         "DROP TABLE IF EXISTS wopi_locks"
     )
+    set = migrate_add(
+        set,
+        20260926037,
+        "create_sys_settings",
+        "CREATE TABLE IF NOT EXISTS sys_settings (id BIGINT, skey TEXT, sval TEXT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS sys_settings"
+    )
+    set = migrate_add(
+        set,
+        20260926038,
+        "index_sys_settings_skey",
+        "CREATE INDEX IF NOT EXISTS index_sys_settings_on_skey ON sys_settings (skey)",
+        "DROP INDEX IF EXISTS index_sys_settings_on_skey"
+    )
     return set
 }

@@ -1,8 +1,8 @@
 "use client";
 
 // FilePreview — дясната лента: преглед (markdown/csv/sheet/pdf/image/zip/text),
-// действия и диалог с версиите. Изнесено от FileBrowser, за да останат двата
-// файла четими.
+// действия и диалог с версиите. Офис файловете не се разгъват тук.
+// Изнесено от FileBrowser, за да останат двата файла четими.
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -25,6 +25,7 @@ import {
   restoreVersion,
 } from "../lib/api";
 import { mdToHtml } from "../lib/markdown";
+import { isOfficeName, openOffice } from "../lib/office";
 import { useWorkspace, canWrite, canShare } from "./WorkspaceProvider";
 import { formatBytes, formatDate, messageOf } from "./FileBrowser";
 
@@ -58,9 +59,8 @@ export function FilePreview({
   // (преглед). Отваря се с един бутон и се презарежда при смяна на файла —
   // затова е state тук, а не отделен диалог.
   const [showHistory, setShowHistory] = useState(false);
-  const [wopi, setWopi] = useState<{ wopi_src: string; access_token: string } | null>(null);
-  const [copied, setCopied] = useState("");
-  const editable = /\.(docx|odt|txt|md|xlsx|ods|csv)$/i.test(node.name);
+  const office = isOfficeName(node.name);
+  const plainEditable = /\.(txt|md|csv)$/i.test(node.name);
 
   // Нов файл → историята се затваря. Иначе редът „кой промени файла" остава
   // от предишния файл, докато панелът вече показва друг.
@@ -83,6 +83,12 @@ export function FilePreview({
     setText("");
     setImg("");
     setErr("");
+    // Офис файлът не се разгъва тук. Кликът от списъка вече води към Collabora;
+    // този клон пази и директен преглед да не пусне officebaga.
+    if (isOfficeName(node.name)) {
+      setKind("office");
+      return;
+    }
     (async () => {
       const prev = await api.preview(node.path);
       if (dead) return;
@@ -104,7 +110,7 @@ export function FilePreview({
       dead = true;
       if (obj) URL.revokeObjectURL(obj);
     };
-  }, [node.path, t]);
+  }, [node.path, node.name, t]);
 
   return (
     <aside className="preview-pane">
@@ -129,6 +135,7 @@ export function FilePreview({
         {kind === "zip" ? <ZipPreview node={node} onError={onError} /> : null}
         {kind === "text" ? <pre>{text}</pre> : null}
         {kind === "presentation" ? <p className="muted">{t("preview.presentation")}</p> : null}
+        {kind === "office" ? <p className="muted">{t("office.preview_hint")}</p> : null}
         {kind === "empty" ? <p className="muted">{t("preview.no_text")}</p> : null}
         {kind === "" && !err ? <p className="muted">{t("preview.opening")}</p> : null}
 
@@ -157,33 +164,24 @@ export function FilePreview({
         ) : null}
 
         <div className="preview-actions">
-          {node.is_dir !== 1 ? (
-            <button
-              type="button"
-              className={kind === "presentation" ? "btn" : "btn ghost"}
-              onClick={() => {
-                setCopied("");
-                void api
-                  .get<{ wopi_src: string; access_token: string }>(`/v1/wopi/token?path=${qpath(node.path)}`)
-                  .then(setWopi)
-                  .catch((e) => onError(messageOf(e, t("common.error"))));
-              }}
-            >
-              {t("wopi.open")}
-            </button>
-          ) : null}
-          {editable && writable ? (
+          {office || (plainEditable && writable) ? (
             <button
               type="button"
               className="btn"
-              onClick={() => router.push(`/edit?path=${encodeURIComponent(node.path)}`)}
+              onClick={() => {
+                if (office) {
+                  openOffice(node.path);
+                  return;
+                }
+                router.push(`/edit?path=${encodeURIComponent(node.path)}`);
+              }}
             >
               <IconPencil width={16} height={16} /> {t("preview.edit")}
             </button>
           ) : null}
           <button
             type="button"
-            className={editable && writable ? "btn ghost" : "btn"}
+            className={(office || (plainEditable && writable)) ? "btn ghost" : "btn"}
             onClick={() => void downloadFile(node).catch((e) => onError(messageOf(e, t("common.error"))))}
           >
             <IconDownload width={16} height={16} /> {t("preview.download")}
@@ -216,31 +214,6 @@ export function FilePreview({
           ) : null}
         </div>
       </div>
-      {wopi ? (
-        <Dialog title={t("wopi.title")} onClose={() => setWopi(null)}>
-          <p className="muted">{t("wopi.hint")}</p>
-          <div className="field">
-            <label>{t("wopi.src")}</label>
-            <input className="input" readOnly value={wopi.wopi_src} />
-          </div>
-          <div className="field">
-            <label>{t("wopi.token")}</label>
-            <input className="input" readOnly value={wopi.access_token} />
-          </div>
-          <div className="dialog-actions">
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                const text = `${wopi.wopi_src}\n${wopi.access_token}`;
-                void navigator.clipboard.writeText(text).then(() => setCopied(t("wopi.copied")));
-              }}
-            >
-              {copied || t("wopi.copy")}
-            </button>
-          </div>
-        </Dialog>
-      ) : null}
     </aside>
   );
 }

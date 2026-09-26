@@ -83,14 +83,17 @@ fn mj_run(db: OrmDb, job: i64, payload: str) -> MjRun !IO !Net !Random !Time {
     if msg.ok == 0 {
         return MjRun { ok: 0, db: db, err: msg.err }
     }
-    if mail_enabled()? == 0 {
+    let view = mail_view(db)?
+    if view.ok == 0 {
+        return MjRun { ok: 0, db: view.db, err: view.err }
+    }
+    if view.on == 0 {
         eprintln(concat("secp mail: изключена поща, пропускам писмо до ", msg.to))
-        return MjRun { ok: 1, db: db, err: "" }
+        return MjRun { ok: 1, db: view.db, err: "" }
     }
-    let cfg = mail_config()?
-    let sent = mail_send_one(cfg, msg.to, msg.subject, msg.text)?
+    let sent = mail_send_one(view.cfg, msg.to, msg.subject, msg.text)?
     if sent.ok == 0 {
-        return MjRun { ok: 0, db: db, err: sent.err }
+        return MjRun { ok: 0, db: view.db, err: sent.err }
     }
-    return MjRun { ok: 1, db: db, err: "" }
+    return MjRun { ok: 1, db: view.db, err: "" }
 }

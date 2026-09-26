@@ -23,6 +23,7 @@ import "querybaga/query.baga"
 import "std/str/str.baga"
 import "std/os/os.baga"
 import "std/time/time.baga"
+import "../system/site.baga"
 
 struct WopiWho {
     ok: i64,
@@ -203,17 +204,17 @@ fn act_wopi_token(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     payload = concat(payload, int_to_str(exp))
     payload = concat(payload, "}")
     let token = jwt_encode(ctx.jwt_secret, payload)
-    let base = str_trim(env("SECP_PUBLIC_URL")?)
-    let mut src = concat("/wopi/files/", int_to_str(fid))
-    if base != "" {
-        src = concat(base, src)
+    let site = site_public(orm_db_q(q))?
+    if site.ok == 0 {
+        return act_err(site.db, 500, site.err)
     }
+    let src = concat(site.url, concat("/wopi/files/", int_to_str(fid)))
     let mut o = jobj_new()
     o = jobj_i64(o, "file_id", fid)
     o = jobj_str(o, "access_token", token)
     o = jobj_str(o, "wopi_src", src)
     o = jobj_i64(o, "can_write", write)
-    return act_ok(orm_db_q(q), o)
+    return act_ok(site.db, o)
 }
 
 fn act_wopi_file(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {

@@ -36,6 +36,8 @@ import {
   qpath,
 } from "../lib/api";
 import { readStorage, writeStorage } from "../lib/storage";
+import { isOfficeName, openOffice } from "../lib/office";
+import { blankOffice } from "../lib/blanks";
 
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -57,6 +59,37 @@ function parentOf(path: string): string {
   const i = path.lastIndexOf("/");
   if (i <= 0) return "/";
   return path.slice(0, i);
+}
+
+const FILE_KINDS = ["txt", "md", "csv", "docx", "odt", "xlsx", "ods", "pptx", "odp"] as const;
+type FileKind = (typeof FILE_KINDS)[number];
+
+function withKindExt(name: string, kind: FileKind): string {
+  const trimmed = name.trim().replace(/[\\/]/g, "");
+  const lower = trimmed.toLowerCase();
+  let stem = trimmed;
+  for (const ext of FILE_KINDS) {
+    if (lower.endsWith(`.${ext}`)) {
+      stem = trimmed.slice(0, -(ext.length + 1));
+      break;
+    }
+  }
+  const base = stem.trim() || "file";
+  return `${base}.${kind}`;
+}
+
+function uniqueName(name: string, taken: Set<string>): string {
+  if (!taken.has(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  let n = 2;
+  let next = `${stem} (${n})${ext}`;
+  while (taken.has(next)) {
+    n += 1;
+    next = `${stem} (${n})${ext}`;
+  }
+  return next;
 }
 
 function joinPath(dir: string, name: string): string {
@@ -99,6 +132,9 @@ export function FileBrowser() {
   const [query, setQuery] = useState("");
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [folder, setFolder] = useState("");
+  const [fileOpen, setFileOpen] = useState(false);
+  const [fileKind, setFileKind] = useState<FileKind>("txt");
+  const [fileName, setFileName] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<FsNode | null>(null);
   const [versionsFor, setVersionsFor] = useState<FsNode | null>(null);
   const [shareFor, setShareFor] = useState<FsNode | null>(null);
@@ -186,6 +222,22 @@ export function FileBrowser() {
     });
   }
 
+  async function onCreateFile(e: FormEvent) {
+    e.preventDefault();
+    const named = withKindExt(fileName || t(`files.name_${fileKind}`), fileKind);
+    const taken = new Set(items.map((item) => item.name));
+    const dest = joinPath(path, uniqueName(named, taken));
+    if (!dest) {
+      setError(t("files.err_bad_name"));
+      return;
+    }
+    setFileOpen(false);
+    const bytes = fileKind === "txt" || fileKind === "md" || fileKind === "csv" ? new Uint8Array([10]) : blankOffice(fileKind);
+    await run(async () => {
+      await putFile(dest, new Blob([bytes.slice()]));
+    });
+  }
+
   async function onUpload(files: FileList | null) {
     if (!files || files.length === 0) return;
     const batch = Array.from(files);
@@ -218,9 +270,15 @@ export function FileBrowser() {
     if (node.is_dir) {
       setOpen(null);
       setPath(node.path);
-    } else {
-      setOpen(node);
+      return;
     }
+    // Офис файлът се отваря в нов таб. Списъкът остава, без локален преглед.
+    if (isOfficeName(node.name)) {
+      setOpen(null);
+      openOffice(node.path);
+      return;
+    }
+    setOpen(node);
   }
 
   function startRename(node: FsNode) {
@@ -323,6 +381,20 @@ export function FileBrowser() {
             <button type="button" className="btn ghost" onClick={() => setMkdirOpen(true)}>
               <IconPlus width={16} height={16} />
               {t("files.new_folder")}
+            </button>
+          ) : null}
+          {writable ? (
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => {
+                setFileKind("docx");
+                setFileName(t("files.name_docx"));
+                setFileOpen(true);
+              }}
+            >
+              <IconFile width={16} height={16} />
+              {t("files.new_file")}
             </button>
           ) : null}
           <span className="grow" />
@@ -483,6 +555,50 @@ export function FileBrowser() {
             setReload((n) => n + 1);
           }}
         />
+      ) : null}
+
+      {fileOpen ? (
+        <Dialog title={t("files.new_file_title")} onClose={() => setFileOpen(false)}>
+          <form onSubmit={onCreateFile}>
+            <div className="field">
+              <label htmlFor="new-file-type">{t("files.new_file_type")}</label>
+              <select
+                id="new-file-type"
+                className="input"
+                value={fileKind}
+                onChange={(e) => {
+                  const next = e.target.value as FileKind;
+                  setFileKind(next);
+                  setFileName(t(`files.name_${next}`));
+                }}
+              >
+                {FILE_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {t(`files.kind_${kind}`)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="new-file-name">{t("common.name")}</label>
+              <input
+                id="new-file-name"
+                className="input"
+                value={fileName}
+                onChange={(e) => setFileName(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="dialog-actions">
+              <button type="button" className="btn ghost" onClick={() => setFileOpen(false)}>
+                {t("common.cancel")}
+              </button>
+              <button type="submit" className="btn" disabled={busy}>
+                {t("common.create")}
+              </button>
+            </div>
+          </form>
+        </Dialog>
       ) : null}
 
       {mkdirOpen ? (

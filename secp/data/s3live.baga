@@ -1,0 +1,91 @@
+// data/s3live.baga — откъде идват S3 настройките за blob-овете.
+//
+// s3.saved=1: стойностите в sys_settings. Иначе SECP_BLOB и S3_*.
+// Празен s3.on след запис изключва S3 дори ако средата още казва s3.
+
+import "../system/settings.baga"
+import "s3baga/s3.baga"
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+struct S3View {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    source: str,
+    on: i64,
+    endpoint: str,
+    bucket: str,
+    access: str,
+    secret: str,
+    region: str,
+    timeout_s: str,
+    cfg: S3Cfg
+}
+
+fn s3_view_bad(db: OrmDb, err: str) -> S3View {
+    return S3View {
+        ok: 0,
+        db: db,
+        err: err,
+        source: "",
+        on: 0,
+        endpoint: "",
+        bucket: "",
+        access: "",
+        secret: "",
+        region: "",
+        timeout_s: "",
+        cfg: s3_cfg("", "", "", "", "", 0)
+    }
+}
+
+fn data_s3_view(db: OrmDb) -> S3View !IO !Net {
+    let q = set_all(db)?
+    if orm_ok_q(q) == 0 {
+        return s3_view_bad(orm_db_q(q), orm_err_q(q))
+    }
+    let saved = set_saved(q, "s3.saved")
+    let mut source = "env"
+    if saved == 1 {
+        source = "db"
+    }
+    let mut on: i64 = 0
+    if saved == 1 {
+        if set_get(q, "s3.on") == "1" {
+            on = 1
+        }
+    } else {
+        if str_trim(env("SECP_BLOB")?) == "s3" {
+            on = 1
+        }
+    }
+    let endpoint = set_pick(saved, set_get(q, "s3.endpoint"), str_trim(env("S3_ENDPOINT")?))
+    let bucket = set_pick(saved, set_get(q, "s3.bucket"), str_trim(env("S3_BUCKET")?))
+    let access = set_pick(saved, set_get(q, "s3.access_key"), env("S3_ACCESS_KEY")?)
+    let secret = set_pick(saved, set_get(q, "s3.secret_key"), env("S3_SECRET_KEY")?)
+    let mut region = set_pick(saved, set_get(q, "s3.region"), str_trim(env("S3_REGION")?))
+    if region == "" {
+        region = "us-east-1"
+    }
+    let mut timeout_s = set_pick(saved, set_get(q, "s3.timeout_s"), env("S3_TIMEOUT_S")?)
+    if timeout_s == "" {
+        timeout_s = "30"
+    }
+    let timeout_n = parse_int(timeout_s)
+    return S3View {
+        ok: 1,
+        db: orm_db_q(q),
+        err: "",
+        source: source,
+        on: on,
+        endpoint: endpoint,
+        bucket: bucket,
+        access: access,
+        secret: secret,
+        region: region,
+        timeout_s: timeout_s,
+        cfg: s3_cfg(endpoint, bucket, access, secret, region, timeout_n)
+    }
+}
