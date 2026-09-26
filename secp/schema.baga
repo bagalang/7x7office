@@ -330,6 +330,14 @@ fn secp_migrations() -> MigrationSet {
         "CREATE INDEX index_sys_settings_on_skey ON sys_settings (skey)",
         "DROP INDEX IF EXISTS index_sys_settings_on_skey"
     )
+    // Поток (опростен Cells Flows): едно събитие и едно действие.
+    set = migrate_add(
+        set,
+        20260926039,
+        "create_ops_flows",
+        "CREATE TABLE ops_flows (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL DEFAULT '', enabled BIGINT NOT NULL DEFAULT 1, trigger TEXT NOT NULL DEFAULT 'upload', path_prefix TEXT NOT NULL DEFAULT '', ext TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT 'mail', arg TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS ops_flows"
+    )
     return set
 }
 

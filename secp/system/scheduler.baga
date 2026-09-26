@@ -17,6 +17,7 @@
 import "ormbaga/orm.baga"
 import "../data/crypt.baga"
 import "mail_jobs.baga"
+import "flows_run.baga"
 import "trace.baga"
 import "std/str/str.baga"
 import "std/os/os.baga"
@@ -205,6 +206,15 @@ fn ops_run_one(db: OrmDb, id: i64, kind: str, payload: str, att: i64) -> OpsRun 
             return OpsRun { ok: 1, db: orm_db_exec(s) }
         }
         let f = ops_fail(m.db, id, kind, att, m.err)?
+        return OpsRun { ok: 0, db: orm_db_exec(f) }
+    }
+    if kind == "flow-run" {
+        let fr = flow_run(db, payload)?
+        if fr.ok == 1 {
+            let s = ops_set_status(fr.db, id, "done")?
+            return OpsRun { ok: 1, db: orm_db_exec(s) }
+        }
+        let f = ops_fail(fr.db, id, kind, att, fr.err)?
         return OpsRun { ok: 0, db: orm_db_exec(f) }
     }
     if kind == "expire" {

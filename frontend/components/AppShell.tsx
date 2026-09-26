@@ -209,6 +209,11 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
           </Link>
         ) : null}
         {me?.is_admin === 1 ? (
+          <Link href="/flows" className={`nav-item${pathname === "/flows" ? " active" : ""}`}>
+            <IconActivity /> {t("nav.flows")}
+          </Link>
+        ) : null}
+        {me?.is_admin === 1 ? (
           <Link href="/admin" className={`nav-item${pathname === "/admin" ? " active" : ""}`}>
             <IconSettings /> {t("nav.settings")}
           </Link>

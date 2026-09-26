@@ -12,6 +12,7 @@
 | **Приложение** | `app-product/7x7office/secp/` (sandak app, модулен монолит) |
 | **Стек** | `fmrbaga → httpdbaga · jwtbaga · ormbaga → pgbaga / boilaDB` (виж [BASE.md](../BASE.md)) |
 | **План** | [PLAN.md](PLAN.md) |
+| **Документация** | [docs/README.md](docs/README.md) |
 
 ## Какво е secp
 

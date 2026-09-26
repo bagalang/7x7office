@@ -1,0 +1,211 @@
+// system/flows.baga — дефиниции на потоци и запис в опашката.
+//
+// Опростен Cells Flows: едно събитие (качване или ръчно) и едно
+// действие (премести, копирай, писмо). Няма визуално платно.
+
+import "ormbaga/orm.baga"
+import "fmrbaga/jsonx.baga"
+import "../tree/auth.baga"
+import "../tree/model.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn flow_table() -> str {
+    return "ops_flows"
+}
+
+fn flow_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" {
+        return 1
+    }
+    if be == "boiladb" {
+        return 1
+    }
+    if be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn flow_all(db: OrmDb) -> OrmQuery !IO !Net {
+    return orm_query(db, "SELECT id, name, enabled, trigger, path_prefix, ext, action, arg FROM ops_flows ORDER BY id")?
+}
+
+fn flow_one(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
+    let sql = "SELECT id, name, enabled, trigger, path_prefix, ext, action, arg FROM ops_flows WHERE id = $1"
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    let nulls = vec_new()
+    vec_push(nulls, 0)
+    return orm_query_params(db, sql, vals, nulls)?
+}
+
+fn flow_norm_ext(raw: str) -> str {
+    let t = str_trim(raw)
+    let mut s = t
+    if str_starts_with(s, ".") {
+        s = substr(s, 1, len(s))
+    }
+    return to_lower(s)
+}
+
+fn flow_dir(raw: str) -> str {
+    let n = tree_norm(str_trim(raw))
+    if n == "" {
+        return "/"
+    }
+    return n
+}
+
+// 1 когато пътят вече е в папката-цел на преместване/копиране.
+fn flow_in_dest(path: str, action: str, arg: str) -> i64 {
+    if action != "move" {
+        if action != "copy" {
+            return 0
+        }
+    }
+    let dest = flow_dir(arg)
+    if dest == "/" {
+        return 0
+    }
+    if str_starts_with(path, concat(dest, "/")) == 1 {
+        return 1
+    }
+    return 0
+}
+
+fn flow_match(path: str, prefix: str, ext: str) -> i64 {
+    if ext != "" {
+        if tree_ext(path) != ext {
+            return 0
+        }
+    }
+    if prefix == "" || prefix == "/" {
+        return 1
+    }
+    if path == prefix {
+        return 1
+    }
+    if str_starts_with(path, concat(prefix, "/")) == 1 {
+        return 1
+    }
+    return 0
+}
+
+fn flow_payload(id: i64, ws: i64, owner: i64, path: str) -> str {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", id)
+    o = jobj_i64(o, "ws", ws)
+    o = jobj_i64(o, "owner", owner)
+    o = jobj_str(o, "path", path)
+    return jobj_encode(o)
+}
+
+struct FlowKick {
+    db: OrmDb
+}
+
+// След запис на файл. Грешка в опашката не връща файла назад.
+fn flow_on_upload(db: OrmDb, ws: i64, owner: i64, path: str) -> FlowKick !IO !Net {
+    let q = flow_all(db)?
+    if orm_ok_q(q) == 0 {
+        eprintln(concat("secp flow: ", orm_err_q(q)))
+        return FlowKick { db: orm_db_q(q) }
+    }
+    let mut d = orm_db_q(q)
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        if orm_cell_by_i64(q, i, "enabled") == 1 {
+            if orm_cell_by(q, i, "trigger") == "upload" {
+                let prefix = orm_cell_by(q, i, "path_prefix")
+                let ext = orm_cell_by(q, i, "ext")
+                let action = orm_cell_by(q, i, "action")
+                let arg = orm_cell_by(q, i, "arg")
+                if flow_match(path, prefix, ext) == 1 {
+                    if flow_in_dest(path, action, arg) == 0 {
+                        let id = orm_cell_by_i64(q, i, "id")
+                        let job = ops_enqueue(d, "flow-run", flow_payload(id, ws, owner, path))?
+                        if orm_ok(job) == 0 {
+                            eprintln(concat("secp flow: ", orm_err_exec(job)))
+                            d = orm_db_exec(job)
+                        } else {
+                            d = orm_db_exec(job)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return FlowKick { db: d }
+}
+
+fn flow_json(q: OrmQuery, row: i64) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
+    o = jobj_i64(o, "enabled", orm_cell_by_i64(q, row, "enabled"))
+    o = jobj_str(o, "trigger", orm_cell_by(q, row, "trigger"))
+    o = jobj_str(o, "path_prefix", orm_cell_by(q, row, "path_prefix"))
+    o = jobj_str(o, "ext", orm_cell_by(q, row, "ext"))
+    o = jobj_str(o, "action", orm_cell_by(q, row, "action"))
+    o = jobj_str(o, "arg", orm_cell_by(q, row, "arg"))
+    return o
+}
+
+fn flow_list_json(q: OrmQuery) -> JObj {
+    let mut arr = jarr_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        arr = jarr_obj(arr, flow_json(q, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_raw(o, "items", jarr_encode(arr))
+    o = jobj_i64(o, "count", orm_nrows(q))
+    return o
+}
+
+struct FlowWrite {
+    ok: i64,
+    db: OrmDb,
+    id: i64,
+    err: str
+}
+
+fn flow_insert(db: OrmDb, name: str, trigger: str, prefix: str, ext: str, action: str, arg: str) -> FlowWrite !IO !Net {
+    let mut cols = vec_new()
+    let mut vals = vec_new()
+    let mut d = db
+    let mut id: i64 = 0
+    if flow_boila()? == 1 {
+        let c = orm_count_sql(d, "SELECT MAX(id) AS count FROM ops_flows")?
+        if orm_ok_c(c) == 0 {
+            return FlowWrite { ok: 0, db: orm_db_c(c), id: 0, err: orm_err_c(c) }
+        }
+        id = orm_count_n(c) + 1
+        d = orm_db_c(c)
+        vec_push(cols, "id")
+        vec_push(vals, int_to_str(id))
+    }
+    vec_push(cols, "name")
+    vec_push(cols, "enabled")
+    vec_push(cols, "trigger")
+    vec_push(cols, "path_prefix")
+    vec_push(cols, "ext")
+    vec_push(cols, "action")
+    vec_push(cols, "arg")
+    vec_push(vals, name)
+    vec_push(vals, "1")
+    vec_push(vals, trigger)
+    vec_push(vals, prefix)
+    vec_push(vals, ext)
+    vec_push(vals, action)
+    vec_push(vals, arg)
+    let ins = orm_insert_strs(d, flow_table(), cols, vals)?
+    if orm_ok(ins) == 0 {
+        return FlowWrite { ok: 0, db: orm_db_exec(ins), id: 0, err: orm_err_exec(ins) }
+    }
+    return FlowWrite { ok: 1, db: orm_db_exec(ins), id: id, err: "" }
+}

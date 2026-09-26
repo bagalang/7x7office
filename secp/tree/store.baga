@@ -11,6 +11,7 @@ import "activity_model.baga"
 import "text.baga"
 import "../data/blobs.baga"
 import "../data/crypt.baga"
+import "../system/flows.baga"
 import "ormbaga/orm.baga"
 import "fmrbaga/action.baga"
 import "fmrbaga/jsonx.baga"
@@ -246,6 +247,8 @@ fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumb
     }
     let logged = tree_activity_log(orm_db_q(q), ws, owner, verb, nid, path, "")?
     d = logged.db
+    let kick = flow_on_upload(d, ws, owner, path)?
+    d = kick.db
     let mut o = tree_node_json(q, 0)
     o = jobj_str(o, "etag", hash)
     return act_ok(d, o)

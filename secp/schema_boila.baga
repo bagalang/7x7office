@@ -287,5 +287,12 @@ fn secp_boila_migrations() -> MigrationSet {
         "CREATE INDEX IF NOT EXISTS index_sys_settings_on_skey ON sys_settings (skey)",
         "DROP INDEX IF EXISTS index_sys_settings_on_skey"
     )
+    set = migrate_add(
+        set,
+        20260926039,
+        "create_ops_flows",
+        "CREATE TABLE IF NOT EXISTS ops_flows (id BIGINT, name TEXT, enabled BIGINT, trigger TEXT, path_prefix TEXT, ext TEXT, action TEXT, arg TEXT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS ops_flows"
+    )
     return set
 }
