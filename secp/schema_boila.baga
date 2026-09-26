@@ -294,5 +294,75 @@ fn secp_boila_migrations() -> MigrationSet {
         "CREATE TABLE IF NOT EXISTS ops_flows (id BIGINT, name TEXT, enabled BIGINT, trigger TEXT, path_prefix TEXT, ext TEXT, action TEXT, arg TEXT, PRIMARY KEY (id))",
         "DROP TABLE IF EXISTS ops_flows"
     )
+    set = migrate_add(
+        set,
+        20260926040,
+        "add_idm_users_totp_enabled",
+        "ALTER TABLE idm_users ADD COLUMN totp_enabled BIGINT",
+        "ALTER TABLE idm_users DROP COLUMN totp_enabled"
+    )
+    set = migrate_add(
+        set,
+        20260926041,
+        "add_idm_users_totp_secret",
+        "ALTER TABLE idm_users ADD COLUMN totp_secret_b32 TEXT",
+        "ALTER TABLE idm_users DROP COLUMN totp_secret_b32"
+    )
+    set = migrate_add(
+        set,
+        20260926042,
+        "add_idm_users_totp_pending",
+        "ALTER TABLE idm_users ADD COLUMN totp_pending_b32 TEXT",
+        "ALTER TABLE idm_users DROP COLUMN totp_pending_b32"
+    )
+    set = migrate_add(
+        set,
+        20260926043,
+        "create_idm_recovery",
+        "CREATE TABLE IF NOT EXISTS idm_recovery (id BIGINT, user_id BIGINT, code_hash TEXT, used BIGINT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS idm_recovery"
+    )
+    set = migrate_add(
+        set,
+        20260926044,
+        "index_idm_recovery_user",
+        "CREATE INDEX IF NOT EXISTS index_idm_recovery_on_user ON idm_recovery (user_id)",
+        "DROP INDEX IF EXISTS index_idm_recovery_on_user"
+    )
+    set = migrate_add(
+        set,
+        20260926045,
+        "create_idm_user_s3",
+        "CREATE TABLE IF NOT EXISTS idm_user_s3 (user_id BIGINT, enabled BIGINT, provider TEXT, endpoint TEXT, bucket TEXT, region TEXT, access_key TEXT, secret_key TEXT, PRIMARY KEY (user_id))",
+        "DROP TABLE IF EXISTS idm_user_s3"
+    )
+    set = migrate_add(
+        set,
+        20260926046,
+        "create_s3_outbox",
+        "CREATE TABLE IF NOT EXISTS s3_outbox (id BIGINT, workspace_id BIGINT, hash TEXT, ready_at BIGINT, sealed BIGINT, state BIGINT, attempts BIGINT, PRIMARY KEY (id))",
+        "DROP TABLE IF EXISTS s3_outbox"
+    )
+    set = migrate_add(
+        set,
+        20260926047,
+        "index_s3_outbox_due",
+        "CREATE INDEX IF NOT EXISTS index_s3_outbox_on_due ON s3_outbox (state, ready_at)",
+        "DROP INDEX IF EXISTS index_s3_outbox_on_due"
+    )
+    set = migrate_add(
+        set,
+        20260926048,
+        "index_s3_outbox_ws_hash",
+        "CREATE INDEX IF NOT EXISTS index_s3_outbox_on_ws_hash ON s3_outbox (workspace_id, hash)",
+        "DROP INDEX IF EXISTS index_s3_outbox_on_ws_hash"
+    )
+    set = migrate_add(
+        set,
+        20260926049,
+        "create_idm_dav_keys",
+        "CREATE TABLE IF NOT EXISTS idm_dav_keys (user_id BIGINT, key_hash TEXT, prefix TEXT, created_at BIGINT, PRIMARY KEY (user_id))",
+        "DROP TABLE IF EXISTS idm_dav_keys"
+    )
     return set
 }

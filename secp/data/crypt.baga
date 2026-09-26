@@ -4,9 +4,11 @@
 // на пространството. Старият път се чете, докато файлът е още там.
 
 import "blobs.baga"
-import "s3live.baga"
+import "outbox.baga"
+import "store_for.baga"
 import "keys.baga"
 import "seal.baga"
+import "s3baga/s3.baga"
 import "ormbaga/orm.baga"
 import "std/crypto/sha256.baga"
 import "std/bytes/bytes.baga"
@@ -42,27 +44,58 @@ fn data_master() -> DataMaster !IO {
     return DataMaster { on: 1, key: bytes_from_vec(bytes_from_hex(h)), err: "" }
 }
 
-fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random !Time {
-    let store = data_s3_view(db)?
-    if store.ok == 0 {
-        return DataSaved { db: store.db, hash: "", err: store.err }
+// S3 не се пипа тук. Байтовите лягат на диска и влизат в опашката.
+fn data_save_queue(db: OrmDb, ws: i64, hash: str, sealed: i64) -> DataSaved !IO !Net !Time {
+    let up = s3_obj_touch(db, ws, hash, sealed)?
+    if orm_ok(up) == 0 {
+        return DataSaved { db: orm_db_exec(up), hash: "", err: orm_err_exec(up) }
     }
-    let master = data_master()?
-    if master.err != "" {
-        return DataSaved { db: store.db, hash: "", err: master.err }
-    }
-    if master.on == 0 {
-        let hash = data_blob_put(store.on, store.cfg, content)?
+    return DataSaved { db: orm_db_exec(up), hash: hash, err: "" }
+}
+
+fn data_save_plain(db: OrmDb, ws: i64, on: i64, cfg: S3Cfg, content: bytes) -> DataSaved !IO !Net !Random !Time {
+    if on == 0 {
+        let hash = data_blob_put(0, cfg, content)?
         if hash == "" {
-            return DataSaved { db: store.db, hash: "", err: "blob write failed" }
+            return DataSaved { db: db, hash: "", err: "blob write failed" }
         }
-        return DataSaved { db: store.db, hash: hash, err: "" }
+        return DataSaved { db: db, hash: hash, err: "" }
     }
     let hash = sha256_b_hex(content)
-    if data_blob_exists_ws(store.on, store.cfg, ws, hash)? == 1 {
-        return DataSaved { db: store.db, hash: hash, err: "" }
+    let cur = s3_obj_load(db, ws, hash)?
+    if cur.err != "" {
+        return DataSaved { db: cur.db, hash: "", err: cur.err }
     }
-    let key = data_key_ensure(store.db, ws, master.key)?
+    if cur.state == 1 {
+        return DataSaved { db: cur.db, hash: hash, err: "" }
+    }
+    let wrote = data_blob_put(0, cfg, content)?
+    if wrote == "" {
+        return DataSaved { db: cur.db, hash: "", err: "blob write failed" }
+    }
+    return data_save_queue(cur.db, ws, hash, 0)?
+}
+
+fn data_save_sealed(db: OrmDb, ws: i64, on: i64, cfg: S3Cfg, content: bytes, master: DataMaster) -> DataSaved !IO !Net !Random !Time {
+    let hash = sha256_b_hex(content)
+    let mut d = db
+    if on == 1 {
+        let cur = s3_obj_load(db, ws, hash)?
+        if cur.err != "" {
+            return DataSaved { db: cur.db, hash: "", err: cur.err }
+        }
+        if cur.state == 1 {
+            return DataSaved { db: cur.db, hash: hash, err: "" }
+        }
+        d = cur.db
+    }
+    if data_blob_exists_ws(0, cfg, ws, hash)? == 1 {
+        if on == 1 {
+            return data_save_queue(d, ws, hash, 1)?
+        }
+        return DataSaved { db: d, hash: hash, err: "" }
+    }
+    let key = data_key_ensure(d, ws, master.key)?
     if key.err != "" {
         return DataSaved { db: key.db, hash: "", err: key.err }
     }
@@ -74,34 +107,41 @@ fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random !
     if bytes_len(packed) < 30 {
         return DataSaved { db: key.db, hash: "", err: "blob seal failed" }
     }
-    let rc = data_blob_write_ws(store.on, store.cfg, ws, hash, packed)?
+    // При S3 пишем локално. Качването е след тишината, не в тази заявка.
+    let rc = data_blob_write_ws(0, cfg, ws, hash, packed)?
     if rc < 0 {
         return DataSaved { db: key.db, hash: "", err: "blob write failed" }
+    }
+    if on == 1 {
+        return data_save_queue(key.db, ws, hash, 1)?
     }
     return DataSaved { db: key.db, hash: hash, err: "" }
 }
 
-fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net !Random !Time {
-    if hash == "" {
-        return DataGot { db: db, body: bytes_new(0), err: "" }
-    }
-    let store = data_s3_view(db)?
+fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random !Time {
+    let store = data_store_for(db, ws)?
     if store.ok == 0 {
-        return DataGot { db: store.db, body: bytes_new(0), err: store.err }
-    }
-    if data_blob_exists_ws(store.on, store.cfg, ws, hash)? == 0 {
-        let body = data_blob_get(store.on, store.cfg, hash)?
-        return DataGot { db: store.db, body: body, err: "" }
+        return DataSaved { db: store.db, hash: "", err: store.err }
     }
     let master = data_master()?
     if master.err != "" {
-        return DataGot { db: store.db, body: bytes_new(0), err: master.err }
+        return DataSaved { db: store.db, hash: "", err: master.err }
     }
     if master.on == 0 {
-        return DataGot { db: store.db, body: bytes_new(0), err: "blob is encrypted" }
+        return data_save_plain(store.db, ws, store.on, store.cfg, content)?
     }
-    let packed = data_blob_read_ws(store.on, store.cfg, ws, hash)?
-    let key = data_key_load(store.db, ws, master.key)?
+    return data_save_sealed(store.db, ws, store.on, store.cfg, content, master)?
+}
+
+fn data_open_sealed(db: OrmDb, ws: i64, packed: bytes) -> DataGot !IO !Net {
+    let master = data_master()?
+    if master.err != "" {
+        return DataGot { db: db, body: bytes_new(0), err: master.err }
+    }
+    if master.on == 0 {
+        return DataGot { db: db, body: bytes_new(0), err: "blob is encrypted" }
+    }
+    let key = data_key_load(db, ws, master.key)?
     if key.err != "" {
         return DataGot { db: key.db, body: bytes_new(0), err: key.err }
     }
@@ -110,4 +150,34 @@ fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net !Random !Time {
         return DataGot { db: key.db, body: bytes_new(0), err: "blob decrypt failed" }
     }
     return DataGot { db: key.db, body: opened.pt, err: "" }
+}
+
+fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net !Random !Time {
+    if hash == "" {
+        return DataGot { db: db, body: bytes_new(0), err: "" }
+    }
+    let store = data_store_for(db, ws)?
+    if store.ok == 0 {
+        return DataGot { db: store.db, body: bytes_new(0), err: store.err }
+    }
+    if data_blob_exists_ws(0, store.cfg, ws, hash)? == 1 {
+        let packed = data_blob_read_ws(0, store.cfg, ws, hash)?
+        return data_open_sealed(store.db, ws, packed)?
+    }
+    let plain = data_blob_get(0, store.cfg, hash)?
+    if bytes_len(plain) > 0 {
+        return DataGot { db: store.db, body: plain, err: "" }
+    }
+    if store.on == 0 {
+        return DataGot { db: store.db, body: bytes_new(0), err: "" }
+    }
+    let remote = data_blob_get(1, store.cfg, hash)?
+    if bytes_len(remote) > 0 {
+        return DataGot { db: store.db, body: remote, err: "" }
+    }
+    let packed = data_blob_read_ws(1, store.cfg, ws, hash)?
+    if bytes_len(packed) < 1 {
+        return DataGot { db: store.db, body: bytes_new(0), err: "" }
+    }
+    return data_open_sealed(store.db, ws, packed)?
 }

@@ -3,6 +3,7 @@
 // HttpOnly cookie so the tplbaga UI works without JS.
 
 import "user_model.baga"
+import "totp_actions.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -12,6 +13,7 @@ import "ormbaga/orm.baga"
 import "httpdbaga/http.baga"
 import "querybaga/query.baga"
 import "std/str/str.baga"
+import "std/time/time.baga"
 
 fn secp_cookie_name() -> str {
     return "secp_token"
@@ -73,7 +75,7 @@ fn secp_cookie_clear() -> str {
     return concat(secp_cookie_name(), "=; Path=/; HttpOnly; Max-Age=0")
 }
 
-fn act_login(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+fn act_login(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let form = login_form_parse(ctx)
     if form.ok == 0 {
         return act_err(db, 400, form.err)
@@ -84,6 +86,21 @@ fn act_login(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let auth = idm_user_authenticate(db, form.email, form.password)?
     if auth.ok == 0 {
         return act_err(db, 401, "invalid email or password")
+    }
+    let uq = idm_user_find_by_email(db, auth.email)?
+    if orm_ok_q(uq) == 0 {
+        return act_err(orm_db_q(uq), 500, orm_err_q(uq))
+    }
+    let mut totp: i64 = 0
+    if orm_nrows(uq) > 0 {
+        totp = orm_cell_by_i64(uq, 0, "totp_enabled")
+    }
+    let dbu = orm_db_q(uq)
+    if totp == 1 {
+        if form.is_form == 1 {
+            return act_err(dbu, 401, "2FA required")
+        }
+        return act_login_mfa(ctx, dbu, auth.email)?
     }
     let mut extra = "\"uid\":"
     extra = concat(extra, int_to_str(auth.id))
@@ -96,7 +113,7 @@ fn act_login(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         let mut r = http_response(303, "")
         r = http_set_header(r, "Location", "/")
         r = http_set_header(r, "Set-Cookie", secp_cookie_set(token))
-        return fmr_out(r, db)
+        return fmr_out(r, dbu)
     }
     let mut o = jobj_new()
     o = jobj_str(o, "access_token", token)
@@ -105,7 +122,7 @@ fn act_login(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     o = jobj_i64(o, "uid", auth.id)
     let mut r = fmr_ok_obj(o)
     r = http_set_header(r, "Set-Cookie", secp_cookie_set(token))
-    return fmr_out(r, db)
+    return fmr_out(r, dbu)
 }
 
 fn act_logout(ctx: FmrCtx, db: OrmDb) -> FmrOut {
@@ -127,5 +144,6 @@ fn act_me(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let mut o = idm_user_to_json(q, 0)
     o = jobj_str(o, "sub", orm_cell_by(q, 0, "email"))
+    o = jobj_i64(o, "totp_enabled", orm_cell_by_i64(q, 0, "totp_enabled"))
     return act_ok(orm_db_q(q), o)
 }

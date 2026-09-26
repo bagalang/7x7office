@@ -11,6 +11,7 @@ std = { path = "../../../std" }
 fmrbaga = { path = "../../fmrbaga" }
 ormbaga = { path = "../../ormbaga" }
 jwtbaga = { path = "../../jwtbaga" }
+otpbaga = { path = "../../otpbaga" }
 tplbaga = { path = "../../tplbaga" }
 querybaga = { path = "../../querybaga" }
 pathbaga = { path = "../../pathbaga" }

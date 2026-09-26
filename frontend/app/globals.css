@@ -374,6 +374,7 @@ a { color: var(--accent); text-decoration: none; }
   margin-bottom: 4px;
   word-break: break-all;
 }
+.menu a.menu-item { text-decoration: none; }
 .menu .menu-item {
   display: flex;
   align-items: center;
@@ -829,6 +830,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 .share-tabs .btn { border: 0; border-radius: 0; }
 .share-tabs .btn.active { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+.profile-tabs { margin: 0 0 18px; }
 
 .share-field {
   display: inline-flex;
@@ -1290,6 +1292,16 @@ a { color: var(--accent); text-decoration: none; }
   .btn { padding: 9px 16px; }
 }
 
+.preset-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.code-list {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
 .settings-block { max-width: 880px; margin-bottom: 28px; }
 .settings-block h2 { margin: 0 0 4px; font-size: 18px; }
 .settings-grid {

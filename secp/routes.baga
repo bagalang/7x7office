@@ -6,6 +6,10 @@ import "system/actions.baga"
 import "idm/auth_actions.baga"
 import "idm/reset_actions.baga"
 import "idm/user_actions.baga"
+import "idm/profile_actions.baga"
+import "idm/totp_actions.baga"
+import "idm/storage_actions.baga"
+import "idm/dav_key_actions.baga"
 import "idm/ws_actions.baga"
 import "idm/ws_members.baga"
 import "tree/actions.baga"
@@ -30,7 +34,9 @@ import "ui/actions.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/deps.baga"
+import "fmrbaga/respond.baga"
 import "fmrbaga/config.baga"
+import "jwtbaga/jwt.baga"
 import "ormbaga/orm.baga"
 
 fn fmr_build_app() -> FmrApp !IO {
@@ -44,6 +50,14 @@ fn fmr_build_app() -> FmrApp !IO {
 }
 
 fn fmr_before(ctx: FmrCtx) -> DepResult {
+    let token = fmr_bearer(ctx)
+    if token != "" {
+        if jwt_claim_int(token, "mfa") == 1 {
+            if ctx.route_id != RID_MFA() {
+                return dep_fail(ctx, fmr_401("2FA token is not a session"))
+            }
+        }
+    }
     return dep_ok(ctx)
 }
 
@@ -66,10 +80,20 @@ fn secp_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_UI_HOME() { return act_ui_home(ctx, db) }
     if id == RID_UI_LOGIN() { return act_ui_login(ctx, db) }
     if id == RID_LOGIN() { return act_login(ctx, db)? }
+    if id == RID_MFA() { return act_mfa(ctx, db)? }
     if id == RID_LOGOUT() { return act_logout(ctx, db) }
     if id == RID_FORGOT() { return act_forgot(ctx, db)? }
     if id == RID_RESET() { return act_reset(ctx, db)? }
     if id == RID_ME() { return act_me(ctx, db)? }
+    if id == RID_PASSWORD() { return act_password(ctx, db)? }
+    if id == RID_TOTP_START() { return act_totp_start(ctx, db)? }
+    if id == RID_TOTP_CONFIRM() { return act_totp_confirm(ctx, db)? }
+    if id == RID_TOTP_DISABLE() { return act_totp_disable(ctx, db)? }
+    if id == RID_STORAGE_GET() { return act_storage_get(ctx, db)? }
+    if id == RID_STORAGE_PUT() { return act_storage_put(ctx, db)? }
+    if id == RID_STORAGE_CHECK() { return act_storage_check(ctx, db)? }
+    if id == RID_DAV_KEY_GET() { return act_dav_key_get(ctx, db)? }
+    if id == RID_DAV_KEY_POST() { return act_dav_key_post(ctx, db)? }
     if id == RID_USERS_LIST() { return act_users_list(ctx, db)? }
     if id == RID_USERS_CREATE() { return act_users_create(ctx, db)? }
     if id == RID_WS_LIST() { return act_ws_list(ctx, db)? }

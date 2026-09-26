@@ -1,9 +1,10 @@
 // tree/dav_scope.baga — кой и върху кое пространство е WebDAV заявката.
 //
-// Пътят е /dav/<id>/... . id 0 е личното пространство. Входът е Basic
-// (имейл:парола) или Bearer, защото файловият мениджър не праща JWT сам.
+// Пътят е /dav/<id>/... . id 0 е личното пространство. Basic паролата е
+// дългият ключ от профила, не паролата за вход. Bearer остава за сесия.
 
 import "auth.baga"
+import "../idm/dav_key_model.baga"
 import "acl_model.baga"
 import "../idm/user_model.baga"
 import "../idm/ws_model.baga"
@@ -55,7 +56,7 @@ fn dav_user(ctx: FmrCtx, db: OrmDb) -> IdmAuth !IO !Net {
     let h = fmr_header(ctx, "Authorization")
     let basic = dav_basic(h)
     if basic.ok == 1 {
-        return idm_user_authenticate(db, basic.user, basic.pass)?
+        return dav_key_auth(db, basic.user, basic.pass)?
     }
     let a = act_require_auth(ctx, db)
     if a.ok == 0 {

@@ -1,0 +1,145 @@
+// idm/storage_model.baga — лична S3 кофа на потребителя.
+// Тайната не излиза в JSON. Празен secret при запис пази стария.
+
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct UserS3 {
+    db: OrmDb,
+    found: i64,
+    enabled: i64,
+    provider: str,
+    endpoint: str,
+    bucket: str,
+    region: str,
+    access: str,
+    secret: str,
+    err: str
+}
+
+fn user_s3_none(db: OrmDb) -> UserS3 {
+    return UserS3 {
+        db: db,
+        found: 0,
+        enabled: 0,
+        provider: "",
+        endpoint: "",
+        bucket: "",
+        region: "",
+        access: "",
+        secret: "",
+        err: ""
+    }
+}
+
+fn user_s3_bad(db: OrmDb, err: str) -> UserS3 {
+    return UserS3 {
+        db: db,
+        found: 0,
+        enabled: 0,
+        provider: "",
+        endpoint: "",
+        bucket: "",
+        region: "",
+        access: "",
+        secret: "",
+        err: err
+    }
+}
+
+fn user_s3_load(db: OrmDb, user_id: i64) -> UserS3 !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    let sql = "SELECT user_id, enabled, provider, endpoint, bucket, region, access_key, secret_key FROM idm_user_s3 WHERE user_id = $1"
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return user_s3_bad(orm_db_q(q), orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return user_s3_none(orm_db_q(q))
+    }
+    return UserS3 {
+        db: orm_db_q(q),
+        found: 1,
+        enabled: orm_cell_by_i64(q, 0, "enabled"),
+        provider: orm_cell_by(q, 0, "provider"),
+        endpoint: orm_cell_by(q, 0, "endpoint"),
+        bucket: orm_cell_by(q, 0, "bucket"),
+        region: orm_cell_by(q, 0, "region"),
+        access: orm_cell_by(q, 0, "access_key"),
+        secret: orm_cell_by(q, 0, "secret_key"),
+        err: ""
+    }
+}
+
+fn user_s3_trim_slash(s: str) -> str {
+    let t = str_trim(s)
+    if t == "" {
+        return ""
+    }
+    if char_at(t, len(t) - 1) == 47 {
+        if len(t) < 2 {
+            return ""
+        }
+        return substr(t, 0, len(t) - 1)
+    }
+    return t
+}
+
+fn user_s3_provider(raw: str) -> str {
+    if raw == "b2" || raw == "hetzner" || raw == "r2" || raw == "custom" {
+        return raw
+    }
+    return "custom"
+}
+
+fn user_s3_save(db: OrmDb, user_id: i64, enabled: i64, provider: str, endpoint: str, bucket: str, region: str, access: str, secret: str) -> OrmExec !IO !Net {
+    let cur = user_s3_load(db, user_id)?
+    if cur.err != "" {
+        return OrmEErr(OrmExecFail { err: cur.err, tag: "", db: cur.db })
+    }
+    let mut sec = secret
+    if sec == "" {
+        sec = cur.secret
+    }
+    let prov = user_s3_provider(provider)
+    let ep = user_s3_trim_slash(endpoint)
+    let bk = str_trim(bucket)
+    let mut reg = str_trim(region)
+    if reg == "" {
+        reg = "us-east-1"
+    }
+    let ak = str_trim(access)
+    if cur.found == 1 {
+        let vals = vec_new()
+        vec_push(vals, int_to_str(enabled))
+        vec_push(vals, prov)
+        vec_push(vals, ep)
+        vec_push(vals, bk)
+        vec_push(vals, reg)
+        vec_push(vals, ak)
+        vec_push(vals, sec)
+        vec_push(vals, int_to_str(user_id))
+        let sql = "UPDATE idm_user_s3 SET enabled = $1, provider = $2, endpoint = $3, bucket = $4, region = $5, access_key = $6, secret_key = $7 WHERE user_id = $8"
+        return orm_exec_params_str(cur.db, sql, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "user_id")
+    vec_push(cols, "enabled")
+    vec_push(cols, "provider")
+    vec_push(cols, "endpoint")
+    vec_push(cols, "bucket")
+    vec_push(cols, "region")
+    vec_push(cols, "access_key")
+    vec_push(cols, "secret_key")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    vec_push(vals, int_to_str(enabled))
+    vec_push(vals, prov)
+    vec_push(vals, ep)
+    vec_push(vals, bk)
+    vec_push(vals, reg)
+    vec_push(vals, ak)
+    vec_push(vals, sec)
+    return orm_insert_strs(cur.db, "idm_user_s3", cols, vals)?
+}

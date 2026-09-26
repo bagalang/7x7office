@@ -338,6 +338,80 @@ fn secp_migrations() -> MigrationSet {
         "CREATE TABLE ops_flows (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL DEFAULT '', enabled BIGINT NOT NULL DEFAULT 1, trigger TEXT NOT NULL DEFAULT 'upload', path_prefix TEXT NOT NULL DEFAULT '', ext TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT 'mail', arg TEXT NOT NULL DEFAULT '')",
         "DROP TABLE IF EXISTS ops_flows"
     )
+    // 2FA. Секретът е Base32. pending е до потвърждение с код.
+    set = migrate_add(
+        set,
+        20260926040,
+        "add_idm_users_totp_enabled",
+        "ALTER TABLE idm_users ADD COLUMN totp_enabled BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE idm_users DROP COLUMN totp_enabled"
+    )
+    set = migrate_add(
+        set,
+        20260926041,
+        "add_idm_users_totp_secret",
+        "ALTER TABLE idm_users ADD COLUMN totp_secret_b32 TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE idm_users DROP COLUMN totp_secret_b32"
+    )
+    set = migrate_add(
+        set,
+        20260926042,
+        "add_idm_users_totp_pending",
+        "ALTER TABLE idm_users ADD COLUMN totp_pending_b32 TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE idm_users DROP COLUMN totp_pending_b32"
+    )
+    set = migrate_add(
+        set,
+        20260926043,
+        "create_idm_recovery",
+        "CREATE TABLE idm_recovery (id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL, code_hash TEXT NOT NULL, used BIGINT NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS idm_recovery"
+    )
+    set = migrate_add(
+        set,
+        20260926044,
+        "index_idm_recovery_user",
+        "CREATE INDEX index_idm_recovery_on_user ON idm_recovery (user_id)",
+        "DROP INDEX IF EXISTS index_idm_recovery_on_user"
+    )
+    // Лична кофа. secret_key не се връща от API.
+    set = migrate_add(
+        set,
+        20260926045,
+        "create_idm_user_s3",
+        "CREATE TABLE idm_user_s3 (user_id BIGINT PRIMARY KEY, enabled BIGINT NOT NULL DEFAULT 0, provider TEXT NOT NULL DEFAULT '', endpoint TEXT NOT NULL DEFAULT '', bucket TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '', access_key TEXT NOT NULL DEFAULT '', secret_key TEXT NOT NULL DEFAULT '')",
+        "DROP TABLE IF EXISTS idm_user_s3"
+    )
+    // state 0 = на диска и чака; state 1 = вече е в кофата.
+    set = migrate_add(
+        set,
+        20260926046,
+        "create_s3_outbox",
+        "CREATE TABLE s3_outbox (id BIGSERIAL PRIMARY KEY, workspace_id BIGINT NOT NULL, hash TEXT NOT NULL, ready_at BIGINT NOT NULL DEFAULT 0, sealed BIGINT NOT NULL DEFAULT 0, state BIGINT NOT NULL DEFAULT 0, attempts BIGINT NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS s3_outbox"
+    )
+    set = migrate_add(
+        set,
+        20260926047,
+        "index_s3_outbox_due",
+        "CREATE INDEX index_s3_outbox_on_due ON s3_outbox (state, ready_at)",
+        "DROP INDEX IF EXISTS index_s3_outbox_on_due"
+    )
+    set = migrate_add(
+        set,
+        20260926048,
+        "index_s3_outbox_ws_hash",
+        "CREATE UNIQUE INDEX index_s3_outbox_on_ws_hash ON s3_outbox (workspace_id, hash)",
+        "DROP INDEX IF EXISTS index_s3_outbox_on_ws_hash"
+    )
+    // Дълъг ключ за WebDAV. Самият ключ не се пази, само SHA-256.
+    set = migrate_add(
+        set,
+        20260926049,
+        "create_idm_dav_keys",
+        "CREATE TABLE idm_dav_keys (user_id BIGINT PRIMARY KEY, key_hash TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL DEFAULT 0)",
+        "DROP TABLE IF EXISTS idm_dav_keys"
+    )
     return set
 }
 

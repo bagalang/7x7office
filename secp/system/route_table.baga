@@ -82,6 +82,16 @@ fn RID_FLOWS_LIST() -> i64 { return 79 }
 fn RID_FLOWS_CREATE() -> i64 { return 80 }
 fn RID_FLOWS_DELETE() -> i64 { return 81 }
 fn RID_FLOWS_RUN() -> i64 { return 82 }
+fn RID_MFA() -> i64 { return 83 }
+fn RID_PASSWORD() -> i64 { return 84 }
+fn RID_TOTP_START() -> i64 { return 85 }
+fn RID_TOTP_CONFIRM() -> i64 { return 86 }
+fn RID_TOTP_DISABLE() -> i64 { return 87 }
+fn RID_STORAGE_GET() -> i64 { return 88 }
+fn RID_STORAGE_PUT() -> i64 { return 89 }
+fn RID_STORAGE_CHECK() -> i64 { return 90 }
+fn RID_DAV_KEY_GET() -> i64 { return 91 }
+fn RID_DAV_KEY_POST() -> i64 { return 92 }
 
 // Всяко id, което dispatch-ът трябва да поеме. Нов маршрут се добавя и тук.
 fn secp_ids() -> Vec<i64> {
@@ -158,6 +168,16 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_FLOWS_CREATE())
     vec_push(v, RID_FLOWS_DELETE())
     vec_push(v, RID_FLOWS_RUN())
+    vec_push(v, RID_MFA())
+    vec_push(v, RID_PASSWORD())
+    vec_push(v, RID_TOTP_START())
+    vec_push(v, RID_TOTP_CONFIRM())
+    vec_push(v, RID_TOTP_DISABLE())
+    vec_push(v, RID_STORAGE_GET())
+    vec_push(v, RID_STORAGE_PUT())
+    vec_push(v, RID_STORAGE_CHECK())
+    vec_push(v, RID_DAV_KEY_GET())
+    vec_push(v, RID_DAV_KEY_POST())
     return v
 }
 
@@ -179,7 +199,17 @@ fn secp_routes() -> Router {
     r = secp_add(r, "POST", "/v1/auth/logout", RID_LOGOUT(), "auth", 1, "", "-", "303", "")
     r = secp_add(r, "POST", "/v1/auth/forgot", RID_FORGOT(), "auth", 1, "ForgotRequest", "Message", "200", "")
     r = secp_add(r, "POST", "/v1/auth/reset", RID_RESET(), "auth", 1, "ResetRequest", "Message", "200", "")
+    r = secp_add(r, "POST", "/v1/auth/mfa", RID_MFA(), "auth", 1, "MfaRequest", "TokenResponse", "200", "")
     r = secp_add(r, "GET", "/v1/me", RID_ME(), "auth", 0, "", "Me", "200", "")
+    r = secp_add(r, "POST", "/v1/me/password", RID_PASSWORD(), "auth", 0, "PasswordChange", "Message", "200", "")
+    r = secp_add(r, "POST", "/v1/me/totp/start", RID_TOTP_START(), "auth", 0, "", "TotpStart", "200", "")
+    r = secp_add(r, "POST", "/v1/me/totp/confirm", RID_TOTP_CONFIRM(), "auth", 0, "TotpConfirm", "Message", "200", "")
+    r = secp_add(r, "POST", "/v1/me/totp/disable", RID_TOTP_DISABLE(), "auth", 0, "TotpDisable", "Message", "200", "")
+    r = secp_add(r, "GET", "/v1/me/storage", RID_STORAGE_GET(), "auth", 0, "", "UserStorage", "200", "")
+    r = secp_add(r, "PUT", "/v1/me/storage", RID_STORAGE_PUT(), "auth", 0, "UserStorage", "UserStorage", "200", "")
+    r = secp_add(r, "POST", "/v1/me/storage/check", RID_STORAGE_CHECK(), "auth", 0, "", "StorageCheck", "200", "")
+    r = secp_add(r, "GET", "/v1/me/dav", RID_DAV_KEY_GET(), "auth", 0, "", "DavKey", "200", "")
+    r = secp_add(r, "POST", "/v1/me/dav", RID_DAV_KEY_POST(), "auth", 0, "", "DavKey", "200", "")
     r = secp_add(r, "GET", "/v1/users", RID_USERS_LIST(), "idm", 0, "", "UserList", "200", "")
     r = secp_add(r, "POST", "/v1/users", RID_USERS_CREATE(), "idm", 0, "UserCreate", "User", "201", "")
     r = secp_add(r, "GET", "/v1/workspaces", RID_WS_LIST(), "idm", 0, "", "WorkspaceList", "200", "")

@@ -1,0 +1,75 @@
+// idm/totp_model.baga — колони за TOTP и хешове на резервни кодове.
+// Суровият код се показва веднъж. В базата остава SHA-256 от otpbaga.
+
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn totp_set(db: OrmDb, id: i64, enabled: i64, secret: str, pending: str) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(enabled))
+    vec_push(vals, secret)
+    vec_push(vals, pending)
+    vec_push(vals, int_to_str(id))
+    let sql = "UPDATE idm_users SET totp_enabled = $1, totp_secret_b32 = $2, totp_pending_b32 = $3 WHERE id = $4"
+    return orm_exec_params_str(db, sql, vals)?
+}
+
+fn totp_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn rec_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM idm_recovery")?
+}
+
+fn rec_delete_user(db: OrmDb, user_id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    return orm_exec_params_str(db, "DELETE FROM idm_recovery WHERE user_id = $1", vals)?
+}
+
+fn rec_insert(db: OrmDb, user_id: i64, code_hash: str) -> OrmExec !IO !Net {
+    if totp_boila()? == 1 {
+        let c = rec_next_id(db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "user_id")
+        vec_push(cols, "code_hash")
+        vec_push(cols, "used")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(orm_count_n(c) + 1))
+        vec_push(vals, int_to_str(user_id))
+        vec_push(vals, code_hash)
+        vec_push(vals, "0")
+        return orm_insert_strs(orm_db_c(c), "idm_recovery", cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "user_id")
+    vec_push(cols, "code_hash")
+    vec_push(cols, "used")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    vec_push(vals, code_hash)
+    vec_push(vals, "0")
+    return orm_insert_strs(db, "idm_recovery", cols, vals)?
+}
+
+fn rec_unused(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(user_id))
+    return orm_query_params_str(db, "SELECT id, code_hash, used FROM idm_recovery WHERE user_id = $1 AND used = 0", vals)?
+}
+
+fn rec_mark_used(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_exec_params_str(db, "UPDATE idm_recovery SET used = 1 WHERE id = $1", vals)?
+}

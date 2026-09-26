@@ -1,0 +1,279 @@
+// idm/totp_actions.baga — 2FA през otpbaga.
+// Пълен JWT се дава чак след кода. mfa=1 не е сесия.
+
+import "user_model.baga"
+import "totp_model.baga"
+import "otpbaga/otp.baga"
+import "fmrbaga/app.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/deps.baga"
+import "fmrbaga/jsonx.baga"
+import "jwtbaga/jwt.baga"
+import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+import "std/random/random.baga"
+
+fn totp_try_code(secret_b32: str, code: str) -> i64 !Time {
+    if secret_b32 == "" || code == "" {
+        return 0
+    }
+    let secret = otp_secret_from_b32(secret_b32)
+    return totp_verify_now(secret, code, otp_cfg_default())?
+}
+
+fn totp_try_recovery(db: OrmDb, user_id: i64, code: str) -> i64 !IO !Net {
+    let q = rec_unused(db, user_id)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return 0
+    }
+    let hashes = vec_new()
+    let ids = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        vec_push(hashes, orm_cell_by(q, i, "code_hash"))
+        vec_push(ids, int_to_str(orm_cell_by_i64(q, i, "id")))
+        i = i + 1
+    }
+    let hit = recovery_match(code, hashes)
+    if hit < 0 {
+        return 0
+    }
+    let rid = parse_int(vec_get(ids, hit))
+    let mk = rec_mark_used(orm_db_q(q), rid)?
+    if orm_ok(mk) == 0 {
+        return 0
+    }
+    return 1
+}
+
+fn act_login_mfa(ctx: FmrCtx, db: OrmDb, email: str) -> FmrOut !Time {
+    let now = time_now_ms()? / 1000
+    let exp = now + 300
+    let extra = concat("\"iat\":", int_to_str(now))
+    let extra2 = concat(extra, concat(",\"exp\":", int_to_str(exp)))
+    let extra3 = concat(extra2, ",\"mfa\":1")
+    let token = fmr_issue_token(ctx.jwt_secret, email, extra3)
+    let mut o = jobj_new()
+    o = jobj_str(o, "mfa", "totp")
+    o = jobj_str(o, "mfa_token", token)
+    o = jobj_i64(o, "expires_in", 300)
+    return act_ok(db, o)
+}
+
+fn act_mfa(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let tok = jreq_str(b.doc, b.root, "mfa_token")
+    if tok.ok == 0 || tok.val == "" {
+        return act_err(db, 400, "mfa_token required")
+    }
+    let code = jreq_str(b.doc, b.root, "code")
+    if code.ok == 0 || code.val == "" {
+        return act_err(db, 400, "code required")
+    }
+    if jwt_decode(ctx.jwt_secret, tok.val) == "" {
+        return act_err(db, 401, "invalid 2FA token")
+    }
+    let now = time_now_ms()? / 1000
+    if jwt_time_ok(tok.val, now) == 0 {
+        return act_err(db, 401, "invalid 2FA token")
+    }
+    if jwt_claim_int(tok.val, "mfa") != 1 {
+        return act_err(db, 401, "invalid 2FA token")
+    }
+    let sub = jwt_claim_str(tok.val, "sub")
+    if sub == "" {
+        return act_err(db, 401, "invalid 2FA token")
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let uq = idm_user_find_by_email(db, to_lower(str_trim(sub)))?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 401, "invalid code")
+    }
+    if orm_cell_by_i64(uq, 0, "totp_enabled") != 1 {
+        return act_err(orm_db_q(uq), 401, "invalid code")
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    let email = orm_cell_by(uq, 0, "email")
+    let secret = orm_cell_by(uq, 0, "totp_secret_b32")
+    let is_admin = orm_cell_by_i64(uq, 0, "is_admin")
+    if totp_try_code(secret, code.val)? == 1 {
+        return totp_issue(ctx, orm_db_q(uq), uid, email, is_admin)
+    }
+    if totp_try_recovery(orm_db_q(uq), uid, code.val)? == 1 {
+        return totp_issue(ctx, orm_db_q(uq), uid, email, is_admin)
+    }
+    return act_err(orm_db_q(uq), 401, "invalid code")
+}
+
+fn totp_issue(ctx: FmrCtx, db: OrmDb, uid: i64, email: str, is_admin: i64) -> FmrOut {
+    let mut extra = "\"uid\":"
+    extra = concat(extra, int_to_str(uid))
+    if is_admin == 1 {
+        extra = concat(extra, ",\"admin\":true")
+    }
+    let token = fmr_issue_token(ctx.jwt_secret, email, extra)
+    let mut o = jobj_new()
+    o = jobj_str(o, "access_token", token)
+    o = jobj_str(o, "token_type", "bearer")
+    o = jobj_str(o, "sub", email)
+    o = jobj_i64(o, "uid", uid)
+    let mut r = fmr_ok_obj(o)
+    r = http_set_header(r, "Set-Cookie", concat("secp_token=", concat(token, "; Path=/; HttpOnly; SameSite=Lax")))
+    return fmr_out(r, db)
+}
+
+fn act_totp_start(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    if orm_ok_db(db) == 0 {
+        return act_err(db, 503, "database unavailable")
+    }
+    let uq = idm_user_find_by_email(db, to_lower(str_trim(auth.ctx.user_sub)))?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "unknown user")
+    }
+    if orm_cell_by_i64(uq, 0, "totp_enabled") == 1 {
+        return act_err(orm_db_q(uq), 409, "2FA is already on")
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    let email = orm_cell_by(uq, 0, "email")
+    let secret = otp_secret_new(20)?
+    let b32 = otp_secret_b32(secret)
+    let uri = otp_uri(secret, "7x7office", email, otp_cfg_default())
+    let rs = recovery_make(10)?
+    let wipe = rec_delete_user(orm_db_q(uq), uid)?
+    if orm_ok(wipe) == 0 {
+        return act_err(orm_db_exec(wipe), 500, orm_err_exec(wipe))
+    }
+    let mut d = orm_db_exec(wipe)
+    let mut i: i64 = 0
+    while i < vec_len(rs.hashes) {
+        let ins = rec_insert(d, uid, vec_get(rs.hashes, i))?
+        if orm_ok(ins) == 0 {
+            return act_err(orm_db_exec(ins), 500, orm_err_exec(ins))
+        }
+        d = orm_db_exec(ins)
+        i = i + 1
+    }
+    let up = totp_set(d, uid, 0, "", b32)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let mut codes = jarr_new()
+    i = 0
+    while i < vec_len(rs.codes) {
+        codes = jarr_str(codes, vec_get(rs.codes, i))
+        i = i + 1
+    }
+    let mut o = jobj_new()
+    o = jobj_str(o, "secret", b32)
+    o = jobj_str(o, "uri", uri)
+    o = jobj_raw(o, "recovery_codes", jarr_encode(codes))
+    return act_ok(orm_db_exec(up), o)
+}
+
+fn act_totp_confirm(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let code = jreq_str(b.doc, b.root, "code")
+    if code.ok == 0 {
+        return act_422_field(db, "code", code)
+    }
+    let uq = idm_user_find_by_email(db, to_lower(str_trim(auth.ctx.user_sub)))?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "unknown user")
+    }
+    let pending = orm_cell_by(uq, 0, "totp_pending_b32")
+    if pending == "" {
+        return act_err(orm_db_q(uq), 400, "2FA setup was not started")
+    }
+    if totp_try_code(pending, code.val)? == 0 {
+        return act_err(orm_db_q(uq), 401, "invalid code")
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    let up = totp_set(orm_db_q(uq), uid, 1, pending, "")?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "totp_enabled", 1)
+    return act_ok(orm_db_exec(up), o)
+}
+
+fn act_totp_disable(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let password = jreq_str(b.doc, b.root, "password")
+    if password.ok == 0 {
+        return act_422_field(db, "password", password)
+    }
+    let code = jreq_str(b.doc, b.root, "code")
+    if code.ok == 0 {
+        return act_422_field(db, "code", code)
+    }
+    let email = to_lower(str_trim(auth.ctx.user_sub))
+    let who = idm_user_authenticate(db, email, password.val)?
+    if who.ok == 0 {
+        return act_err(db, 401, "invalid password")
+    }
+    let uq = idm_user_find_by_email(db, email)?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "unknown user")
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    let secret = orm_cell_by(uq, 0, "totp_secret_b32")
+    let mut okc = totp_try_code(secret, code.val)?
+    if okc == 0 {
+        if totp_try_recovery(orm_db_q(uq), uid, code.val)? == 1 {
+            okc = 1
+        }
+    }
+    if okc == 0 {
+        return act_err(orm_db_q(uq), 401, "invalid code")
+    }
+    let wipe = rec_delete_user(orm_db_q(uq), uid)?
+    if orm_ok(wipe) == 0 {
+        return act_err(orm_db_exec(wipe), 500, orm_err_exec(wipe))
+    }
+    let up = totp_set(orm_db_exec(wipe), uid, 0, "", "")?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "totp_enabled", 0)
+    return act_ok(orm_db_exec(up), o)
+}

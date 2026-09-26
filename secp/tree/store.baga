@@ -11,6 +11,8 @@ import "activity_model.baga"
 import "text.baga"
 import "../data/blobs.baga"
 import "../data/crypt.baga"
+import "../data/hold.baga"
+import "../data/outbox.baga"
 import "../system/flows.baga"
 import "ormbaga/orm.baga"
 import "fmrbaga/action.baga"
@@ -197,21 +199,30 @@ fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumb
         thumb = th.hash
     }
     if existing_id > 0 {
-        // Phase 5: snapshot the displaced content as a version first, so
-        // the old blob stays referenced through the overwrite.
+        // Междинен hash, който още чака S3, не става версия: иначе всяко
+        // автозаписване е отделен обект в кофата.
+        let mut snapped: i64 = 0
         if old_hash != "" && old_hash != hash {
-            let snap = tree_ver_snapshot(d, existing_id, ws, owner, path, old_size, old_hash)?
-            if orm_ok(snap) == 0 {
-                return act_err(orm_db_exec(snap), 500, orm_err_exec(snap))
+            let pend = s3_obj_load(d, ws, old_hash)?
+            if pend.err != "" {
+                return act_err(pend.db, 500, pend.err)
             }
-            d = orm_db_exec(snap)
+            d = pend.db
+            if s3_skip_snap(pend.state) == 0 {
+                let snap = tree_ver_snapshot(d, existing_id, ws, owner, path, old_size, old_hash)?
+                if orm_ok(snap) == 0 {
+                    return act_err(orm_db_exec(snap), 500, orm_err_exec(snap))
+                }
+                d = orm_db_exec(snap)
+                snapped = 1
+            }
         }
         let upd = tree_update_file(d, existing_id, size, hash, thumb)?
         if orm_ok(upd) == 0 {
             return act_err(orm_db_exec(upd), 500, orm_err_exec(upd))
         }
         d = orm_db_exec(upd)
-        if old_hash != "" && old_hash != hash {
+        if snapped == 1 {
             let cap = tree_ver_cap(d, existing_id, tree_versions_keep()?)?
             if orm_ok_q(cap) == 0 {
                 return act_err(orm_db_q(cap), 500, orm_err_q(cap))

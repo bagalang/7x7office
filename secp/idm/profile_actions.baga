@@ -1,0 +1,52 @@
+// idm/profile_actions.baga — смяна на паролата от самия потребител.
+
+import "user_model.baga"
+import "reset_model.baga"
+import "../lib/pass.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+import "std/random/random.baga"
+
+fn act_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let current = jreq_str(b.doc, b.root, "current")
+    if current.ok == 0 || current.val == "" {
+        return act_err(db, 400, "current password required")
+    }
+    let password = jreq_str(b.doc, b.root, "password")
+    if password.ok == 0 {
+        return act_422_field(db, "password", password)
+    }
+    if len(password.val) < 8 {
+        return act_err(db, 400, "password must be at least 8 characters")
+    }
+    let email = to_lower(str_trim(auth.ctx.user_sub))
+    let who = idm_user_authenticate(db, email, current.val)?
+    if who.ok == 0 {
+        return act_err(db, 401, "invalid password")
+    }
+    let salt = pass_new_salt()?
+    let iters = pass_iters_cfg()?
+    let hash = pass_make(password.val, salt, iters)
+    let up = idm_user_set_password(db, who.id, hash, salt, iters)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    return act_ok(orm_db_exec(up), o)
+}

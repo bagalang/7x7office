@@ -1,0 +1,158 @@
+// idm/storage_actions.baga — лична S3 кофа от профила.
+// Празен secret_key при запис пази досегашния. Проверката е един HEAD.
+
+import "user_model.baga"
+import "storage_model.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "s3baga/s3.baga"
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+fn storage_me(ctx: FmrCtx, db: OrmDb) -> UserS3 !IO !Net {
+    let email = to_lower(str_trim(ctx.user_sub))
+    let uq = idm_user_find_by_email(db, email)?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return user_s3_bad(orm_db_q(uq), "unknown user")
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    return user_s3_load(orm_db_q(uq), uid)?
+}
+
+fn storage_json(row: UserS3) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_i64(o, "enabled", row.enabled)
+    o = jobj_str(o, "provider", row.provider)
+    o = jobj_str(o, "endpoint", row.endpoint)
+    o = jobj_str(o, "bucket", row.bucket)
+    o = jobj_str(o, "region", row.region)
+    o = jobj_str(o, "access_key", row.access)
+    let mut set: i64 = 0
+    if row.secret != "" {
+        set = 1
+    }
+    o = jobj_i64(o, "secret_set", set)
+    return o
+}
+
+fn act_storage_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let row = storage_me(auth.ctx, db)?
+    if row.err != "" {
+        return act_err(row.db, 404, row.err)
+    }
+    return act_ok(row.db, storage_json(row))
+}
+
+fn storage_field(b: JBody, name: str) -> str {
+    let f = jreq_str(b.doc, b.root, name)
+    if f.ok == 0 {
+        return ""
+    }
+    return f.val
+}
+
+fn act_storage_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let en = jreq_i64(b.doc, b.root, "enabled")
+    if en.ok == 0 {
+        return act_422_field(db, "enabled", en)
+    }
+    let mut enabled = en.num
+    if enabled != 0 {
+        enabled = 1
+    }
+    let provider = storage_field(b, "provider")
+    let endpoint = user_s3_trim_slash(storage_field(b, "endpoint"))
+    let bucket = str_trim(storage_field(b, "bucket"))
+    let region = str_trim(storage_field(b, "region"))
+    let access = str_trim(storage_field(b, "access_key"))
+    let secret = storage_field(b, "secret_key")
+    if enabled == 1 {
+        if endpoint == "" || bucket == "" || access == "" {
+            return act_err(db, 400, "endpoint, bucket and access key are required")
+        }
+        if len(endpoint) > 300 || len(bucket) > 200 {
+            return act_err(db, 400, "endpoint or bucket is too long")
+        }
+    }
+    let email = to_lower(str_trim(auth.ctx.user_sub))
+    let uq = idm_user_find_by_email(db, email)?
+    if orm_ok_q(uq) == 0 || orm_nrows(uq) < 1 {
+        return act_err(orm_db_q(uq), 404, "unknown user")
+    }
+    let uid = orm_cell_by_i64(uq, 0, "id")
+    let cur = user_s3_load(orm_db_q(uq), uid)?
+    if cur.err != "" {
+        return act_err(cur.db, 500, cur.err)
+    }
+    if enabled == 1 && secret == "" && cur.secret == "" {
+        return act_err(cur.db, 400, "secret key is required")
+    }
+    let up = user_s3_save(cur.db, uid, enabled, provider, endpoint, bucket, region, access, secret)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let row = user_s3_load(orm_db_exec(up), uid)?
+    if row.err != "" {
+        return act_err(row.db, 500, row.err)
+    }
+    return act_ok(row.db, storage_json(row))
+}
+
+fn act_storage_check(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let row = storage_me(auth.ctx, db)?
+    if row.err != "" {
+        return act_err(row.db, 404, row.err)
+    }
+    if row.enabled == 0 || row.endpoint == "" || row.bucket == "" || row.access == "" || row.secret == "" {
+        return act_err(row.db, 400, "storage is off")
+    }
+    let mut region = row.region
+    if region == "" {
+        region = "us-east-1"
+    }
+    let timeout = parse_int(str_trim(env("S3_TIMEOUT_S")?))
+    let mut t = timeout
+    if t < 1 {
+        t = 30
+    }
+    let cfg = s3_cfg(row.endpoint, row.bucket, row.access, row.secret, region, t)
+    let h = s3_head_cfg(cfg, "secp-probe")?
+    if h.ok == 0 {
+        return act_err(row.db, 502, h.err)
+    }
+    if h.status == 401 || h.status == 403 {
+        return act_err(row.db, 401, "access denied")
+    }
+    if h.status >= 500 {
+        return act_err(row.db, 502, "storage endpoint failed")
+    }
+    if h.status != 200 && h.status != 204 && h.status != 404 {
+        return act_err(row.db, 502, concat("storage status ", int_to_str(h.status)))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_i64(o, "status", h.status)
+    return act_ok(row.db, o)
+}

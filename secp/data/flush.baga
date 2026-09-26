@@ -1,0 +1,214 @@
+// data/flush.baga — качва чакащите blob-ове, след като файлът е тих.
+//
+// Докато Collabora държи заключване, таймерът се бута. След успеха
+// локалното копие се маха: байтовете остават в кофата на собственика.
+
+import "blobs.baga"
+import "hold.baga"
+import "outbox.baga"
+import "store_for.baga"
+import "../tree/model.baga"
+import "../tree/versions.baga"
+import "../wopi/locks.baga"
+import "s3baga/s3.baga"
+import "ormbaga/orm.baga"
+import "std/bytes/bytes.baga"
+import "std/time/time.baga"
+
+struct S3Lock {
+    db: OrmDb,
+    locked: i64,
+    err: str
+}
+
+fn s3_hash_locked(db: OrmDb, hash: str, now: i64) -> S3Lock !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, hash)
+    let q = orm_query_params_str(db, "SELECT id FROM tree_nodes WHERE hash = $1", vals)?
+    if orm_ok_q(q) == 0 {
+        return S3Lock { db: orm_db_q(q), locked: 0, err: orm_err_q(q) }
+    }
+    let mut d = orm_db_q(q)
+    let mut i: i64 = 0
+    let mut n = orm_nrows(q)
+    if n > 32 {
+        n = 32
+    }
+    while i < n {
+        let id = orm_cell_by_i64(q, i, "id")
+        let row = wopi_lock_load(d, id)?
+        if row.err != "" {
+            return S3Lock { db: row.db, locked: 0, err: row.err }
+        }
+        d = row.db
+        if row.found == 1 && row.exp > now {
+            return S3Lock { db: d, locked: 1, err: "" }
+        }
+        i = i + 1
+    }
+    return S3Lock { db: d, locked: 0, err: "" }
+}
+
+fn s3_refs_sum(a: OrmCount, b: OrmCount) -> OrmCount {
+    if orm_ok_c(a) == 0 {
+        return a
+    }
+    if orm_ok_c(b) == 0 {
+        return b
+    }
+    return OrmCOk(OrmCountOk { count: orm_count_n(a) + orm_count_n(b), db: orm_db_c(b) })
+}
+
+fn s3_refs_ws(db: OrmDb, ws: i64, hash: str) -> OrmCount !IO !Net {
+    let wn = tree_hash_refs_ws(db, ws, hash)?
+    if orm_ok_c(wn) == 0 {
+        return wn
+    }
+    let wv = tree_ver_refs_ws(orm_db_c(wn), ws, hash)?
+    return s3_refs_sum(wn, wv)
+}
+
+fn s3_refs_all(db: OrmDb, hash: str) -> OrmCount !IO !Net {
+    let gn = tree_hash_refs(db, hash)?
+    if orm_ok_c(gn) == 0 {
+        return gn
+    }
+    let gv = tree_ver_refs(orm_db_c(gn), hash)?
+    return s3_refs_sum(gn, gv)
+}
+
+fn s3_local_body(ws: i64, hash: str, sealed: i64) -> bytes !IO !Net !Random !Time {
+    let cfg = s3_cfg("", "", "", "", "", 0)
+    if sealed == 1 {
+        if data_blob_exists_ws(0, cfg, ws, hash)? == 0 {
+            return bytes_new(0)
+        }
+        return data_blob_read_ws(0, cfg, ws, hash)?
+    }
+    return data_blob_get(0, cfg, hash)?
+}
+
+fn s3_put_body(cfg: S3Cfg, ws: i64, hash: str, sealed: i64, body: bytes) -> i64 !IO !Net !Random !Time {
+    if sealed == 1 {
+        let p = s3_put_cfg(cfg, data_rel_ws(ws, hash), body)?
+        if p.ok == 0 || p.status >= 300 {
+            return 0
+        }
+        return 1
+    }
+    let p = s3_put_cfg(cfg, data_rel(hash), body)?
+    if p.ok == 0 || p.status >= 300 {
+        return 0
+    }
+    return 1
+}
+
+fn s3_drop_local(ws: i64, hash: str, sealed: i64) -> i64 !IO !Net !Random !Time {
+    let cfg = s3_cfg("", "", "", "", "", 0)
+    if sealed == 1 {
+        return data_blob_delete_ws(0, cfg, ws, hash)?
+    }
+    return data_blob_delete(0, cfg, hash)?
+}
+
+struct S3One {
+    db: OrmDb,
+    n: i64
+}
+
+fn s3_one(db: OrmDb, n: i64) -> S3One {
+    return S3One { db: db, n: n }
+}
+
+fn s3_flush_one(db: OrmDb, id: i64, ws: i64, hash: str, sealed: i64, attempts: i64, now: i64) -> S3One !IO !Net !Random !Time {
+    let ws_refs = s3_refs_ws(db, ws, hash)?
+    if orm_ok_c(ws_refs) == 0 {
+        return s3_one(orm_db_c(ws_refs), 0)
+    }
+    if orm_count_n(ws_refs) < 1 {
+        let all = s3_refs_all(orm_db_c(ws_refs), hash)?
+        if orm_ok_c(all) == 0 {
+            return s3_one(orm_db_c(all), 0)
+        }
+        if sealed == 1 {
+            s3_drop_local(ws, hash, 1)?
+        }
+        if sealed == 0 && orm_count_n(all) < 1 {
+            s3_drop_local(ws, hash, 0)?
+        }
+        let ex = s3_obj_drop(orm_db_c(all), id)?
+        return s3_one(orm_db_exec(ex), 0)
+    }
+    let lock = s3_hash_locked(orm_db_c(ws_refs), hash, now)?
+    if lock.err != "" {
+        return s3_one(lock.db, 0)
+    }
+    let delay = s3_delay_s()?
+    if lock.locked == 1 {
+        let later = s3_obj_later(lock.db, id, now + delay, attempts)?
+        return s3_one(orm_db_exec(later), 0)
+    }
+    let store = data_store_for(lock.db, ws)?
+    if store.ok == 0 || store.on == 0 {
+        let ex = s3_obj_drop(store.db, id)?
+        return s3_one(orm_db_exec(ex), 0)
+    }
+    let body = s3_local_body(ws, hash, sealed)?
+    if bytes_len(body) < 1 {
+        let later = s3_obj_later(store.db, id, now + delay, attempts + 1)?
+        return s3_one(orm_db_exec(later), 0)
+    }
+    let put = s3_put_body(store.cfg, ws, hash, sealed, body)?
+    if put == 0 {
+        let later = s3_obj_later(store.db, id, now + delay, attempts + 1)?
+        return s3_one(orm_db_exec(later), 0)
+    }
+    let marked = s3_obj_stored(store.db, id)?
+    if orm_ok(marked) == 0 {
+        return s3_one(orm_db_exec(marked), 0)
+    }
+    if sealed == 1 {
+        s3_drop_local(ws, hash, 1)?
+        return s3_one(orm_db_exec(marked), 1)
+    }
+    // Общият файл на диска се маха само ако никое друго пространство не го сочи.
+    let all = s3_refs_all(orm_db_exec(marked), hash)?
+    if orm_ok_c(all) == 0 {
+        return s3_one(orm_db_c(all), 1)
+    }
+    let mine = s3_refs_ws(orm_db_c(all), ws, hash)?
+    if orm_ok_c(mine) == 0 {
+        return s3_one(orm_db_c(mine), 1)
+    }
+    if orm_count_n(all) == orm_count_n(mine) {
+        s3_drop_local(ws, hash, 0)?
+    }
+    return s3_one(orm_db_c(mine), 1)
+}
+
+// Връща колко обекта са качени този tick.
+fn s3_flush_tick(db: OrmDb) -> i64 !IO !Net !Random !Time {
+    if orm_ok_db(db) == 0 {
+        return 0
+    }
+    let now = time_now_ms()? / 1000
+    let q = s3_obj_due(db, now)?
+    if orm_ok_q(q) == 0 {
+        return 0
+    }
+    let mut d = orm_db_q(q)
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        let id = orm_cell_by_i64(q, i, "id")
+        let ws = orm_cell_by_i64(q, i, "workspace_id")
+        let hash = orm_cell_by(q, i, "hash")
+        let sealed = orm_cell_by_i64(q, i, "sealed")
+        let att = orm_cell_by_i64(q, i, "attempts")
+        let one = s3_flush_one(d, id, ws, hash, sealed, att, now)?
+        d = one.db
+        n = n + one.n
+        i = i + 1
+    }
+    return n
+}

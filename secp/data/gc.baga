@@ -1,0 +1,83 @@
+// data/gc.baga — махане на blob, който вече никой не сочи.
+//
+// Чакащ ред (state 0) се трие само от диска: в кофата не е стигал.
+// Качен ред се трие от кофата на собственика. Стар обект без ред е
+// в общата кофа, ако тя е била включена.
+
+import "blobs.baga"
+import "outbox.baga"
+import "store_for.baga"
+import "s3live.baga"
+import "s3baga/s3.baga"
+import "ormbaga/orm.baga"
+
+fn data_gc_local(ws: i64, hash: str, drop_ws: i64, drop_plain: i64) -> i64 !IO !Net !Random !Time {
+    let cfg = s3_cfg("", "", "", "", "", 0)
+    if drop_ws == 1 {
+        data_blob_delete_ws(0, cfg, ws, hash)?
+    }
+    if drop_plain == 1 {
+        data_blob_delete(0, cfg, hash)?
+    }
+    return 0
+}
+
+fn data_gc_key(on: i64, cfg: S3Cfg, ws: i64, hash: str, sealed: i64) -> i64 !IO !Net !Random !Time {
+    if on == 0 {
+        return 0
+    }
+    if sealed == 1 {
+        return data_blob_delete_ws(1, cfg, ws, hash)?
+    }
+    return data_blob_delete(1, cfg, hash)?
+}
+
+fn data_gc_blob(db: OrmDb, ws: i64, hash: str, drop_ws: i64, drop_plain: i64) -> i64 !IO !Net !Random !Time {
+    if hash == "" {
+        return 0
+    }
+    if drop_ws == 0 && drop_plain == 0 {
+        return 0
+    }
+    data_gc_local(ws, hash, drop_ws, drop_plain)?
+    let cur = s3_obj_load(db, ws, hash)?
+    if cur.err != "" {
+        return 0
+    }
+    if cur.found == 1 && cur.state == 0 {
+        if cur.sealed == 1 && drop_ws == 1 {
+            s3_obj_drop(cur.db, cur.id)?
+        }
+        if cur.sealed == 0 && drop_plain == 1 {
+            s3_obj_drop(cur.db, cur.id)?
+        }
+        return 0
+    }
+    if cur.found == 1 && cur.state == 1 {
+        let store = data_store_for(cur.db, ws)?
+        if cur.sealed == 1 && drop_ws == 1 {
+            let rc = data_gc_key(store.on, store.cfg, ws, hash, 1)?
+            if rc == 0 {
+                s3_obj_drop(store.db, cur.id)?
+            }
+        }
+        if cur.sealed == 0 && drop_plain == 1 {
+            let rc = data_gc_key(store.on, store.cfg, ws, hash, 0)?
+            if rc == 0 {
+                s3_obj_drop(store.db, cur.id)?
+            }
+        }
+        return 0
+    }
+    let glob = data_s3_view(cur.db)?
+    if glob.ok == 0 || glob.on == 0 {
+        return 0
+    }
+    if drop_ws == 1 {
+        data_gc_key(1, glob.cfg, ws, hash, 1)?
+    }
+    if drop_plain == 1 {
+        data_gc_key(1, glob.cfg, ws, hash, 0)?
+    }
+    return 0
+}

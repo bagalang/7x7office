@@ -123,14 +123,23 @@ export async function authedFetchWs(path: string, init: RequestInit = {}): Promi
 
 export type TokenResponse = {
   access_token?: string;
+  mfa?: string;
+  mfa_token?: string;
   sub?: string;
 };
 
 export async function login(email: string, password: string): Promise<TokenResponse> {
   const data = await request<TokenResponse>("/v1/auth/login", "POST", { email, password });
+  if (data.mfa_token) return data;
   if (!data.access_token) throw new ApiError(401, "няма токен");
   setToken(data.access_token);
   return data;
+}
+
+export async function loginMfa(mfaToken: string, code: string): Promise<void> {
+  const data = await request<TokenResponse>("/v1/auth/mfa", "POST", { mfa_token: mfaToken, code });
+  if (!data.access_token) throw new ApiError(401, "няма токен");
+  setToken(data.access_token);
 }
 
 // Заявка за смяна на забравена парола. Сървърът винаги отговаря 200

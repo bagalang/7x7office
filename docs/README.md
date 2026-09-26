@@ -11,4 +11,5 @@
 | Офис в Collabora | [office.md](office.md) |
 | Пространства, права, споделяне, чат | [sharing.md](sharing.md) |
 | Админ: потребители, отчети, SMTP, S3, домейн | [admin.md](admin.md) |
+| Моят профил: парола, 2FA, лична S3 кофа | [profile.md](profile.md) |
 | Потоци | [flows.md](flows.md) |

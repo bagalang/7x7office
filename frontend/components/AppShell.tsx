@@ -9,7 +9,7 @@ import { PreferencesButton } from "./PreferencesButton";
 import { useWorkspace } from "./WorkspaceProvider";
 import { useActivityBadge, useRealtime } from "./RealtimeProvider";
 import { api, FsUsage } from "../lib/api";
-import { IconActivity, IconChat, IconClose, IconFileText, IconFolder, IconLogout, IconSearch, IconSettings, IconUsers, IconWorkspaces } from "./icons";
+import { IconActivity, IconChat, IconClose, IconFileText, IconFolder, IconLogout, IconSearch, IconSettings, IconUser, IconUsers, IconWorkspaces } from "./icons";
 import { ActivityFeed } from "./ActivityFeed";
 import { ChatPanel } from "./ChatPanel";
 
@@ -172,6 +172,9 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
           {menuOpen ? (
             <div className="menu" role="menu">
               <div className="menu-head">{email}</div>
+              <Link href="/profile" role="menuitem" className="menu-item" onClick={() => setMenuOpen(false)}>
+                <IconUser /> {t("nav.profile")}
+              </Link>
               <button
                 type="button"
                 role="menuitem"
@@ -197,6 +200,9 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
         </Link>
         <Link href="/workspaces" className={`nav-item${pathname === "/workspaces" ? " active" : ""}`}>
           <IconWorkspaces /> {t("nav.workspaces")}
+        </Link>
+        <Link href="/profile" className={`nav-item${pathname === "/profile" ? " active" : ""}`}>
+          <IconUser /> {t("nav.profile")}
         </Link>
         {me?.is_admin === 1 ? (
           <Link href="/users" className={`nav-item${pathname === "/users" ? " active" : ""}`}>

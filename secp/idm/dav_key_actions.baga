@@ -1,0 +1,102 @@
+// idm/dav_key_actions.baga — ключ и адрес за папката, от профила.
+// GET не връща ключа. POST издава нов и го показва веднъж.
+
+import "user_model.baga"
+import "dav_key_model.baga"
+import "../system/site.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct DavWho {
+    db: OrmDb,
+    ok: i64,
+    id: i64,
+    email: str
+}
+
+fn dav_who(ctx: FmrCtx, db: OrmDb) -> DavWho !IO !Net {
+    let email = to_lower(str_trim(ctx.user_sub))
+    let q = idm_user_find_by_email(db, email)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return DavWho { db: orm_db_q(q), ok: 0, id: 0, email: "" }
+    }
+    return DavWho {
+        db: orm_db_q(q),
+        ok: 1,
+        id: orm_cell_by_i64(q, 0, "id"),
+        email: orm_cell_by(q, 0, "email")
+    }
+}
+
+struct DavUrl {
+    db: OrmDb,
+    url: str,
+    err: str
+}
+
+fn dav_folder_url(db: OrmDb) -> DavUrl !IO !Net {
+    let site = site_public(db)?
+    if site.ok == 0 {
+        return DavUrl { db: site.db, url: "", err: site.err }
+    }
+    if site.url == "" {
+        return DavUrl { db: site.db, url: "http://127.0.0.1:3010/dav/0", err: "" }
+    }
+    return DavUrl { db: site.db, url: concat(site.url, "/dav/0"), err: "" }
+}
+
+fn dav_key_json(url: str, email: str, has: i64, prefix: str, key: str) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "url", url)
+    o = jobj_str(o, "user", email)
+    o = jobj_i64(o, "has_key", has)
+    o = jobj_str(o, "prefix", prefix)
+    if key != "" {
+        o = jobj_str(o, "key", key)
+    }
+    return o
+}
+
+fn act_dav_key_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let who = dav_who(auth.ctx, db)?
+    if who.ok == 0 {
+        return act_err(who.db, 404, "unknown user")
+    }
+    let row = dav_key_load(who.db, who.id)?
+    if row.err != "" {
+        return act_err(row.db, 500, row.err)
+    }
+    let url = dav_folder_url(row.db)?
+    if url.err != "" {
+        return act_err(url.db, 500, url.err)
+    }
+    return act_ok(url.db, dav_key_json(url.url, who.email, row.found, row.prefix, ""))
+}
+
+fn act_dav_key_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let who = dav_who(auth.ctx, db)?
+    if who.ok == 0 {
+        return act_err(who.db, 404, "unknown user")
+    }
+    let secret = dav_key_mint()?
+    let row = dav_key_save(who.db, who.id, secret)?
+    if row.err != "" {
+        return act_err(row.db, 500, row.err)
+    }
+    let url = dav_folder_url(row.db)?
+    if url.err != "" {
+        return act_err(url.db, 500, url.err)
+    }
+    return act_ok(url.db, dav_key_json(url.url, who.email, 1, row.prefix, secret))
+}

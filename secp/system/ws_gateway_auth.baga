@@ -89,6 +89,9 @@ fn wsg_authenticate(p: WsHandshakeParse, secret: str) -> WsgAuth !IO !Net !Rando
     if payload == "" {
         return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "bad token" }
     }
+    if jwt_claim_int(token, "mfa") == 1 {
+        return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "mfa" }
+    }
     let b = jbody_parse_str(payload)
     if b.ok == 0 {
         return WsgAuth { ok: 0, user_id: 0, is_admin: 0, reason: "bad claims" }

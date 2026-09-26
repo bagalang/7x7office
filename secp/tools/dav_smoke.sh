@@ -11,7 +11,7 @@ PGURL="${PGURL:-postgresql://bagatest:pas+123@127.0.0.1:5432}"
 DATA_ROOT="${DAV_SMOKE_DATA:-/tmp/secp_dav_storage}"
 PSQL_SRV="psql -qAt $PGURL/postgres"
 B="http://127.0.0.1:$PORT"
-U='superadmin@secp.local:123+123'
+U=''
 PIDF=/tmp/secp_dav.pid
 FAILED=0
 pass() { echo "  ok   $1"; }
@@ -55,6 +55,17 @@ psql -qAt "$PGURL/postgres" -c "CREATE DATABASE $DB TEMPLATE template0" >/dev/nu
   echo "не мога да вдигна $DB"; exit 2; }
 rm -rf "$DATA_ROOT"
 boot || exit 1
+
+echo "=== ключ за папката ==="
+LOGIN=$(curl -s -X POST "$B/v1/auth/login" -H 'content-type: application/json' \
+  -d '{"email":"superadmin@secp.local","password":"123+123"}')
+JWT=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("access_token",""))' "$LOGIN")
+MINT=$(curl -s -X POST "$B/v1/me/dav" -H "Authorization: Bearer $JWT")
+KEY=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("key",""))' "$MINT")
+[[ "$KEY" == dav_* ]] && pass "ключът е издаден" || fail "няма ключ: $MINT"
+U="superadmin@secp.local:$KEY"
+[[ "$(curl -s -o /dev/null -w '%{http_code}' -u 'superadmin@secp.local:123+123' -X PROPFIND "$B/dav/0/")" == "401" ]] \
+  && pass "паролата за вход не отваря WebDAV" || fail "късата парола мина"
 
 echo "=== OPTIONS и вход ==="
 HDR=$(curl -s -D - -o /dev/null -X OPTIONS "$B/dav/0")
@@ -104,7 +115,7 @@ echo "=== триене и отказ ==="
 
 if command -v rclone >/dev/null 2>&1; then
   echo "=== rclone ==="
-  PASS=$(rclone obscure '123+123')
+  PASS=$(rclone obscure "$KEY")
   echo -n 'from rclone' >/tmp/dav_r.txt
   if rclone copyto /tmp/dav_r.txt :webdav:inbox/from-rclone.txt \
       --webdav-url "$B/dav/0" --webdav-vendor other \

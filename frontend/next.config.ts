@@ -22,6 +22,7 @@ const nextConfig: NextConfig = {
       // /share/<token> (различна пътека, за да не се бият).
       { source: "/s/:path*", destination: `${BACKEND}/s/:path*` },
       { source: "/wopi/:path*", destination: `${BACKEND}/wopi/:path*` },
+      { source: "/dav/:path*", destination: `${BACKEND}/dav/:path*` },
       // ЗАБЕЛЕЖКА: НЕ слагаме `/ws` тук. `rewrites()` в Next проксира само
       // HTTP заявки — WS upgrade-ът минава през него като обикновена заявка и
       // връща 404. Каналът се стига или директно на `SECP_WS_PORT` (dev, през

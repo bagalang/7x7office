@@ -1,0 +1,46 @@
+// data/hold.baga — кога един blob чака и кога тръгва към S3.
+//
+// Редакцията пише на диска. Към кофата тръгва един обект, след като файлът
+// е тих и не е отворен. Иначе всяко автозаписване е отделна транзакция.
+
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+// Празно или под 30 секунди → 3 минути. Над час се реже до час.
+fn s3_delay_norm(n: i64) -> i64 {
+    if n < 30 {
+        return 180
+    }
+    if n > 3600 {
+        return 3600
+    }
+    return n
+}
+
+fn s3_delay_s() -> i64 !IO {
+    let raw = str_trim(env("SECP_S3_DELAY_S")?)
+    if raw == "" {
+        return 180
+    }
+    return s3_delay_norm(parse_int(raw))
+}
+
+// 1, когато hash-ът още не е в кофата. Междинно автозаписване не става версия.
+fn s3_skip_snap(state: i64) -> i64 {
+    if state == 0 {
+        return 1
+    }
+    return 0
+}
+
+// 0 = никой не го сочи, махни го без S3. 1 = файлът е отворен, изчакай.
+// 2 = качи.
+fn s3_flush_kind(refs: i64, locked: i64) -> i64 {
+    if refs < 1 {
+        return 0
+    }
+    if locked == 1 {
+        return 1
+    }
+    return 2
+}

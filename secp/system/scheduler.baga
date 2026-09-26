@@ -16,6 +16,7 @@
 
 import "ormbaga/orm.baga"
 import "../data/crypt.baga"
+import "../data/flush.baga"
 import "mail_jobs.baga"
 import "flows_run.baga"
 import "trace.baga"
@@ -179,6 +180,14 @@ fn ops_tick(db: OrmDb) -> i64 !IO !Net !Time !Random {
             n = n + 1
         }
         i = i + 1
+    }
+    let flushed = s3_flush_tick(d)
+        catch !IO => 0
+        catch !Net => 0
+        catch !Time => 0
+        catch !Random => 0
+    if flushed > 0 {
+        n = n + flushed
     }
     return n
 }

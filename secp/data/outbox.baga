@@ -1,0 +1,146 @@
+// data/outbox.baga — ред за blob, който още не е в кофата или вече е там.
+//
+// state 0 = на диска, чака. state 1 = качен. Няма ред = стар обект отпреди
+// опашката (може да е в общата кофа).
+
+import "hold.baga"
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+
+struct S3Obj {
+    db: OrmDb,
+    found: i64,
+    id: i64,
+    state: i64,
+    sealed: i64,
+    err: str
+}
+
+fn s3_obj_none(db: OrmDb) -> S3Obj {
+    return S3Obj { db: db, found: 0, id: 0, state: 0 - 1, sealed: 0, err: "" }
+}
+
+fn s3_obj_bad(db: OrmDb, err: str) -> S3Obj {
+    return S3Obj { db: db, found: 0, id: 0, state: 0 - 1, sealed: 0, err: err }
+}
+
+fn s3_obj_boila() -> i64 !IO {
+    let be = env("ORM_BACKEND")?
+    if be == "boila" || be == "boiladb" || be == "boilaDB" {
+        return 1
+    }
+    return 0
+}
+
+fn s3_obj_load(db: OrmDb, ws: i64, hash: str) -> S3Obj !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, hash)
+    let q = orm_query_params_str(db, "SELECT id, state, sealed FROM s3_outbox WHERE workspace_id = $1 AND hash = $2", vals)?
+    if orm_ok_q(q) == 0 {
+        return s3_obj_bad(orm_db_q(q), orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return s3_obj_none(orm_db_q(q))
+    }
+    return S3Obj {
+        db: orm_db_q(q),
+        found: 1,
+        id: orm_cell_by_i64(q, 0, "id"),
+        state: orm_cell_by_i64(q, 0, "state"),
+        sealed: orm_cell_by_i64(q, 0, "sealed"),
+        err: ""
+    }
+}
+
+fn s3_obj_next_id(db: OrmDb) -> OrmCount !IO !Net {
+    return orm_count_sql(db, "SELECT MAX(id) AS count FROM s3_outbox")?
+}
+
+// Нов hash или бутане на таймера, докато още не е качен.
+fn s3_obj_touch(db: OrmDb, ws: i64, hash: str, sealed: i64) -> OrmExec !IO !Net !Time {
+    let cur = s3_obj_load(db, ws, hash)?
+    if cur.err != "" {
+        return OrmEErr(OrmExecFail { err: cur.err, tag: "", db: cur.db })
+    }
+    let now = time_now_ms()? / 1000
+    let ready = now + s3_delay_s()?
+    if cur.found == 1 {
+        if cur.state == 1 {
+            let keep = vec_new()
+            vec_push(keep, int_to_str(cur.id))
+            return orm_exec_params_str(cur.db, "UPDATE s3_outbox SET state = 1 WHERE id = $1", keep)?
+        }
+        let vals = vec_new()
+        vec_push(vals, int_to_str(ready))
+        vec_push(vals, int_to_str(sealed))
+        vec_push(vals, int_to_str(cur.id))
+        return orm_exec_params_str(cur.db, "UPDATE s3_outbox SET ready_at = $1, sealed = $2, state = 0 WHERE id = $3", vals)?
+    }
+    if s3_obj_boila()? == 1 {
+        let c = s3_obj_next_id(cur.db)?
+        if orm_ok_c(c) == 0 {
+            return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
+        }
+        let cols = vec_new()
+        vec_push(cols, "id")
+        vec_push(cols, "workspace_id")
+        vec_push(cols, "hash")
+        vec_push(cols, "ready_at")
+        vec_push(cols, "sealed")
+        vec_push(cols, "state")
+        vec_push(cols, "attempts")
+        let vals = vec_new()
+        vec_push(vals, int_to_str(orm_count_n(c) + 1))
+        vec_push(vals, int_to_str(ws))
+        vec_push(vals, hash)
+        vec_push(vals, int_to_str(ready))
+        vec_push(vals, int_to_str(sealed))
+        vec_push(vals, "0")
+        vec_push(vals, "0")
+        return orm_insert_strs(orm_db_c(c), "s3_outbox", cols, vals)?
+    }
+    let cols = vec_new()
+    vec_push(cols, "workspace_id")
+    vec_push(cols, "hash")
+    vec_push(cols, "ready_at")
+    vec_push(cols, "sealed")
+    vec_push(cols, "state")
+    vec_push(cols, "attempts")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    vec_push(vals, hash)
+    vec_push(vals, int_to_str(ready))
+    vec_push(vals, int_to_str(sealed))
+    vec_push(vals, "0")
+    vec_push(vals, "0")
+    return orm_insert_strs(cur.db, "s3_outbox", cols, vals)?
+}
+
+fn s3_obj_stored(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_exec_params_str(db, "UPDATE s3_outbox SET state = 1, ready_at = 0, attempts = 0 WHERE id = $1", vals)?
+}
+
+fn s3_obj_later(db: OrmDb, id: i64, ready: i64, attempts: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ready))
+    vec_push(vals, int_to_str(attempts))
+    vec_push(vals, int_to_str(id))
+    return orm_exec_params_str(db, "UPDATE s3_outbox SET ready_at = $1, attempts = $2 WHERE id = $3", vals)?
+}
+
+fn s3_obj_drop(db: OrmDb, id: i64) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(id))
+    return orm_exec_params_str(db, "DELETE FROM s3_outbox WHERE id = $1", vals)?
+}
+
+fn s3_obj_due(db: OrmDb, now: i64) -> OrmQuery !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(now))
+    return orm_query_params_str(db, "SELECT id, workspace_id, hash, sealed, attempts FROM s3_outbox WHERE state = 0 AND ready_at <= $1 ORDER BY id LIMIT 4", vals)?
+}

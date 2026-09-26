@@ -1,20 +1,20 @@
 "use client";
 
 import { createContext, useCallback, useContext, useSyncExternalStore, ReactNode } from "react";
-import { TOKEN_KEY, login as apiLogin, logout as apiLogout } from "../lib/api";
+import { TOKEN_KEY, TokenResponse, login as apiLogin, logout as apiLogout } from "../lib/api";
 import { readStorage, subscribeStorage } from "../lib/storage";
 
 interface AuthContextValue {
   authed: boolean;
   ready: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<TokenResponse>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue>({
   authed: false,
   ready: false,
-  login: async () => {},
+  login: async () => ({}),
   logout: () => {},
 });
 
@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const login = useCallback(async (email: string, password: string) => {
-    await apiLogin(email, password);
+    return apiLogin(email, password);
   }, []);
 
   const logout = useCallback(() => {

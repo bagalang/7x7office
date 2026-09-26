@@ -117,7 +117,8 @@
       приема за успех. Хванато при живата проверка на UI-а.
 - [ ] `roles`/`groups` като собствени (извън фиксираната тройка)
 - [ ] Админ UI за потребители/workspaces в tplbaga (сега е Next: `/users`, `/workspaces`)
-- [ ] otpbaga TOTP (по желание за админ), oauthbaga OIDC login (RS256/ES256 verify)
+- [x] otpbaga TOTP (2026-09-26): Моят профил, смяна на парола, 2FA с резервни кодове. OAuth остава отделно
+- [ ] oauthbaga OIDC login (RS256/ES256 verify)
 - [ ] Аудит лог на auth събития (logbaga)
 
 **Зависимости:** otpbaga, oauthbaga, jwtbaga, ormbaga
@@ -319,7 +320,8 @@
       `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_REGION` (us-east-1), `S3_TIMEOUT_S`.
       Без `SECP_BLOB` остава локалният FS. Чист тест `tests/s3_sign_test.baga`,
       жив `tools/s3_smoke.sh`. Пакетът е submodule към bagalang/s3baga
-- [ ] blobs в rocksbaga или директно в boilaDB — по желание, когато потрябват
+- [x] Лична S3 кофа (2026-09-26): собственикът на пространството носи Backblaze, Hetzner или R2. Докато файлът е отворен, байтовете са на диска и се качват след `SECP_S3_DELAY_S` (180 с). Без синхронизатор към компютъра
+- [ ] blobs в rocksbaga или директно в boilaDB — не трябват за личната кофа; остават отложени
 - [x] otelbaga + relbaga (2026-09-25): всеки HTTP отговор, включително 404,
       носи `traceparent` (дете на входящия, ако е валиден). `SECP_OTEL_URL`
       праща span към OTLP/JSON; scheduler-ът праща `secp.scheduler`.
