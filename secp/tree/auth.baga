@@ -57,6 +57,25 @@ fn tree_qws(ctx: FmrCtx) -> i64 {
     return parse_int(raw)
 }
 
+// -1 липсва (същото пространство), -2 не е число, иначе стойността.
+// 0 значи личния, както при tree_qws.
+fn tree_qws_opt(ctx: FmrCtx, name: str) -> i64 {
+    let raw = str_trim(fmr_query(ctx, name))
+    if raw == "" {
+        return -1
+    }
+    let mut i: i64 = 0
+    let n = len(raw)
+    while i < n {
+        let c = char_at(raw, i)
+        if c < 48 || c > 57 {
+            return -2
+        }
+        i = i + 1
+    }
+    return parse_int(raw)
+}
+
 fn tree_auth_deny(db: OrmDb, out: FmrOut) -> TreeAuth {
     return TreeAuth { ok: 0, ws: 0, owner: 0, level: 0, role: "", is_admin: 0, out: out }
 }
@@ -69,6 +88,12 @@ fn tree_auth_deny(db: OrmDb, out: FmrOut) -> TreeAuth {
 // изричните ACL редове за този път (най-специфичният печели). Ако
 // липсва (празен низ), важи само ролята — както досега.
 fn tree_auth(ctx: FmrCtx, db: OrmDb, need: i64, path: str) -> TreeAuth !IO !Net {
+    return tree_auth_at(ctx, db, need, path, tree_qws(ctx))?
+}
+
+// ws_in 0 е личният. Така копието може да провери друго пространство,
+// без да сменя ?workspace_id= на източника.
+fn tree_auth_at(ctx: FmrCtx, db: OrmDb, need: i64, path: str, ws_in: i64) -> TreeAuth !IO !Net {
     let a = act_require_auth(ctx, db)
     if a.ok == 0 {
         return tree_auth_deny(db, a.out)
@@ -84,7 +109,7 @@ fn tree_auth(ctx: FmrCtx, db: OrmDb, need: i64, path: str) -> TreeAuth !IO !Net 
     let mut d = orm_db_q(q)
     let uid = orm_cell_by_i64(q, 0, "id")
     let is_admin = orm_cell_by_i64(q, 0, "is_admin")
-    let mut ws = tree_qws(ctx)
+    let mut ws = ws_in
     if ws == 0 {
         // Личният workspace се създава при нужда: файловете на стар
         // потребител трябва да имат къде да живеят още при първата заявка.

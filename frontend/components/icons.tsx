@@ -228,6 +228,20 @@ export const IconSettings = (p: P) => (
   </svg>
 );
 
+export const IconCopy = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="8" y="8" width="12" height="12" rx="1.5" />
+    <path d="M6 16H5.5A1.5 1.5 0 0 1 4 14.5v-9A1.5 1.5 0 0 1 5.5 4h9A1.5 1.5 0 0 1 16 5.5V6" />
+  </svg>
+);
+
+export const IconMove = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 8h11M12 4l4 4-4 4" />
+    <path d="M20 16H9M12 20l-4-4 4-4" />
+  </svg>
+);
+
 export const IconChat = (p: P) => (
   <svg {...base(p)}>
     <path d="M5 6h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />

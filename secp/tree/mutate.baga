@@ -18,6 +18,12 @@ import "ormbaga/orm.baga"
 import "std/str/str.baga"
 
 fn tree_remove(db: OrmDb, ws: i64, owner: i64, path: str) -> FmrOut !IO !Net !Time !Random {
+    return tree_remove_at(db, ws, owner, path, 1)?
+}
+
+// audit 0 не пише „изтри“ — за неуспешно копие и за преместване към
+// друго пространство, където събитието е „премести“ в целта.
+fn tree_remove_at(db: OrmDb, ws: i64, owner: i64, path: str, audit: i64) -> FmrOut !IO !Net !Time !Random {
     if path == "/" {
         return act_err(db, 400, "cannot delete root")
     }
@@ -80,8 +86,10 @@ fn tree_remove(db: OrmDb, ws: i64, owner: i64, path: str) -> FmrOut !IO !Net !Ti
     }
     d = sr.db
     let delroot_id = orm_cell_by_i64(sub, 0, "id")
-    let logged = tree_activity_log(d, ws, owner, activity_verb_deleted(), delroot_id, path, "")?
-    d = logged.db
+    if audit == 1 {
+        let logged = tree_activity_log(d, ws, owner, activity_verb_deleted(), delroot_id, path, "")?
+        d = logged.db
+    }
     i = 0
     while i < vec_len(hashes) {
         tree_ver_gc(d, ws, vec_get(hashes, i))?

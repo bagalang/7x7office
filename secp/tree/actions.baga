@@ -14,6 +14,7 @@ import "share_model.baga"
 import "share_roles.baga"
 import "store.baga"
 import "mutate.baga"
+import "transfer.baga"
 import "model.baga"
 import "versions.baga"
 import "text.baga"
@@ -332,19 +333,33 @@ fn act_fs_delete(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     return tree_remove(t.out.db, t.ws, t.owner, path)?
 }
 
-fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
+fn act_fs_move(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
     let from = tree_qpath(ctx, "from")
     let to = tree_qpath(ctx, "to")
+    let opt = tree_qws_opt(ctx, "dest_ws")
+    if opt == -2 {
+        return act_err(db, 400, "bad workspace")
+    }
     // Две проверки: можеш ли да махнеш от `from` И да създадеш в `to`.
     let t = tree_auth(ctx, db, 2, from)?
     if t.ok == 0 {
         return t.out
     }
-    let t2 = tree_auth(ctx, t.out.db, 2, to)?
+    if opt < 0 {
+        let t2 = tree_auth(ctx, t.out.db, 2, to)?
+        if t2.ok == 0 {
+            return t2.out
+        }
+        return tree_relocate(t2.out.db, t.ws, t.owner, from, to)?
+    }
+    let t2 = tree_auth_at(ctx, t.out.db, 2, to, opt)?
     if t2.ok == 0 {
         return t2.out
     }
-    return tree_relocate(t2.out.db, t.ws, t.owner, from, to)?
+    if t2.ws == t.ws {
+        return tree_relocate(t2.out.db, t.ws, t.owner, from, to)?
+    }
+    return tree_move_across(t2.out.db, t.ws, t2.ws, t.owner, from, to)?
 }
 
 fn act_fs_usage(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {

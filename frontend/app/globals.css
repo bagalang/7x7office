@@ -811,6 +811,32 @@ a { color: var(--accent); text-decoration: none; }
 }
 .dialog h2 { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
 .dialog.wide { width: min(100%, 560px); }
+.transfer-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-bottom: 8px; }
+.transfer-crumbs .sep { color: var(--muted); }
+.transfer-dirs {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.transfer-dirs button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.transfer-dirs button:hover { background: var(--accent-soft); }
+.transfer-empty { margin: 0; padding: 12px 10px; }
+.transfer-here { margin: 8px 0 0; }
 .dialog .dialog-actions {
   display: flex;
   justify-content: flex-end;

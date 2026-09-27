@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
-import { IconActivity, IconClose, IconDownload, IconHistory, IconPencil, IconShare, IconTrash } from "./icons";
+import { IconActivity, IconClose, IconCopy, IconDownload, IconHistory, IconMove, IconPencil, IconShare, IconTrash } from "./icons";
 import { ActivityFeed } from "./ActivityFeed";
 import {
   FsNode,
@@ -33,6 +33,8 @@ export function FilePreview({
   node,
   onClose,
   onRename,
+  onCopy,
+  onMove,
   onDelete,
   onShowVersions,
   onShare,
@@ -41,6 +43,8 @@ export function FilePreview({
   node: FsNode;
   onClose: () => void;
   onRename: () => void;
+  onCopy: () => void;
+  onMove: () => void;
   onDelete: () => void;
   onShowVersions: () => void;
   onShare: () => void;
@@ -186,6 +190,14 @@ export function FilePreview({
           >
             <IconDownload width={16} height={16} /> {t("preview.download")}
           </button>
+          <button type="button" className="btn ghost" onClick={onCopy}>
+            <IconCopy width={16} height={16} /> {t("files.copy")}
+          </button>
+          {writable ? (
+            <button type="button" className="btn ghost" onClick={onMove}>
+              <IconMove width={16} height={16} /> {t("files.move")}
+            </button>
+          ) : null}
           <button type="button" className="btn ghost" onClick={onShowVersions}>
             <IconHistory width={16} height={16} /> {t("preview.versions")}
           </button>

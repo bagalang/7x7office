@@ -12,6 +12,7 @@ import "idm/dav_key_actions.baga"
 import "idm/ws_actions.baga"
 import "idm/ws_members.baga"
 import "tree/actions.baga"
+import "tree/transfer.baga"
 import "tree/upload_actions.baga"
 import "tree/docs.baga"
 import "tree/versions_files.baga"
@@ -113,6 +114,7 @@ fn secp_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_FS_GET() { return act_fs_get(ctx, db)? }
     if id == RID_FS_DELETE() { return act_fs_delete(ctx, db)? }
     if id == RID_FS_MOVE() { return act_fs_move(ctx, db)? }
+    if id == RID_FS_COPY() { return act_fs_copy(ctx, db)? }
     if id == RID_FS_THUMB() { return act_fs_thumb(ctx, db)? }
     if id == RID_FS_USAGE() { return act_fs_usage(ctx, db)? }
     if id == RID_FS_PREVIEW() { return act_fs_preview(ctx, db)? }

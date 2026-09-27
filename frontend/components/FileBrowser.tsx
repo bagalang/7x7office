@@ -10,8 +10,10 @@ import { FilePreview, VersionsDialog } from "./FilePreview";
 import { ShareDialog } from "./ShareDialog";
 import {
   IconChevronRight,
+  IconCopy,
   IconDownload,
   IconFile,
+  IconMove,
   IconFileText,
   IconSlides,
   IconFolder,
@@ -38,6 +40,7 @@ import {
 import { readStorage, writeStorage } from "../lib/storage";
 import { isOfficeName, openOffice } from "../lib/office";
 import { blankOffice } from "../lib/blanks";
+import { TransferDialog, TransferMode } from "./TransferDialog";
 
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -127,7 +130,7 @@ type SortKey = "name" | "size" | "date";
 
 export function FileBrowser() {
   const { t, lang } = useI18n();
-  const { wsId, active } = useWorkspace();
+  const { wsId, active, workspaces } = useWorkspace();
   const writable = canWrite(active);
   const shareable = canShare(active);
   const [path, setPath] = useState("/");
@@ -153,6 +156,7 @@ export function FileBrowser() {
   const [deletePicked, setDeletePicked] = useState(false);
   const [versionsFor, setVersionsFor] = useState<FsNode | null>(null);
   const [shareFor, setShareFor] = useState<FsNode | null>(null);
+  const [transfer, setTransfer] = useState<{ mode: TransferMode; nodes: FsNode[] } | null>(null);
 
   useEffect(() => {
     const saved = readStorage("secp.view");
@@ -347,6 +351,15 @@ export function FileBrowser() {
     setRenameValue(node.name);
   }
 
+  function openTransfer(mode: TransferMode, nodes: FsNode[]) {
+    const byPath = new Map(nodes.map((node) => [node.path, node]));
+    const roots = selectionRoots(nodes.map((node) => node.path))
+      .map((path) => byPath.get(path))
+      .filter((node): node is FsNode => Boolean(node));
+    if (roots.length === 0) return;
+    setTransfer({ mode, nodes: roots });
+  }
+
   const searchBox = (
     <div className="topbar-search">
       <IconSearch width={16} height={16} />
@@ -372,8 +385,14 @@ export function FileBrowser() {
           <IconDownload />
         </button>
       ) : null}
+      <button type="button" className="icon-btn" title={t("files.copy")} onClick={() => openTransfer("copy", [node])}>
+        <IconCopy />
+      </button>
       {writable ? (
         <>
+          <button type="button" className="icon-btn" title={t("files.move")} onClick={() => openTransfer("move", [node])}>
+            <IconMove />
+          </button>
           <button type="button" className="icon-btn" title={t("files.rename")} onClick={() => startRename(node)}>
             <IconPencil />
           </button>
@@ -458,6 +477,26 @@ export function FileBrowser() {
               {t("files.new_file")}
             </button>
           ) : null}
+          {picked.size > 0 ? (
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => openTransfer("copy", items.filter((item) => picked.has(item.path)))}
+            >
+              <IconCopy width={16} height={16} />
+              {t("files.copy_selected", { count: picked.size })}
+            </button>
+          ) : null}
+          {writable && picked.size > 0 ? (
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() => openTransfer("move", items.filter((item) => picked.has(item.path)))}
+            >
+              <IconMove width={16} height={16} />
+              {t("files.move_selected", { count: picked.size })}
+            </button>
+          ) : null}
           {writable && picked.size > 0 ? (
             <button type="button" className="btn danger-ghost" onClick={() => setDeletePicked(true)}>
               <IconTrash width={16} height={16} />
@@ -515,7 +554,7 @@ export function FileBrowser() {
                 <th>{t("files.col_name")}</th>
                 <th style={{ width: 110 }}>{t("files.col_size")}</th>
                 <th style={{ width: 170 }}>{t("files.col_modified")}</th>
-                <th style={{ width: 110 }} />
+                <th style={{ width: 188 }} />
               </tr>
             </thead>
             <tbody>
@@ -644,6 +683,8 @@ export function FileBrowser() {
           node={open}
           onClose={() => setOpen(null)}
           onRename={() => startRename(open)}
+          onCopy={() => openTransfer("copy", [open])}
+          onMove={() => openTransfer("move", [open])}
           onDelete={() => setDeleteTarget(open)}
           onShowVersions={() => setVersionsFor(open)}
           onShare={() => setShareFor(open)}
@@ -785,6 +826,25 @@ export function FileBrowser() {
           path={shareFor.path}
           isDir={shareFor.is_dir}
           onClose={() => setShareFor(null)}
+        />
+      ) : null}
+
+      {transfer ? (
+        <TransferDialog
+          mode={transfer.mode}
+          nodes={transfer.nodes}
+          workspaces={workspaces}
+          sourceWsId={wsId > 0 ? wsId : (workspaces.find((w) => w.is_personal === 1)?.id ?? 0)}
+          onClose={() => setTransfer(null)}
+          onDone={() => {
+            const moved = transfer.mode === "move" ? transfer.nodes : [];
+            setTransfer(null);
+            setPicked(new Set());
+            setReload((n) => n + 1);
+            if (open && moved.some((node) => open.path === node.path || open.path.startsWith(`${node.path}/`))) {
+              setOpen(null);
+            }
+          }}
         />
       ) : null}
     </AppShell>

@@ -1,0 +1,288 @@
+// tree/transfer.baga — копиране на файл или папка, включително към друго
+// пространство. Преместването в същото пространство остава tree_relocate
+// (пази възела, версиите и правата). Към друго пространство преместването
+// е копие на текущите байтове и триене на източника.
+
+import "model.baga"
+import "store.baga"
+import "mutate.baga"
+import "auth.baga"
+import "text.baga"
+import "activity_kinds.baga"
+import "activity_model.baga"
+import "../data/crypt.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct CopyStep {
+    ok: i64,
+    db: OrmDb,
+    status: i64,
+    err: str
+}
+
+fn tree_copy_cap() -> i64 {
+    return 2000
+}
+
+fn copy_step_ok(db: OrmDb) -> CopyStep {
+    return CopyStep { ok: 1, db: db, status: 200, err: "" }
+}
+
+fn copy_step_bad(db: OrmDb, status: i64, err: str) -> CopyStep {
+    return CopyStep { ok: 0, db: db, status: status, err: err }
+}
+
+fn tree_xfer_err(from: str, to: str, same: i64, moving: i64) -> str {
+    if from == "/" || to == "/" {
+        if moving == 1 {
+            return "cannot move root"
+        }
+        return "cannot copy root"
+    }
+    if same == 0 {
+        return ""
+    }
+    if from == to {
+        return "same path"
+    }
+    if str_starts_with(to, concat(from, "/")) == 1 {
+        if moving == 1 {
+            return "cannot move into own subtree"
+        }
+        return "cannot copy into own subtree"
+    }
+    return ""
+}
+
+fn tree_xfer_code(err: str) -> i64 {
+    if err == "" {
+        return 0
+    }
+    if err == "cannot move into own subtree" {
+        return 409
+    }
+    if err == "cannot copy into own subtree" {
+        return 409
+    }
+    return 400
+}
+
+fn tree_copy_text(db: OrmDb, old_id: i64, new_id: i64, ws: i64) -> i64 !IO !Net {
+    let q = tree_text_find(db, old_id)?
+    if orm_ok_q(q) == 0 {
+        return -1
+    }
+    if orm_nrows(q) < 1 {
+        return 0
+    }
+    return tree_text_put(orm_db_q(q), new_id, ws, orm_cell_by(q, 0, "text"))
+}
+
+fn tree_copy_undo(db: OrmDb, ws: i64, owner: i64, path: str) -> OrmDb !IO !Net !Time !Random {
+    let gone = tree_remove_at(db, ws, owner, path, 0)?
+    return gone.db
+}
+
+// share 1: същият hash (също пространство, или открит blob без ключ).
+// share 0: чете от източника и записва в целта, за да има запечатано копие.
+fn tree_copy_file(db: OrmDb, src_ws: i64, dst_ws: i64, owner: i64, old_id: i64, new_path: str, size: i64, hash: str, thumb: str, share: i64) -> CopyStep !IO !Net !Time !Random {
+    let mut d = db
+    let mut out_hash = hash
+    let mut out_thumb = thumb
+    let mut out_size = size
+    if share == 0 {
+        if hash == "" {
+            if size > 0 {
+                return copy_step_bad(d, 500, "blob missing")
+            }
+        }
+        if hash != "" {
+            let got = data_open(d, src_ws, hash)?
+            if got.err != "" {
+                return copy_step_bad(got.db, 500, got.err)
+            }
+            if size > 0 && bytes_len(got.body) == 0 {
+                return copy_step_bad(got.db, 500, "blob missing")
+            }
+            let saved = data_save(got.db, dst_ws, got.body)?
+            if saved.hash == "" {
+                let err = saved.err
+                if err == "" {
+                    return copy_step_bad(saved.db, 500, "blob write failed")
+                }
+                return copy_step_bad(saved.db, 500, err)
+            }
+            d = saved.db
+            out_hash = saved.hash
+            out_size = bytes_len(got.body)
+            out_thumb = ""
+            if thumb != "" {
+                let th = tree_make_thumb(d, dst_ws, got.body)?
+                d = th.db
+                out_thumb = th.hash
+            }
+        }
+    }
+    let ins = tree_insert(d, dst_ws, owner, new_path, tree_parent_of(new_path), tree_name_of(new_path), 0, out_size, out_hash, out_thumb)?
+    if orm_ok(ins) == 0 {
+        return copy_step_bad(orm_db_exec(ins), 500, orm_err_exec(ins))
+    }
+    d = orm_db_exec(ins)
+    let q = tree_find(d, dst_ws, new_path)?
+    if orm_ok_q(q) == 0 {
+        return copy_step_bad(orm_db_q(q), 500, orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return copy_step_bad(orm_db_q(q), 500, "copy ok but node missing")
+    }
+    let tc = tree_copy_text(orm_db_q(q), old_id, orm_cell_by_i64(q, 0, "id"), dst_ws)?
+    if tc < 0 {
+        return copy_step_bad(orm_db_q(q), 500, "text index failed")
+    }
+    return copy_step_ok(orm_db_q(q))
+}
+
+fn tree_copy_fail(db: OrmDb, dst_ws: i64, owner: i64, to: str, status: i64, err: str) -> FmrOut !IO !Net !Time !Random {
+    let back = tree_copy_undo(db, dst_ws, owner, to)?
+    return act_err(back, status, err)
+}
+
+// as_move 1 пише „премести“ вместо „създаде“. Източникът не се трие тук.
+fn tree_copy_subtree(db: OrmDb, src_ws: i64, dst_ws: i64, owner: i64, from: str, to: str, as_move: i64) -> FmrOut !IO !Net !Time !Random {
+    let mut same: i64 = 0
+    if src_ws == dst_ws {
+        same = 1
+    }
+    let bad = tree_xfer_err(from, to, same, as_move)
+    if bad != "" {
+        return act_err(db, tree_xfer_code(bad), bad)
+    }
+    let dst = tree_find(db, dst_ws, to)?
+    if orm_ok_q(dst) == 0 {
+        return act_err(orm_db_q(dst), 500, orm_err_q(dst))
+    }
+    if orm_nrows(dst) > 0 {
+        return act_err(orm_db_q(dst), 409, "destination exists")
+    }
+    let sub = tree_subtree(orm_db_q(dst), src_ws, from)?
+    if orm_ok_q(sub) == 0 {
+        return act_err(orm_db_q(sub), 500, orm_err_q(sub))
+    }
+    if orm_nrows(sub) < 1 {
+        return act_404(orm_db_q(sub), "path not found")
+    }
+    if orm_nrows(sub) > tree_copy_cap() {
+        return act_err(orm_db_q(sub), 413, "too many nodes")
+    }
+    let mut bytes: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(sub) {
+        if orm_cell_by_i64(sub, i, "is_dir") == 0 {
+            bytes = bytes + orm_cell_by_i64(sub, i, "size")
+        }
+        i = i + 1
+    }
+    let mut d = orm_db_q(sub)
+    let usage = tree_usage(d, dst_ws)?
+    if orm_ok_c(usage) == 0 {
+        return act_err(orm_db_c(usage), 500, orm_err_c(usage))
+    }
+    if orm_count_n(usage) + bytes > tree_quota_bytes()? {
+        return act_err(orm_db_c(usage), 413, "quota exceeded")
+    }
+    d = orm_db_c(usage)
+    let master = data_master()?
+    if master.err != "" {
+        return act_err(d, 500, master.err)
+    }
+    let mut share: i64 = 0
+    if same == 1 {
+        share = 1
+    }
+    if share == 0 {
+        if master.on == 0 {
+            share = 1
+        }
+    }
+    let perr = tree_mkdir_p(d, dst_ws, owner, tree_parent_of(to))?
+    if perr != "" {
+        return act_err(d, 409, perr)
+    }
+    i = 0
+    while i < orm_nrows(sub) {
+        let old = orm_cell_by(sub, i, "path")
+        let np = concat(to, tree_tail(old, len(from)))
+        if orm_cell_by_i64(sub, i, "is_dir") == 1 {
+            let e = tree_mkdir_p(d, dst_ws, owner, np)?
+            if e != "" {
+                return tree_copy_fail(d, dst_ws, owner, to, 409, e)?
+            }
+        } else {
+            let one = tree_copy_file(d, src_ws, dst_ws, owner, orm_cell_by_i64(sub, i, "id"), np, orm_cell_by_i64(sub, i, "size"), orm_cell_by(sub, i, "hash"), orm_cell_by(sub, i, "thumb_hash"), share)?
+            if one.ok == 0 {
+                return tree_copy_fail(one.db, dst_ws, owner, to, one.status, one.err)?
+            }
+            d = one.db
+        }
+        i = i + 1
+    }
+    let q = tree_find(d, dst_ws, to)?
+    if orm_ok_q(q) == 0 || orm_nrows(q) < 1 {
+        return tree_copy_fail(d, dst_ws, owner, to, 500, "copy ok but node missing")?
+    }
+    let mut verb = activity_verb_created()
+    let mut meta = ""
+    if as_move == 1 {
+        verb = activity_verb_moved()
+        meta = concat(concat("{\"from\":\"", from), "\"}")
+    }
+    let logged = tree_activity_log(orm_db_q(q), dst_ws, owner, verb, orm_cell_by_i64(q, 0, "id"), to, meta)?
+    return act_ok(logged.db, tree_node_json(q, 0))
+}
+
+fn tree_move_across(db: OrmDb, src_ws: i64, dst_ws: i64, owner: i64, from: str, to: str) -> FmrOut !IO !Net !Time !Random {
+    let copied = tree_copy_subtree(db, src_ws, dst_ws, owner, from, to, 1)?
+    if copied.resp.status >= 400 {
+        return copied
+    }
+    let gone = tree_remove_at(copied.db, src_ws, owner, from, 0)?
+    if gone.resp.status >= 400 {
+        if gone.resp.status == 404 {
+            return fmr_out(copied.resp, gone.db)
+        }
+        let back = tree_copy_undo(gone.db, dst_ws, owner, to)?
+        return act_err(back, gone.resp.status, "move failed")
+    }
+    let meta = concat(concat("{\"to\":\"", to), "\"}")
+    let logged = tree_activity_log(gone.db, src_ws, owner, activity_verb_moved(), 0, from, meta)?
+    return fmr_out(copied.resp, logged.db)
+}
+
+fn act_fs_copy(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time !Random {
+    let from = tree_qpath(ctx, "from")
+    let to = tree_qpath(ctx, "to")
+    let opt = tree_qws_opt(ctx, "dest_ws")
+    if opt == -2 {
+        return act_err(db, 400, "bad workspace")
+    }
+    let t = tree_auth(ctx, db, 1, from)?
+    if t.ok == 0 {
+        return t.out
+    }
+    if opt < 0 {
+        let t2 = tree_auth(ctx, t.out.db, 2, to)?
+        if t2.ok == 0 {
+            return t2.out
+        }
+        return tree_copy_subtree(t2.out.db, t.ws, t.ws, t.owner, from, to, 0)?
+    }
+    let t2 = tree_auth_at(ctx, t.out.db, 2, to, opt)?
+    if t2.ok == 0 {
+        return t2.out
+    }
+    return tree_copy_subtree(t2.out.db, t.ws, t2.ws, t.owner, from, to, 0)?
+}

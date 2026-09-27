@@ -28,6 +28,7 @@ fn RID_FS_PUT() -> i64 { return 23 }
 fn RID_FS_GET() -> i64 { return 24 }
 fn RID_FS_DELETE() -> i64 { return 25 }
 fn RID_FS_MOVE() -> i64 { return 26 }
+fn RID_FS_COPY() -> i64 { return 96 }
 fn RID_FS_THUMB() -> i64 { return 27 }
 fn RID_FS_USAGE() -> i64 { return 28 }
 fn RID_USERS_LIST() -> i64 { return 30 }
@@ -114,6 +115,7 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_FS_GET())
     vec_push(v, RID_FS_DELETE())
     vec_push(v, RID_FS_MOVE())
+    vec_push(v, RID_FS_COPY())
     vec_push(v, RID_FS_THUMB())
     vec_push(v, RID_FS_USAGE())
     vec_push(v, RID_USERS_LIST())
@@ -230,7 +232,8 @@ fn secp_routes() -> Router {
     r = secp_add(r, "DELETE", "/v1/fs/upload", RID_UP_DROP(), "fs", 0, "", "-", "204", "id")
     r = secp_add(r, "GET", "/v1/fs/file", RID_FS_GET(), "fs", 0, "", "bytes", "200", "path")
     r = secp_add(r, "DELETE", "/v1/fs/file", RID_FS_DELETE(), "fs", 0, "", "-", "204", "path")
-    r = secp_add(r, "POST", "/v1/fs/move", RID_FS_MOVE(), "fs", 0, "", "Node", "200", "from,to")
+    r = secp_add(r, "POST", "/v1/fs/move", RID_FS_MOVE(), "fs", 0, "", "Node", "200", "from,to,dest_ws")
+    r = secp_add(r, "POST", "/v1/fs/copy", RID_FS_COPY(), "fs", 0, "", "Node", "200", "from,to,dest_ws")
     r = secp_add(r, "GET", "/v1/fs/thumb", RID_FS_THUMB(), "fs", 0, "", "bytes", "200", "path")
     r = secp_add(r, "GET", "/v1/fs/usage", RID_FS_USAGE(), "fs", 0, "", "Usage", "200", "")
     r = secp_add(r, "GET", "/v1/fs/preview", RID_FS_PREVIEW(), "fs", 0, "", "Preview", "200", "path")
