@@ -159,6 +159,7 @@ export async function resetPassword(token: string, password: string): Promise<st
 export function logout(): void {
   const token = getToken();
   setToken(null);
+  setActiveWorkspace(0);
   if (!token) return;
   void fetch(`${API_BASE}/v1/auth/logout`, {
     method: "POST",

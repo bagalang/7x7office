@@ -1,12 +1,12 @@
 // data/flush.baga — качва чакащите blob-ове, след като файлът е тих.
 //
 // Докато Collabora държи заключване, таймерът се бута. След успеха
-// локалното копие се маха: байтовете остават в кофата на собственика.
+// локалното копие се маха: байтовете остават в общата кофа.
 
 import "blobs.baga"
 import "hold.baga"
 import "outbox.baga"
-import "store_for.baga"
+import "s3live.baga"
 import "../tree/model.baga"
 import "../tree/versions.baga"
 import "../wopi/locks.baga"
@@ -148,7 +148,7 @@ fn s3_flush_one(db: OrmDb, id: i64, ws: i64, hash: str, sealed: i64, attempts: i
         let later = s3_obj_later(lock.db, id, now + delay, attempts)?
         return s3_one(orm_db_exec(later), 0)
     }
-    let store = data_store_for(lock.db, ws)?
+    let store = data_s3_view(lock.db)?
     if store.ok == 0 || store.on == 0 {
         let ex = s3_obj_drop(store.db, id)?
         return s3_one(orm_db_exec(ex), 0)

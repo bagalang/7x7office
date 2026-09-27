@@ -1,12 +1,11 @@
 // data/gc.baga — махане на blob, който вече никой не сочи.
 //
 // Чакащ ред (state 0) се трие само от диска: в кофата не е стигал.
-// Качен ред се трие от кофата на собственика. Стар обект без ред е
-// в общата кофа, ако тя е била включена.
+// Качен ред се трие от общата кофа. Стар обект без ред също е там,
+// ако кофата е била включена.
 
 import "blobs.baga"
 import "outbox.baga"
-import "store_for.baga"
 import "s3live.baga"
 import "s3baga/s3.baga"
 import "ormbaga/orm.baga"
@@ -54,7 +53,7 @@ fn data_gc_blob(db: OrmDb, ws: i64, hash: str, drop_ws: i64, drop_plain: i64) ->
         return 0
     }
     if cur.found == 1 && cur.state == 1 {
-        let store = data_store_for(cur.db, ws)?
+        let store = data_s3_view(cur.db)?
         if cur.sealed == 1 && drop_ws == 1 {
             let rc = data_gc_key(store.on, store.cfg, ws, hash, 1)?
             if rc == 0 {

@@ -11,10 +11,12 @@
 // показваме бутоните, за да не подвеждаме).
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { RequireAuth } from "../../components/RequireAuth";
 import { AppShell } from "../../components/AppShell";
 import { Dialog } from "../../components/Dialog";
 import { useI18n } from "../../components/I18nProvider";
+import { useWorkspace } from "../../components/WorkspaceProvider";
 import { IconPlus } from "../../components/icons";
 import {
   ApiError,
@@ -39,6 +41,15 @@ function messageOf(err: unknown, fallback: string): string {
   return fallback;
 }
 
+function davNo(ws: Workspace): number {
+  return ws.is_personal === 1 ? 0 : Number(ws.id);
+}
+
+function davAddress(host: string, scheme: string, n: number): string {
+  if (!host) return `/dav/${n}`;
+  return `${scheme}://${host}/dav/${n}`;
+}
+
 function roleLabel(t: (k: string) => string, role: string): string {
   if (role === "owner") return t("ws.role_owner");
   if (role === "editor") return t("ws.role_editor");
@@ -49,7 +60,11 @@ function roleLabel(t: (k: string) => string, role: string): string {
 
 function WorkspacesScreen() {
   const { t } = useI18n();
+  const router = useRouter();
+  const { wsId, select, reload: reloadWs } = useWorkspace();
   const [me, setMe] = useState<Me | null>(null);
+  const [davHost, setDavHost] = useState("");
+  const [davScheme, setDavScheme] = useState("dav");
   const [rows, setRows] = useState<Workspace[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -89,6 +104,11 @@ function WorkspacesScreen() {
     void load();
   }, [load, reload]);
 
+  useEffect(() => {
+    setDavHost(window.location.host);
+    setDavScheme(window.location.protocol === "https:" ? "davs" : "dav");
+  }, []);
+
   // отворен диалог за членове → всеки път презареждаме, за да не показва
   // stale роли след PATCH
   useEffect(() => {
@@ -121,6 +141,7 @@ function WorkspacesScreen() {
       setDesc("");
       setCreateOpen(false);
       setNotice(t("ws.created"));
+      reloadWs();
       setReload((n) => n + 1);
     } catch (err) {
       setError(messageOf(err, t("common.error")));
@@ -137,6 +158,7 @@ function WorkspacesScreen() {
       await updateWorkspace(editing.id, label.trim(), desc.trim());
       setEditing(null);
       setNotice(t("ws.saved"));
+      reloadWs();
       setReload((n) => n + 1);
     } catch (err) {
       setError(messageOf(err, t("common.error")));
@@ -149,7 +171,9 @@ function WorkspacesScreen() {
     setError("");
     try {
       await deleteWorkspace(ws.id);
+      if (Number(ws.id) === wsId) select(0);
       setNotice(t("ws.deleted"));
+      reloadWs();
       setReload((n) => n + 1);
     } catch (err) {
       setError(messageOf(err, t("common.error")));
@@ -209,6 +233,18 @@ function WorkspacesScreen() {
     return ws.role === "owner" || ws.role === "admin" || me?.is_admin === 1;
   }
 
+  function isOn(ws: Workspace): boolean {
+    const n = davNo(ws);
+    return n === 0 ? wsId === 0 : Number(ws.id) === wsId;
+  }
+
+  function activate(ws: Workspace) {
+    const n = davNo(ws);
+    select(n);
+    setNotice(t("ws.activated", { label: ws.label, id: String(n) }));
+    router.push("/");
+  }
+
   return (
     <AppShell>
       <main className="content-main">
@@ -232,24 +268,50 @@ function WorkspacesScreen() {
             <thead>
               <tr>
                 <th>{t("ws.col_label")}</th>
-                <th style={{ width: 160 }}>{t("ws.col_role")}</th>
-                <th style={{ width: 260 }}>{t("ws.col_actions")}</th>
+                <th style={{ width: 88 }}>{t("ws.col_number")}</th>
+                <th>{t("ws.col_dav")}</th>
+                <th style={{ width: 140 }}>{t("ws.col_role")}</th>
+                <th style={{ width: 280 }}>{t("ws.col_actions")}</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((ws) => (
-                <tr key={ws.id} style={{ cursor: "default" }}>
+              {rows.map((ws) => {
+                const n = davNo(ws);
+                const on = isOn(ws);
+                return (
+                <tr key={ws.id} className={on ? "active" : undefined} style={{ cursor: "default" }}>
                   <td>
                     <span className="cell-name">
                       <span className="label">{ws.label}</span>
                       {ws.is_personal === 1 ? <span className="badge">{t("ws.personal")}</span> : null}
+                      {on ? <span className="badge admin">{t("ws.active")}</span> : null}
                     </span>
                     {ws.description ? <span className="muted block">{ws.description}</span> : null}
+                  </td>
+                  <td>
+                    <span className="ws-no">№{n}</span>
+                  </td>
+                  <td>
+                    <input
+                      className="input"
+                      readOnly
+                      value={davAddress(davHost, davScheme, n)}
+                      aria-label={t("ws.dav")}
+                      onFocus={(e) => e.currentTarget.select()}
+                    />
                   </td>
                   <td>
                     <span className={`badge${canManage(ws) ? " admin" : ""}`}>{roleLabel(t, ws.role)}</span>
                   </td>
                   <td>
+                    <button
+                      type="button"
+                      className="btn activate"
+                      disabled={on}
+                      onClick={() => activate(ws)}
+                    >
+                      {on ? t("ws.active") : t("ws.activate")}
+                    </button>
                     <span className="row-actions">
                       <button
                         type="button"
@@ -284,7 +346,8 @@ function WorkspacesScreen() {
                     </span>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         ) : null}

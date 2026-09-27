@@ -94,7 +94,7 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
             <select
               className="select"
               aria-label={t("ws.switch_aria")}
-              value={wsId}
+              value={String(wsId)}
               onChange={(e) => {
                 select(Number(e.target.value));
                 // Смяната на пространството сменя файловете — връщаме се в
@@ -103,13 +103,16 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
                 else router.push("/");
               }}
             >
-              {/* 0 = личният workspace; сървърът го намира сам, без id. */}
-              <option value={0}>{t("ws.personal_files")}</option>
+              {/* 0 = личният workspace; WebDAV адресът е /dav/0. */}
+              <option value="0">{t("ws.personal_files")} · №0</option>
+              {wsId > 0 && !workspaces.some((w) => Number(w.id) === wsId) ? (
+                <option value={String(wsId)}>№{wsId}</option>
+              ) : null}
               {workspaces
                 .filter((w) => w.is_personal === 0)
                 .map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.label}
+                  <option key={w.id} value={String(w.id)}>
+                    {w.label} · №{w.id}
                   </option>
                 ))}
             </select>

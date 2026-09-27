@@ -7,10 +7,12 @@ import "site.baga"
 import "../idm/mail.baga"
 import "../idm/user_actions.baga"
 import "../data/s3live.baga"
+import "../data/baklive.baga"
 import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
 import "fmrbaga/jsonx.baga"
+import "s3baga/s3.baga"
 import "ormbaga/orm.baga"
 import "std/str/str.baga"
 
@@ -43,7 +45,12 @@ fn set_s3_json(v: S3View) -> JObj {
     o = jobj_str(o, "endpoint", v.endpoint)
     o = jobj_str(o, "bucket", v.bucket)
     o = jobj_str(o, "access_key", v.access)
-    o = jobj_str(o, "secret_key", v.secret)
+    o = jobj_str(o, "secret_key", "")
+    let mut secret_set = "0"
+    if v.secret != "" {
+        secret_set = "1"
+    }
+    o = jobj_str(o, "secret_set", secret_set)
     o = jobj_str(o, "region", v.region)
     o = jobj_str(o, "timeout_s", v.timeout_s)
     o = jobj_str(o, "source", v.source)
@@ -57,11 +64,36 @@ fn set_site_json(v: SiteUrl) -> JObj {
     return o
 }
 
-fn set_body(mail: MailView, store: S3View, site: SiteUrl) -> JObj {
+fn set_bak_json(v: BakView) -> JObj {
+    let mut o = jobj_new()
+    let mut on = "0"
+    if v.on == 1 {
+        on = "1"
+    }
+    o = jobj_str(o, "on", on)
+    o = jobj_str(o, "endpoint", v.endpoint)
+    o = jobj_str(o, "bucket", v.bucket)
+    o = jobj_str(o, "access_key", v.access)
+    o = jobj_str(o, "secret_key", "")
+    let mut secret_set = "0"
+    if v.secret != "" {
+        secret_set = "1"
+    }
+    o = jobj_str(o, "secret_set", secret_set)
+    o = jobj_str(o, "region", v.region)
+    o = jobj_str(o, "prefix", v.prefix)
+    o = jobj_str(o, "timeout_s", v.timeout_s)
+    o = jobj_str(o, "last", v.last)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_body(mail: MailView, store: S3View, site: SiteUrl, bak: BakView) -> JObj {
     let mut o = jobj_new()
     o = jobj_raw(o, "site", jobj_encode(set_site_json(site)))
     o = jobj_raw(o, "smtp", jobj_encode(set_smtp_json(mail)))
     o = jobj_raw(o, "s3", jobj_encode(set_s3_json(store)))
+    o = jobj_raw(o, "bak", jobj_encode(set_bak_json(bak)))
     return o
 }
 
@@ -82,7 +114,11 @@ fn act_settings_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if site.ok == 0 {
         return act_err(site.db, 500, site.err)
     }
-    return act_ok(site.db, set_body(mail, store, site))
+    let bak = bak_view(site.db)?
+    if bak.ok == 0 {
+        return act_err(bak.db, 500, bak.err)
+    }
+    return act_ok(bak.db, set_body(mail, store, site, bak))
 }
 
 fn set_obj(doc: JsonDoc, root: i64, key: str) -> i64 {
@@ -132,6 +168,76 @@ fn set_port_for(tls: str, raw: str) -> i64 {
         return 0
     }
     return p
+}
+
+fn b2_digit(c: i64) -> i64 {
+    if c >= 48 {
+        if c <= 57 {
+            return 1
+        }
+    }
+    return 0
+}
+
+fn b2_region_char(c: i64) -> i64 {
+    if c >= 97 {
+        if c <= 122 {
+            return 1
+        }
+    }
+    if b2_digit(c) == 1 {
+        return 1
+    }
+    if c == 45 {
+        return 1
+    }
+    return 0
+}
+
+// Регион на Backblaze: малки букви, поне две тирета и накрая -000.
+fn b2_region_ok(region: str) -> i64 {
+    let n = len(region)
+    if n < 8 {
+        return 0
+    }
+    if n > 40 {
+        return 0
+    }
+    if char_at(region, 0) == 45 {
+        return 0
+    }
+    if char_at(region, n - 4) != 45 {
+        return 0
+    }
+    if b2_digit(char_at(region, n - 3)) == 0 {
+        return 0
+    }
+    if b2_digit(char_at(region, n - 2)) == 0 {
+        return 0
+    }
+    if b2_digit(char_at(region, n - 1)) == 0 {
+        return 0
+    }
+    let mut i: i64 = 0
+    let mut hyphens: i64 = 0
+    while i < n {
+        let c = char_at(region, i)
+        if b2_region_char(c) == 0 {
+            return 0
+        }
+        if c == 45 {
+            hyphens = hyphens + 1
+        }
+        i = i + 1
+    }
+    if hyphens < 2 {
+        return 0
+    }
+    return 1
+}
+
+fn b2_endpoint(region: str) -> str {
+    return concat(concat("https://s3.", region), ".backblazeb2.com")
 }
 
 fn set_timeout(raw: str, def: str) -> str {
@@ -266,24 +372,89 @@ fn act_settings_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if str_trim(on_f.val) == "1" {
         s3_on = "1"
     }
-    let endpoint = str_trim(ep_f.val)
+    let mut endpoint = str_trim(ep_f.val)
     let bucket = str_trim(bucket_f.val)
     let access = str_trim(ak_f.val)
-    let secret = str_trim(sk_f.val)
+    let mut secret = str_trim(sk_f.val)
+    let region = to_lower(str_trim(region_f.val))
+    let mut d = db
+    if secret == "" {
+        let prev = data_s3_view(d)?
+        if prev.ok == 0 {
+            return act_err(prev.db, 500, prev.err)
+        }
+        secret = prev.secret
+        d = prev.db
+    }
+    if b2_region_ok(region) == 1 {
+        endpoint = b2_endpoint(region)
+    }
     if s3_on == "1" {
-        if endpoint == "" || bucket == "" || access == "" || secret == "" {
-            return act_err(db, 400, "s3 endpoint, bucket, access_key and secret_key are required")
+        if b2_region_ok(region) == 0 {
+            return act_err(d, 400, "s3.region must be a Backblaze B2 region")
+        }
+        if bucket == "" || access == "" || secret == "" {
+            return act_err(d, 400, "s3 bucket, access_key and secret_key are required")
         }
     }
     let s3to = set_timeout(str_trim(s3to_f.val), "30")
     if s3to == "" {
-        return act_err(db, 400, "s3.timeout_s is invalid")
+        return act_err(d, 400, "s3.timeout_s is invalid")
     }
-    let mut region = str_trim(region_f.val)
-    if region == "" {
-        region = "us-east-1"
+    let bak = set_obj(b.doc, b.root, "bak")
+    if bak < 0 {
+        return act_err(d, 400, "bak object required")
     }
-    let mut d = db
+    let bak_on_f = set_str(b.doc, bak, "on")
+    if bak_on_f.ok == 0 { return act_err(d, 400, bak_on_f.err) }
+    let bak_bucket_f = set_str(b.doc, bak, "bucket")
+    if bak_bucket_f.ok == 0 { return act_err(d, 400, bak_bucket_f.err) }
+    let bak_ak_f = set_str(b.doc, bak, "access_key")
+    if bak_ak_f.ok == 0 { return act_err(d, 400, bak_ak_f.err) }
+    let bak_sk_f = set_str(b.doc, bak, "secret_key")
+    if bak_sk_f.ok == 0 { return act_err(d, 400, bak_sk_f.err) }
+    let bak_region_f = set_str(b.doc, bak, "region")
+    if bak_region_f.ok == 0 { return act_err(d, 400, bak_region_f.err) }
+    let bak_prefix_f = set_str(b.doc, bak, "prefix")
+    if bak_prefix_f.ok == 0 { return act_err(d, 400, bak_prefix_f.err) }
+    let bak_to_f = set_str(b.doc, bak, "timeout_s")
+    if bak_to_f.ok == 0 { return act_err(d, 400, bak_to_f.err) }
+    let mut bak_on = "0"
+    if str_trim(bak_on_f.val) == "1" {
+        bak_on = "1"
+    }
+    let bak_bucket = str_trim(bak_bucket_f.val)
+    let bak_access = str_trim(bak_ak_f.val)
+    let mut bak_secret = str_trim(bak_sk_f.val)
+    let bak_region = to_lower(str_trim(bak_region_f.val))
+    let bak_prefix = bak_prefix_norm(bak_prefix_f.val)
+    if bak_prefix == "" {
+        return act_err(d, 400, "bak.prefix is invalid")
+    }
+    if bak_secret == "" {
+        let prevb = bak_view(d)?
+        if prevb.ok == 0 {
+            return act_err(prevb.db, 500, prevb.err)
+        }
+        bak_secret = prevb.secret
+        d = prevb.db
+    }
+    let mut bak_endpoint = ""
+    if b2_region_ok(bak_region) == 1 {
+        bak_endpoint = b2_endpoint(bak_region)
+    }
+    if bak_on == "1" {
+        if b2_region_ok(bak_region) == 0 {
+            return act_err(d, 400, "bak.region must be a Backblaze B2 region")
+        }
+        if bak_bucket == "" || bak_access == "" || bak_secret == "" {
+            return act_err(d, 400, "bak bucket, access_key and secret_key are required")
+        }
+    }
+    let bak_to = set_timeout(str_trim(bak_to_f.val), "120")
+    if bak_to == "" {
+        return act_err(d, 400, "bak.timeout_s is invalid")
+    }
     let w1 = set_write(d, "smtp.host", str_trim(host_f.val))?
     if w1.ok == 0 { return act_err(w1.db, 500, w1.err) }
     d = w1.db
@@ -341,6 +512,33 @@ fn act_settings_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     let w19 = set_write(d, "site.url", site_url)?
     if w19.ok == 0 { return act_err(w19.db, 500, w19.err) }
     d = w19.db
+    let w21 = set_write(d, "bak.on", bak_on)?
+    if w21.ok == 0 { return act_err(w21.db, 500, w21.err) }
+    d = w21.db
+    let w22 = set_write(d, "bak.endpoint", bak_endpoint)?
+    if w22.ok == 0 { return act_err(w22.db, 500, w22.err) }
+    d = w22.db
+    let w23 = set_write(d, "bak.bucket", bak_bucket)?
+    if w23.ok == 0 { return act_err(w23.db, 500, w23.err) }
+    d = w23.db
+    let w24 = set_write(d, "bak.access_key", bak_access)?
+    if w24.ok == 0 { return act_err(w24.db, 500, w24.err) }
+    d = w24.db
+    let w25 = set_write(d, "bak.secret_key", bak_secret)?
+    if w25.ok == 0 { return act_err(w25.db, 500, w25.err) }
+    d = w25.db
+    let w26 = set_write(d, "bak.region", bak_region)?
+    if w26.ok == 0 { return act_err(w26.db, 500, w26.err) }
+    d = w26.db
+    let w27 = set_write(d, "bak.prefix", bak_prefix)?
+    if w27.ok == 0 { return act_err(w27.db, 500, w27.err) }
+    d = w27.db
+    let w28 = set_write(d, "bak.timeout_s", bak_to)?
+    if w28.ok == 0 { return act_err(w28.db, 500, w28.err) }
+    d = w28.db
+    let w29 = set_write(d, "bak.saved", "1")?
+    if w29.ok == 0 { return act_err(w29.db, 500, w29.err) }
+    d = w29.db
     let w20 = set_write(d, "site.saved", "1")?
     if w20.ok == 0 { return act_err(w20.db, 500, w20.err) }
     d = w20.db
@@ -356,5 +554,40 @@ fn act_settings_put(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if site.ok == 0 {
         return act_err(site.db, 500, site.err)
     }
-    return act_ok(site.db, set_body(mail, store, site))
+    let bakv = bak_view(site.db)?
+    if bakv.ok == 0 {
+        return act_err(bakv.db, 500, bakv.err)
+    }
+    return act_ok(bakv.db, set_body(mail, store, site, bakv))
+}
+
+fn act_s3_check(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let c = idm_require_admin(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let store = data_s3_view(db)?
+    if store.ok == 0 {
+        return act_err(store.db, 500, store.err)
+    }
+    if store.on == 0 || store.endpoint == "" || store.bucket == "" || store.access == "" || store.secret == "" {
+        return act_err(store.db, 400, "storage is off")
+    }
+    let h = s3_head_cfg(store.cfg, "secp-probe")?
+    if h.ok == 0 {
+        return act_err(store.db, 502, h.err)
+    }
+    if h.status == 401 || h.status == 403 {
+        return act_err(store.db, 401, "access denied")
+    }
+    if h.status >= 500 {
+        return act_err(store.db, 502, "storage endpoint failed")
+    }
+    if h.status != 200 && h.status != 204 && h.status != 404 {
+        return act_err(store.db, 502, concat("storage status ", int_to_str(h.status)))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_i64(o, "status", h.status)
+    return act_ok(store.db, o)
 }

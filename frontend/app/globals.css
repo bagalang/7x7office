@@ -145,6 +145,23 @@ a { color: var(--accent); text-decoration: none; }
 }
 .btn.danger:hover:not(:disabled) { background: var(--danger-soft); box-shadow: none; }
 
+.btn.activate {
+  background: #137333;
+  color: #fff;
+  padding: 12px 22px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.btn.activate:hover:not(:disabled) { background: #0d5c28; box-shadow: var(--shadow-sm); }
+.btn.activate:disabled { opacity: 1; cursor: default; }
+
+.ws-no {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.table tbody tr.active td { background: var(--ok-soft); }
+
 .icon-btn {
   position: relative;
   display: inline-grid;

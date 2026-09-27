@@ -336,7 +336,7 @@ export function FileBrowser() {
     // Офис файлът се отваря в нов таб. Списъкът остава, без локален преглед.
     if (isOfficeName(node.name)) {
       setOpen(null);
-      openOffice(node.path);
+      openOffice(node.path, wsId);
       return;
     }
     setOpen(node);

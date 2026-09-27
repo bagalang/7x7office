@@ -5,7 +5,7 @@
 
 import "blobs.baga"
 import "outbox.baga"
-import "store_for.baga"
+import "s3live.baga"
 import "keys.baga"
 import "seal.baga"
 import "s3baga/s3.baga"
@@ -119,7 +119,7 @@ fn data_save_sealed(db: OrmDb, ws: i64, on: i64, cfg: S3Cfg, content: bytes, mas
 }
 
 fn data_save(db: OrmDb, ws: i64, content: bytes) -> DataSaved !IO !Net !Random !Time {
-    let store = data_store_for(db, ws)?
+    let store = data_s3_view(db)?
     if store.ok == 0 {
         return DataSaved { db: store.db, hash: "", err: store.err }
     }
@@ -156,7 +156,7 @@ fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net !Random !Time {
     if hash == "" {
         return DataGot { db: db, body: bytes_new(0), err: "" }
     }
-    let store = data_store_for(db, ws)?
+    let store = data_s3_view(db)?
     if store.ok == 0 {
         return DataGot { db: store.db, body: bytes_new(0), err: store.err }
     }

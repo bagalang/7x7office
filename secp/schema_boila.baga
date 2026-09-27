@@ -364,5 +364,12 @@ fn secp_boila_migrations() -> MigrationSet {
         "CREATE TABLE IF NOT EXISTS idm_dav_keys (user_id BIGINT, key_hash TEXT, prefix TEXT, created_at BIGINT, PRIMARY KEY (user_id))",
         "DROP TABLE IF EXISTS idm_dav_keys"
     )
+    set = migrate_add(
+        set,
+        20260927050,
+        "drop_idm_user_s3",
+        "DROP TABLE IF EXISTS idm_user_s3",
+        "CREATE TABLE IF NOT EXISTS idm_user_s3 (user_id BIGINT, enabled BIGINT, provider TEXT, endpoint TEXT, bucket TEXT, region TEXT, access_key TEXT, secret_key TEXT, PRIMARY KEY (user_id))"
+    )
     return set
 }

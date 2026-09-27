@@ -1,0 +1,158 @@
+// data/baklive.baga — S3 само за архив на базата.
+//
+// Отделно от файловия S3: файловете могат да са на диска, а dump-ът
+// да отива в своя кофа и папка. Празен prefix е beckupDB.
+
+import "../system/settings.baga"
+import "s3baga/s3.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+struct BakView {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    source: str,
+    on: i64,
+    endpoint: str,
+    bucket: str,
+    access: str,
+    secret: str,
+    region: str,
+    prefix: str,
+    timeout_s: str,
+    last: str,
+    cfg: S3Cfg
+}
+
+fn bak_view_bad(db: OrmDb, err: str) -> BakView {
+    return BakView {
+        ok: 0,
+        db: db,
+        err: err,
+        source: "",
+        on: 0,
+        endpoint: "",
+        bucket: "",
+        access: "",
+        secret: "",
+        region: "",
+        prefix: "",
+        timeout_s: "",
+        last: "",
+        cfg: s3_cfg("", "", "", "", "", 0)
+    }
+}
+
+fn bak_prefix_char(c: i64) -> i64 {
+    if c >= 48 && c <= 57 {
+        return 1
+    }
+    if c >= 65 && c <= 90 {
+        return 1
+    }
+    if c >= 97 && c <= 122 {
+        return 1
+    }
+    if c == 45 || c == 95 || c == 47 {
+        return 1
+    }
+    return 0
+}
+
+// Една или повече папки: beckupDB или beckupDB/office. Без .. и празен къс.
+fn bak_prefix_ok(s: str) -> i64 {
+    let n = len(s)
+    if n < 1 || n > 64 {
+        return 0
+    }
+    if char_at(s, 0) == 47 || char_at(s, n - 1) == 47 {
+        return 0
+    }
+    let mut i: i64 = 0
+    let mut seg: i64 = 0
+    let mut prev: i64 = 0
+    while i < n {
+        let c = char_at(s, i)
+        if bak_prefix_char(c) == 0 {
+            return 0
+        }
+        if c == 46 && prev == 46 {
+            return 0
+        }
+        if c == 47 {
+            if seg == 0 {
+                return 0
+            }
+            seg = 0
+        } else {
+            seg = seg + 1
+        }
+        prev = c
+        i = i + 1
+    }
+    if seg == 0 {
+        return 0
+    }
+    return 1
+}
+
+fn bak_prefix_norm(raw: str) -> str {
+    let t = str_trim(raw)
+    if t == "" {
+        return "beckupDB"
+    }
+    if bak_prefix_ok(t) == 0 {
+        return ""
+    }
+    return t
+}
+
+fn bak_view(db: OrmDb) -> BakView !IO !Net {
+    let q = set_all(db)?
+    if orm_ok_q(q) == 0 {
+        return bak_view_bad(orm_db_q(q), orm_err_q(q))
+    }
+    let saved = set_saved(q, "bak.saved")
+    let mut source = "default"
+    if saved == 1 {
+        source = "db"
+    }
+    let mut on: i64 = 0
+    if set_get(q, "bak.on") == "1" {
+        on = 1
+    }
+    let endpoint = set_get(q, "bak.endpoint")
+    let bucket = set_get(q, "bak.bucket")
+    let access = set_get(q, "bak.access_key")
+    let secret = set_get(q, "bak.secret_key")
+    let mut region = set_get(q, "bak.region")
+    if region == "" {
+        region = "eu-central-003"
+    }
+    let mut prefix = bak_prefix_norm(set_get(q, "bak.prefix"))
+    if prefix == "" {
+        prefix = "beckupDB"
+    }
+    let mut timeout_s = set_get(q, "bak.timeout_s")
+    if timeout_s == "" {
+        timeout_s = "120"
+    }
+    let timeout_n = parse_int(timeout_s)
+    return BakView {
+        ok: 1,
+        db: orm_db_q(q),
+        err: "",
+        source: source,
+        on: on,
+        endpoint: endpoint,
+        bucket: bucket,
+        access: access,
+        secret: secret,
+        region: region,
+        prefix: prefix,
+        timeout_s: timeout_s,
+        last: set_get(q, "bak.last"),
+        cfg: s3_cfg(endpoint, bucket, access, secret, region, timeout_n)
+    }
+}

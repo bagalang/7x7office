@@ -6,7 +6,8 @@
 // (/wopi/files/{id} срещу /contents, /dav/{ws} срещу {*path}).
 //
 // Id-тата са стабилни — OpenAPI operationId ги ползва. Дупка в номерацията
-// (8, 9, 13–19, 29) е нарочна, не се запълва със следващия маршрут.
+// (8, 9, 13–19, 29, 88–90) е нарочна, не се запълва със следващия маршрут.
+// 88–90 бяха личната S3 кофа.
 
 import "fmrbaga/core/route.baga"
 
@@ -87,11 +88,11 @@ fn RID_PASSWORD() -> i64 { return 84 }
 fn RID_TOTP_START() -> i64 { return 85 }
 fn RID_TOTP_CONFIRM() -> i64 { return 86 }
 fn RID_TOTP_DISABLE() -> i64 { return 87 }
-fn RID_STORAGE_GET() -> i64 { return 88 }
-fn RID_STORAGE_PUT() -> i64 { return 89 }
-fn RID_STORAGE_CHECK() -> i64 { return 90 }
 fn RID_DAV_KEY_GET() -> i64 { return 91 }
 fn RID_DAV_KEY_POST() -> i64 { return 92 }
+fn RID_S3_CHECK() -> i64 { return 93 }
+fn RID_BAK_CHECK() -> i64 { return 94 }
+fn RID_BAK_RUN() -> i64 { return 95 }
 
 // Всяко id, което dispatch-ът трябва да поеме. Нов маршрут се добавя и тук.
 fn secp_ids() -> Vec<i64> {
@@ -173,11 +174,11 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_TOTP_START())
     vec_push(v, RID_TOTP_CONFIRM())
     vec_push(v, RID_TOTP_DISABLE())
-    vec_push(v, RID_STORAGE_GET())
-    vec_push(v, RID_STORAGE_PUT())
-    vec_push(v, RID_STORAGE_CHECK())
     vec_push(v, RID_DAV_KEY_GET())
     vec_push(v, RID_DAV_KEY_POST())
+    vec_push(v, RID_S3_CHECK())
+    vec_push(v, RID_BAK_CHECK())
+    vec_push(v, RID_BAK_RUN())
     return v
 }
 
@@ -205,9 +206,6 @@ fn secp_routes() -> Router {
     r = secp_add(r, "POST", "/v1/me/totp/start", RID_TOTP_START(), "auth", 0, "", "TotpStart", "200", "")
     r = secp_add(r, "POST", "/v1/me/totp/confirm", RID_TOTP_CONFIRM(), "auth", 0, "TotpConfirm", "Message", "200", "")
     r = secp_add(r, "POST", "/v1/me/totp/disable", RID_TOTP_DISABLE(), "auth", 0, "TotpDisable", "Message", "200", "")
-    r = secp_add(r, "GET", "/v1/me/storage", RID_STORAGE_GET(), "auth", 0, "", "UserStorage", "200", "")
-    r = secp_add(r, "PUT", "/v1/me/storage", RID_STORAGE_PUT(), "auth", 0, "UserStorage", "UserStorage", "200", "")
-    r = secp_add(r, "POST", "/v1/me/storage/check", RID_STORAGE_CHECK(), "auth", 0, "", "StorageCheck", "200", "")
     r = secp_add(r, "GET", "/v1/me/dav", RID_DAV_KEY_GET(), "auth", 0, "", "DavKey", "200", "")
     r = secp_add(r, "POST", "/v1/me/dav", RID_DAV_KEY_POST(), "auth", 0, "", "DavKey", "200", "")
     r = secp_add(r, "GET", "/v1/users", RID_USERS_LIST(), "idm", 0, "", "UserList", "200", "")
@@ -255,6 +253,9 @@ fn secp_routes() -> Router {
     r = secp_add(r, "POST", "/v1/flows/run", RID_FLOWS_RUN(), "flows", 0, "", "FlowRun", "200", "id")
     r = secp_add(r, "GET", "/v1/admin/settings", RID_SETTINGS_GET(), "admin", 0, "", "AdminSettings", "200", "")
     r = secp_add(r, "PUT", "/v1/admin/settings", RID_SETTINGS_PUT(), "admin", 0, "AdminSettings", "AdminSettings", "200", "")
+    r = secp_add(r, "POST", "/v1/admin/settings/check", RID_S3_CHECK(), "admin", 0, "", "StorageCheck", "200", "")
+    r = secp_add(r, "POST", "/v1/admin/backup/check", RID_BAK_CHECK(), "admin", 0, "", "StorageCheck", "200", "")
+    r = secp_add(r, "POST", "/v1/admin/backup", RID_BAK_RUN(), "admin", 0, "", "BackupMade", "200", "")
     r = secp_add(r, "GET", "/v1/reports/storage", RID_REPORT_STORAGE(), "reports", 0, "", "StorageReport", "200", "format,lang")
     r = secp_add(r, "GET", "/v1/reports/activity", RID_REPORT_ACTIVITY(), "reports", 0, "", "ActivityReport", "200", "format,lang")
     r = secp_add(r, "GET", "/v1/wopi/token", RID_WOPI_TOKEN(), "wopi", 0, "", "WopiToken", "200", "path")

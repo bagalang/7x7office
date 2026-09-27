@@ -47,7 +47,7 @@ export function FilePreview({
   onError: (msg: string) => void;
 }) {
   const { t } = useI18n();
-  const { active } = useWorkspace();
+  const { active, wsId } = useWorkspace();
   const writable = canWrite(active);
   const shareable = canShare(active);
   const router = useRouter();
@@ -170,7 +170,7 @@ export function FilePreview({
               className="btn"
               onClick={() => {
                 if (office) {
-                  openOffice(node.path);
+                  openOffice(node.path, wsId);
                   return;
                 }
                 router.push(`/edit?path=${encodeURIComponent(node.path)}`);

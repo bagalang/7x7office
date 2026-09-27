@@ -4,7 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { RequireAuth } from "../../components/RequireAuth";
 import { useI18n } from "../../components/I18nProvider";
-import { ApiError, api, qpath } from "../../lib/api";
+import { ApiError, api, qpath, setActiveWorkspace } from "../../lib/api";
 import { collaboraEditorUrl, isOfficeName } from "../../lib/office";
 
 type WopiToken = {
@@ -48,6 +48,7 @@ function OfficeScreen() {
   const router = useRouter();
   const params = useSearchParams();
   const path = params.get("path") ?? "";
+  const wsRaw = params.get("ws") ?? "";
   const formRef = useRef<HTMLFormElement>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [error, setError] = useState("");
@@ -72,6 +73,10 @@ function OfficeScreen() {
       if (!cfg.ok) throw new Error("collabora");
       const conf = (await cfg.json()) as { urlsrc?: string };
       if (!conf.urlsrc) throw new Error("collabora");
+      if (wsRaw !== "") {
+        const n = Number(wsRaw);
+        if (Number.isFinite(n) && n >= 0) setActiveWorkspace(Math.floor(n));
+      }
       const tok = await api.get<WopiToken>(`/v1/wopi/token?path=${qpath(path)}`);
       if (cancel) return;
       setAction(collaboraEditorUrl(conf.urlsrc, tok.wopi_src, lang, tok.can_write !== 0));
@@ -88,7 +93,7 @@ function OfficeScreen() {
     return () => {
       cancel = true;
     };
-  }, [path, lang, t]);
+  }, [path, lang, t, wsRaw]);
 
   useEffect(() => {
     setMark("");

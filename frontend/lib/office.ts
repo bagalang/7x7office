@@ -23,13 +23,14 @@ export function isOfficeName(name: string): boolean {
   return OFFICE_EXTS.has(base.slice(dot + 1).toLowerCase());
 }
 
-export function officeHref(path: string): string {
-  return `/office?path=${encodeURIComponent(path)}`;
+export function officeHref(path: string, wsId = 0): string {
+  return `/office?path=${encodeURIComponent(path)}&ws=${wsId}`;
 }
 
 // Ляв клик отваря редактора в нов таб. Списъкът с файлове остава.
-export function openOffice(path: string): void {
-  window.open(officeHref(path), "_blank", "noopener,noreferrer");
+// wsId се записва в адреса, за да не зависи табът от паметта на другия.
+export function openOffice(path: string, wsId = 0): void {
+  window.open(officeHref(path, wsId), "_blank", "noopener,noreferrer");
 }
 
 function attr(attrs: string, key: string): string {

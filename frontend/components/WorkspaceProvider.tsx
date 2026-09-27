@@ -66,11 +66,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const reload = useCallback(() => setTick((n) => n + 1), []);
 
   useEffect(() => {
-    // Излязъл потребител: няма токен, няма и пространства. Иначе биха
-    // „протекли" в следващата сесия, докато новата заявка върви.
+    // Празен токен при първия кадър е хидратацията: localStorage още не е
+    // в снимката. Ако тук нулираме избора, след презареждане пространството
+    // се губи и Collabora отваря личните файлове.
     if (!token) {
       setWorkspaces([]);
-      setActiveWorkspace(0);
       return;
     }
     let dead = false;
@@ -82,7 +82,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         // Ако избраният вече не съществува (махнат от друг член, изтрит),
         // връщаме се на личния, за да не остане клиентът с 404-та.
         const cur = getActiveWorkspace();
-        if (cur > 0 && !items.some((w) => w.id === cur)) {
+        if (cur > 0 && !items.some((w) => Number(w.id) === cur)) {
           setActiveWorkspace(0);
         }
       })

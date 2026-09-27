@@ -1,0 +1,77 @@
+// system/bak_actions.baga — проверка и качване на архива на базата.
+// Ползва bak.* , не файловия s3.*.
+
+import "../data/baklive.baga"
+import "../data/bakdump.baga"
+import "../idm/user_actions.baga"
+import "settings.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "s3baga/s3.baga"
+import "ormbaga/orm.baga"
+
+fn bak_head_ok(status: i64) -> i64 {
+    if status == 200 || status == 204 || status == 404 {
+        return 1
+    }
+    return 0
+}
+
+fn act_bak_check(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let c = idm_require_admin(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let view = bak_view(db)?
+    if view.ok == 0 {
+        return act_err(view.db, 500, view.err)
+    }
+    if view.on == 0 || view.endpoint == "" || view.bucket == "" || view.access == "" || view.secret == "" {
+        return act_err(view.db, 400, "backup storage is off")
+    }
+    let probe = concat(view.prefix, "/secp-probe")
+    let h = s3_head_cfg(view.cfg, probe)?
+    if h.ok == 0 {
+        return act_err(view.db, 502, h.err)
+    }
+    if h.status == 401 || h.status == 403 {
+        return act_err(view.db, 401, "access denied")
+    }
+    if h.status >= 500 {
+        return act_err(view.db, 502, "storage endpoint failed")
+    }
+    if bak_head_ok(h.status) == 0 {
+        return act_err(view.db, 502, concat("storage status ", int_to_str(h.status)))
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_i64(o, "status", h.status)
+    o = jobj_str(o, "prefix", view.prefix)
+    return act_ok(view.db, o)
+}
+
+fn act_bak_run(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let c = idm_require_admin(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let up = bak_upload(db)?
+    if up.ok == 0 {
+        if up.err == "backup storage is off" {
+            return act_err(up.db, 400, up.err)
+        }
+        return act_err(up.db, 502, up.err)
+    }
+    let saved = set_write(up.db, "bak.last", up.key)?
+    if saved.ok == 0 {
+        return act_err(saved.db, 500, saved.err)
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_str(o, "key", up.key)
+    o = jobj_i64(o, "bytes", up.bytes)
+    o = jobj_i64(o, "tables", up.tables)
+    o = jobj_i64(o, "rows", up.rows)
+    return act_ok(saved.db, o)
+}

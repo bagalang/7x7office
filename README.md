@@ -217,18 +217,23 @@ Collabora или OnlyOffice викат secp като WOPI host.
 `/v1/fs/preview` и `/v1/doc/load` за тези офис формати: те разгъват целия
 файл в secp. `officebaga` остава за търсене и за преглед на текст.
 
-## S3 за blob-ове (Фаза 7)
+## Backblaze B2 за blob-ове (Фаза 7)
 
-Без `SECP_BLOB` файловете стоят на локалния диск (`SECP_DATA_ROOT`).
-`SECP_BLOB=s3` праща същите ключове към path-style S3:
+Една кофа за целия офис, от **Настройки**. Засега само Backblaze B2.
+Адресът е `https://s3.<регион>.backblazeb2.com`. Записът важи веднага,
+без рестарт на контейнерите. Изключено държи файловете на диска
+(`SECP_DATA_ROOT`).
 
-- `S3_ENDPOINT` (например `http://127.0.0.1:9000`), `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
+До първия запис важат променливите (и за локална проба с mock):
+
+- `SECP_BLOB=s3`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
 - `S3_REGION` (ако липсва: `us-east-1`), `S3_TIMEOUT_S` (ако липсва: 30)
 - ключ `blobs/<aa>/<bb>/<sha256>`; при `SECP_MASTER_KEY` — `blobs/w<id>/…/<sha256>`
 
-Подписът е AWS SigV4. Тялото е двоично, включително нулев байт.
-Virtual-hosted bucket, chunked отговор и multipart качване не влизат в 0.1.0.
-rocksbaga и blob вътре в boilaDB остават за по-късно.
+Файл в редакция стои на диска и тръгва след `SECP_S3_DELAY_S` секунди
+(подразбиране 180). Подписът е AWS SigV4. Тялото е двоично, включително
+нулев байт. Virtual-hosted bucket, chunked отговор и multipart качване
+не влизат в 0.1.0. rocksbaga и blob вътре в boilaDB остават за по-късно.
 
 ## Следа и таван (Фаза 7)
 

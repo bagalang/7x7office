@@ -1,0 +1,260 @@
+// data/bakdump.baga — логически SQL dump на живата база и качване в S3.
+//
+// Като bagabuch: не се тарват LSM файловете. Тук редовете минават през
+// SELECT, защото orm няма COPY TO STDOUT. Файловете на диска не влизат.
+
+import "baklive.baga"
+import "bufbaga/buf.baga"
+import "s3baga/s3.baga"
+import "ormbaga/orm.baga"
+import "std/bytes/bytes.baga"
+import "std/str/str.baga"
+import "std/time/time.baga"
+
+fn bak_ident(s: str) -> i64 {
+    let n = len(s)
+    if n < 1 || n > 63 {
+        return 0
+    }
+    let c0 = char_at(s, 0)
+    if c0 != 95 && (c0 < 65 || c0 > 90) && (c0 < 97 || c0 > 122) {
+        return 0
+    }
+    let mut i: i64 = 1
+    while i < n {
+        let c = char_at(s, i)
+        if c != 95 && (c < 48 || c > 57) && (c < 65 || c > 90) && (c < 97 || c > 122) {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn bak_2(n: i64) -> str {
+    if n < 10 {
+        return concat("0", int_to_str(n))
+    }
+    return int_to_str(n)
+}
+
+// UTC от unix секунди. civil_from_days (Hinnant), само за неотрицателни дни.
+fn bak_stamp_at(sec: i64) -> str {
+    let days = sec / 86400
+    let sod = sec % 86400
+    let z = days + 719468
+    let era = z / 146097
+    let doe = z - era * 146097
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    let mut y = yoe + era * 400
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    let mp = (5 * doy + 2) / 153
+    let d = doy - (153 * mp + 2) / 5 + 1
+    let mut m = mp + 3
+    if mp >= 10 {
+        m = mp - 9
+    }
+    if m <= 2 {
+        y = y + 1
+    }
+    let hh = sod / 3600
+    let mm = (sod % 3600) / 60
+    let ss = sod % 60
+    let mut b = buf_from(int_to_str(y))
+    b = buf_push(b, bak_2(m))
+    b = buf_push(b, bak_2(d))
+    b = buf_push(b, "_")
+    b = buf_push(b, bak_2(hh))
+    b = buf_push(b, bak_2(mm))
+    b = buf_push(b, bak_2(ss))
+    return buf_str(b)
+}
+
+fn bak_stamp() -> str !Time {
+    return bak_stamp_at(time_now_ms() / 1000)
+}
+
+fn bak_quote(s: str) -> str {
+    let mut b = buf_from("'")
+    let n = len(s)
+    let mut i: i64 = 0
+    while i < n {
+        let c = char_at(s, i)
+        if c == 39 {
+            b = buf_push(b, "''")
+        } else {
+            b = buf_push_chr(b, c)
+        }
+        i = i + 1
+    }
+    b = buf_push(b, "'")
+    return buf_str(b)
+}
+
+fn bak_row_sql(q: OrmQuery, row: i64, table: str) -> str {
+    let nc = orm_ncols(q)
+    let mut b = buf_from("INSERT INTO ")
+    b = buf_push(b, table)
+    b = buf_push(b, " (")
+    let mut c: i64 = 0
+    while c < nc {
+        if c > 0 {
+            b = buf_push(b, ", ")
+        }
+        b = buf_push(b, orm_colname(q, c))
+        c = c + 1
+    }
+    b = buf_push(b, ") VALUES (")
+    c = 0
+    while c < nc {
+        if c > 0 {
+            b = buf_push(b, ", ")
+        }
+        if orm_isnull(q, row, c) == 1 {
+            b = buf_push(b, "NULL")
+        } else {
+            b = buf_push(b, bak_quote(orm_cell(q, row, c)))
+        }
+        c = c + 1
+    }
+    b = buf_push(b, ");\n")
+    return buf_str(b)
+}
+
+struct BakPiece {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    buf: StrBuf,
+    rows: i64
+}
+
+fn bak_one_table(db: OrmDb, b: StrBuf, table: str) -> BakPiece !IO !Net {
+    if bak_ident(table) == 0 {
+        return BakPiece { ok: 1, db: db, err: "", buf: b, rows: 0 }
+    }
+    let mut out = b
+    let create = orm_query(db, concat("SHOW CREATE TABLE ", table))?
+    if orm_ok_q(create) == 0 {
+        return BakPiece { ok: 0, db: orm_db_q(create), err: orm_err_q(create), buf: out, rows: 0 }
+    }
+    out = buf_push(out, "-- ")
+    out = buf_push(out, table)
+    out = buf_push(out, "\n")
+    if orm_nrows(create) > 0 && orm_ncols(create) > 1 {
+        let ddl = orm_cell(create, 0, 1)
+        if ddl != "" {
+            out = buf_push(out, ddl)
+            if char_at(ddl, len(ddl) - 1) != 59 {
+                out = buf_push(out, ";")
+            }
+            out = buf_push(out, "\n")
+        }
+    }
+    let rows = orm_query(orm_db_q(create), concat("SELECT * FROM ", table))?
+    if orm_ok_q(rows) == 0 {
+        return BakPiece { ok: 0, db: orm_db_q(rows), err: orm_err_q(rows), buf: out, rows: 0 }
+    }
+    let mut n: i64 = 0
+    let mut i: i64 = 0
+    while i < orm_nrows(rows) {
+        out = buf_push(out, bak_row_sql(rows, i, table))
+        n = n + 1
+        i = i + 1
+    }
+    out = buf_push(out, "\n")
+    return BakPiece { ok: 1, db: orm_db_q(rows), err: "", buf: out, rows: n }
+}
+
+struct BakSql {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    sql: str,
+    tables: i64,
+    rows: i64
+}
+
+fn bak_sql(db: OrmDb) -> BakSql !IO !Net !Time {
+    let q = orm_query(db, "SHOW TABLES")?
+    if orm_ok_q(q) == 0 {
+        return BakSql { ok: 0, db: orm_db_q(q), err: orm_err_q(q), sql: "", tables: 0, rows: 0 }
+    }
+    let mut names = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        vec_push(names, orm_cell(q, i, 0))
+        i = i + 1
+    }
+    let mut b = buf_from("-- 7x7office логически dump\n")
+    b = buf_push(b, "-- ")
+    b = buf_push(b, bak_stamp()?)
+    b = buf_push(b, " UTC\n")
+    b = buf_push(b, "-- Редовете са INSERT. Файловете на диска не са в този архив.\n\n")
+    let mut d = orm_db_q(q)
+    let mut tables: i64 = 0
+    let mut rows: i64 = 0
+    i = 0
+    while i < vec_len(names) {
+        let name = vec_get(names, i)
+        let piece = bak_one_table(d, b, name)?
+        if piece.ok == 0 {
+            return BakSql { ok: 0, db: piece.db, err: piece.err, sql: "", tables: tables, rows: rows }
+        }
+        d = piece.db
+        b = piece.buf
+        if bak_ident(name) == 1 {
+            tables = tables + 1
+            rows = rows + piece.rows
+        }
+        i = i + 1
+    }
+    return BakSql { ok: 1, db: d, err: "", sql: buf_str(b), tables: tables, rows: rows }
+}
+
+struct BakUp {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    key: str,
+    bytes: i64,
+    tables: i64,
+    rows: i64
+}
+
+fn bak_object_key(prefix: str, stamp: str) -> str {
+    return concat(concat(concat(prefix, "/"), "7x7office_backup_"), concat(stamp, ".sql"))
+}
+
+fn bak_upload(db: OrmDb) -> BakUp !IO !Net !Random !Time {
+    let view = bak_view(db)?
+    if view.ok == 0 {
+        return BakUp { ok: 0, db: view.db, err: view.err, key: "", bytes: 0, tables: 0, rows: 0 }
+    }
+    if view.on == 0 || view.endpoint == "" || view.bucket == "" || view.access == "" || view.secret == "" {
+        return BakUp { ok: 0, db: view.db, err: "backup storage is off", key: "", bytes: 0, tables: 0, rows: 0 }
+    }
+    let dump = bak_sql(view.db)?
+    if dump.ok == 0 {
+        return BakUp { ok: 0, db: dump.db, err: dump.err, key: "", bytes: 0, tables: 0, rows: 0 }
+    }
+    let body = bytes_of_str(dump.sql)
+    let key = bak_object_key(view.prefix, bak_stamp()?)
+    let put = s3_put_cfg(view.cfg, key, body)?
+    if put.ok == 0 {
+        let mut why = put.err
+        if why == "" {
+            why = concat("backup upload ", int_to_str(put.status))
+        }
+        return BakUp { ok: 0, db: dump.db, err: why, key: "", bytes: 0, tables: dump.tables, rows: dump.rows }
+    }
+    return BakUp {
+        ok: 1,
+        db: dump.db,
+        err: "",
+        key: key,
+        bytes: bytes_len(body),
+        tables: dump.tables,
+        rows: dump.rows
+    }
+}

@@ -10,38 +10,10 @@ import { messageOf } from "../../components/FileBrowser";
 type Me = { sub?: string; email?: string; totp_enabled?: number };
 type TotpStart = { secret: string; uri: string; recovery_codes: string[] };
 type DavFolder = { url?: string; user?: string; has_key?: number; prefix?: string; key?: string };
-type Storage = {
-  enabled: number;
-  provider: string;
-  endpoint: string;
-  bucket: string;
-  region: string;
-  access_key: string;
-  secret_set: number;
-};
-
-const emptyStorage: Storage = {
-  enabled: 0,
-  provider: "b2",
-  endpoint: "",
-  bucket: "",
-  region: "eu-central-003",
-  access_key: "",
-  secret_set: 0,
-};
-
-const presets: Record<string, { endpoint: string; region: string }> = {
-  b2: { endpoint: "https://s3.eu-central-003.backblazeb2.com", region: "eu-central-003" },
-  hetzner: { endpoint: "https://fsn1.your-objectstorage.com", region: "fsn1" },
-  r2: { endpoint: "", region: "auto" },
-  custom: { endpoint: "", region: "us-east-1" },
-};
 
 function ProfileScreen() {
   const { t } = useI18n();
   const [me, setMe] = useState<Me | null>(null);
-  const [storage, setStorage] = useState<Storage>(emptyStorage);
-  const [secret, setSecret] = useState("");
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [next2, setNext2] = useState("");
@@ -52,17 +24,16 @@ function ProfileScreen() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"password" | "totp" | "s3" | "dav">("password");
+  const [tab, setTab] = useState<"password" | "totp" | "dav">("password");
   const [dav, setDav] = useState<DavFolder | null>(null);
   const [davKey, setDavKey] = useState("");
 
   useEffect(() => {
     let cancel = false;
-    Promise.all([api.get<Me>("/v1/me"), api.get<Storage>("/v1/me/storage"), api.get<DavFolder>("/v1/me/dav")])
-      .then(([who, box, folder]) => {
+    Promise.all([api.get<Me>("/v1/me"), api.get<DavFolder>("/v1/me/dav")])
+      .then(([who, folder]) => {
         if (cancel) return;
         setMe(who);
-        setStorage({ ...emptyStorage, ...box, provider: box.provider || "b2" });
         setDav(folder);
       })
       .catch((err) => {
@@ -154,40 +125,6 @@ function ProfileScreen() {
     }
   }
 
-  function pickProvider(id: string) {
-    const preset = presets[id] ?? presets.custom;
-    setStorage((s) => ({
-      ...s,
-      provider: id,
-      endpoint: id === "custom" ? s.endpoint : preset.endpoint,
-      region: id === "custom" ? s.region : preset.region,
-    }));
-  }
-
-  async function onStorage(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      const row = await api.put<Storage>("/v1/me/storage", {
-        enabled: storage.enabled,
-        provider: storage.provider,
-        endpoint: storage.endpoint,
-        bucket: storage.bucket,
-        region: storage.region,
-        access_key: storage.access_key,
-        secret_key: secret,
-      });
-      setStorage({ ...emptyStorage, ...row, provider: row.provider || storage.provider });
-      setSecret("");
-      flash(t("profile.s3_ok"));
-    } catch (err) {
-      setNote("");
-      setError(messageOf(err, t("common.error")));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function mintDav() {
     setBusy(true);
     try {
@@ -203,29 +140,15 @@ function ProfileScreen() {
     }
   }
 
-  async function checkStorage() {
-    setBusy(true);
-    try {
-      await api.post("/v1/me/storage/check");
-      flash(t("profile.s3_check_ok"));
-    } catch (err) {
-      setNote("");
-      setError(messageOf(err, t("common.error")));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const email = me?.email || me?.sub || "";
   const totpOn = me?.totp_enabled === 1;
   const tabs = [
     ["password", "profile.tab_password"],
     ["totp", "profile.tab_totp"],
-    ["s3", "profile.tab_s3"],
     ["dav", "profile.tab_dav"],
   ] as const;
 
-  function openTab(id: "password" | "totp" | "s3" | "dav") {
+  function openTab(id: "password" | "totp" | "dav") {
     setTab(id);
     setError("");
     setNote("");
@@ -326,75 +249,6 @@ function ProfileScreen() {
           </>
         )}
       </section>
-      ) : null}
-
-      {tab === "s3" ? (
-      <form className="settings-block" onSubmit={onStorage}>
-        <h2>{t("profile.s3")}</h2>
-        <p className="muted small">{t("profile.s3_hint")}</p>
-        <p className="muted small">{t("profile.s3_where")} {t("profile.s3_owner")}</p>
-        <div className="preset-row">
-          {(["b2", "hetzner", "r2", "custom"] as const).map((id) => (
-            <button
-              key={id}
-              type="button"
-              className={`btn ghost sm${storage.provider === id ? " active" : ""}`}
-              onClick={() => pickProvider(id)}
-            >
-              {t(`profile.provider_${id}`)}
-            </button>
-          ))}
-        </div>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={storage.enabled === 1}
-            onChange={(e) => setStorage({ ...storage, enabled: e.target.checked ? 1 : 0 })}
-          />
-          {t("profile.s3_on")}
-        </label>
-        <div className="settings-grid">
-          <div className="field">
-            <label htmlFor="s3-endpoint">{t("settings.endpoint")}</label>
-            <input
-              id="s3-endpoint"
-              className="input"
-              value={storage.endpoint}
-              placeholder={storage.provider === "r2" ? "https://<accountid>.r2.cloudflarestorage.com" : ""}
-              onChange={(e) => setStorage({ ...storage, endpoint: e.target.value })}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="s3-bucket">{t("settings.bucket")}</label>
-            <input id="s3-bucket" className="input" value={storage.bucket} onChange={(e) => setStorage({ ...storage, bucket: e.target.value })} />
-          </div>
-          <div className="field">
-            <label htmlFor="s3-region">{t("settings.region")}</label>
-            <input id="s3-region" className="input" value={storage.region} onChange={(e) => setStorage({ ...storage, region: e.target.value })} />
-          </div>
-          <div className="field">
-            <label htmlFor="s3-access">{t("settings.access_key")}</label>
-            <input id="s3-access" className="input" autoComplete="off" value={storage.access_key} onChange={(e) => setStorage({ ...storage, access_key: e.target.value })} />
-          </div>
-          <div className="field">
-            <label htmlFor="s3-secret">{t("settings.secret_key")}</label>
-            <input
-              id="s3-secret"
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={secret}
-              placeholder={storage.secret_set === 1 ? t("profile.s3_secret_keep") : ""}
-              onChange={(e) => setSecret(e.target.value)}
-            />
-          </div>
-        </div>
-        {storage.provider === "r2" ? <p className="muted small">{t("profile.s3_r2")}</p> : null}
-        <button type="submit" className="btn" disabled={busy}>{t("profile.s3_save")}</button>{" "}
-        <button type="button" className="btn ghost" disabled={busy || storage.enabled !== 1} onClick={checkStorage}>
-          {t("profile.s3_check")}
-        </button>
-      </form>
       ) : null}
 
       {tab === "dav" ? (

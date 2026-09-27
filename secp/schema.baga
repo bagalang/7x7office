@@ -412,6 +412,14 @@ fn secp_migrations() -> MigrationSet {
         "CREATE TABLE idm_dav_keys (user_id BIGINT PRIMARY KEY, key_hash TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '', created_at BIGINT NOT NULL DEFAULT 0)",
         "DROP TABLE IF EXISTS idm_dav_keys"
     )
+    // Личната кофа отпада. Тайните в нея не остават в базата.
+    set = migrate_add(
+        set,
+        20260927050,
+        "drop_idm_user_s3",
+        "DROP TABLE IF EXISTS idm_user_s3",
+        "CREATE TABLE idm_user_s3 (user_id BIGINT PRIMARY KEY, enabled BIGINT NOT NULL DEFAULT 0, provider TEXT NOT NULL DEFAULT '', endpoint TEXT NOT NULL DEFAULT '', bucket TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT '', access_key TEXT NOT NULL DEFAULT '', secret_key TEXT NOT NULL DEFAULT '')"
+    )
     return set
 }
 
