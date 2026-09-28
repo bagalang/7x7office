@@ -87,8 +87,9 @@ export default function LoginPage() {
           <input
             id="email"
             className="input"
-            type="email"
+            type="text"
             autoComplete="username"
+            placeholder={t("login.email")}
             required
             autoFocus
             value={email}

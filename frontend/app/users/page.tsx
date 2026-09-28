@@ -9,7 +9,7 @@ import { IconPlus } from "../../components/icons";
 import { ApiError, api, setUserQuota } from "../../lib/api";
 
 type Me = { sub?: string; is_admin?: number; name?: string };
-type UserRow = { id: number; email: string; name: string; is_admin: number; quota_mb?: number };
+type UserRow = { id: number; username?: string; email: string; name: string; is_admin: number; quota_mb?: number };
 type UserList = { items: UserRow[]; count: number };
 
 const AVATAR_COLORS = ["#1a73e8", "#188038", "#e37400", "#9334e6", "#d93025", "#0b8043"];
@@ -156,7 +156,10 @@ function UsersScreen() {
                       <span className="avatar" style={{ background: colorOf(row.email), cursor: "default" }}>
                         {initialsOf(row.email, row.name)}
                       </span>
-                      <span className="label">{row.email}</span>
+                      <span>
+                        <span className="label">{row.username || row.email}</span>
+                        {row.username ? <span className="sub" style={{ display: "block" }}>{row.email}</span> : null}
+                      </span>
                     </span>
                   </td>
                   <td className={row.name ? "" : "muted"}>{row.name || "—"}</td>

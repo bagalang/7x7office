@@ -108,11 +108,12 @@ fn act_mfa(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let email = orm_cell_by(uq, 0, "email")
     let secret = orm_cell_by(uq, 0, "totp_secret_b32")
     let is_admin = orm_cell_by_i64(uq, 0, "is_admin")
+    let session = idm_session_sub(orm_cell_by(uq, 0, "username"), email)
     if totp_try_code(secret, code.val)? == 1 {
-        return totp_issue(ctx, orm_db_q(uq), uid, email, is_admin)
+        return totp_issue(ctx, orm_db_q(uq), uid, session, is_admin)
     }
     if totp_try_recovery(orm_db_q(uq), uid, code.val)? == 1 {
-        return totp_issue(ctx, orm_db_q(uq), uid, email, is_admin)
+        return totp_issue(ctx, orm_db_q(uq), uid, session, is_admin)
     }
     return act_err(orm_db_q(uq), 401, "invalid code")
 }

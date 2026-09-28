@@ -100,14 +100,14 @@ fn act_login(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
         if form.is_form == 1 {
             return act_err(dbu, 401, "2FA required")
         }
-        return act_login_mfa(ctx, dbu, auth.email)?
+        return act_login_mfa(ctx, dbu, idm_session_sub(auth.username, auth.email))?
     }
     let mut extra = "\"uid\":"
     extra = concat(extra, int_to_str(auth.id))
     if auth.is_admin == 1 {
         extra = concat(extra, ",\"admin\":true")
     }
-    let token = fmr_issue_token(ctx.jwt_secret, auth.email, extra)
+    let token = fmr_issue_token(ctx.jwt_secret, idm_session_sub(auth.username, auth.email), extra)
     if form.is_form == 1 {
         // Browser flow: cookie + redirect to home.
         let mut r = http_response(303, "")
@@ -118,7 +118,7 @@ fn act_login(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Time {
     let mut o = jobj_new()
     o = jobj_str(o, "access_token", token)
     o = jobj_str(o, "token_type", "bearer")
-    o = jobj_str(o, "sub", auth.email)
+    o = jobj_str(o, "sub", idm_session_sub(auth.username, auth.email))
     o = jobj_i64(o, "uid", auth.id)
     let mut r = fmr_ok_obj(o)
     r = http_set_header(r, "Set-Cookie", secp_cookie_set(token))
@@ -143,7 +143,7 @@ fn act_me(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
         return act_err(db, 401, "unknown user")
     }
     let mut o = idm_user_to_json(q, 0)
-    o = jobj_str(o, "sub", orm_cell_by(q, 0, "email"))
+    o = jobj_str(o, "sub", idm_session_sub(orm_cell_by(q, 0, "username"), orm_cell_by(q, 0, "email")))
     o = jobj_i64(o, "totp_enabled", orm_cell_by_i64(q, 0, "totp_enabled"))
     return act_ok(orm_db_q(q), o)
 }

@@ -4,10 +4,11 @@ import { FormEvent, useEffect, useState } from "react";
 import { RequireAuth } from "../../components/RequireAuth";
 import { AppShell } from "../../components/AppShell";
 import { useI18n } from "../../components/I18nProvider";
-import { api } from "../../lib/api";
+import { api, setToken } from "../../lib/api";
 import { messageOf } from "../../components/FileBrowser";
 
-type Me = { sub?: string; email?: string; totp_enabled?: number };
+type Me = { sub?: string; username?: string; email?: string; totp_enabled?: number };
+type AccountSaved = { username?: string; email?: string; access_token?: string };
 type TotpStart = { secret: string; uri: string; recovery_codes: string[] };
 type DavFolder = { url?: string; user?: string; has_key?: number; prefix?: string; key?: string };
 
@@ -24,7 +25,10 @@ function ProfileScreen() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"password" | "totp" | "dav">("password");
+  const [tab, setTab] = useState<"account" | "password" | "totp" | "dav">("account");
+  const [username, setUsername] = useState("");
+  const [mail, setMail] = useState("");
+  const [accountPass, setAccountPass] = useState("");
   const [dav, setDav] = useState<DavFolder | null>(null);
   const [davKey, setDavKey] = useState("");
 
@@ -34,6 +38,8 @@ function ProfileScreen() {
       .then(([who, folder]) => {
         if (cancel) return;
         setMe(who);
+        setUsername(who.username || "");
+        setMail(who.email || who.sub || "");
         setDav(folder);
       })
       .catch((err) => {
@@ -47,6 +53,29 @@ function ProfileScreen() {
   function flash(msg: string) {
     setError("");
     setNote(msg);
+  }
+
+  async function onAccount(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const row = await api.post<AccountSaved>("/v1/me/account", {
+        username: username.trim(),
+        email: mail.trim(),
+        current: accountPass,
+      });
+      if (row.access_token) setToken(row.access_token);
+      setAccountPass("");
+      setMe((m) => (m ? { ...m, username: row.username, email: row.email, sub: row.username || m.sub } : m));
+      if (row.username) setUsername(row.username);
+      if (row.email) setMail(row.email);
+      flash(t("profile.account_ok"));
+    } catch (err) {
+      setNote("");
+      setError(messageOf(err, t("common.error")));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onPassword(e: FormEvent) {
@@ -140,15 +169,16 @@ function ProfileScreen() {
     }
   }
 
-  const email = me?.email || me?.sub || "";
+  const email = me?.username || me?.email || me?.sub || "";
   const totpOn = me?.totp_enabled === 1;
   const tabs = [
+    ["account", "profile.tab_account"],
     ["password", "profile.tab_password"],
     ["totp", "profile.tab_totp"],
     ["dav", "profile.tab_dav"],
   ] as const;
 
-  function openTab(id: "password" | "totp" | "dav") {
+  function openTab(id: "account" | "password" | "totp" | "dav") {
     setTab(id);
     setError("");
     setNote("");
@@ -176,6 +206,30 @@ function ProfileScreen() {
       </div>
       {error ? <p className="err">{error}</p> : null}
       {note ? <p className="muted">{note}</p> : null}
+
+      {tab === "account" ? (
+        <section className="settings-block">
+          <h2>{t("profile.tab_account")}</h2>
+          <p className="muted small">{t("profile.account_hint")}</p>
+          <form onSubmit={onAccount}>
+            <div className="settings-grid">
+              <div className="field">
+                <label htmlFor="ac-user">{t("profile.username")}</label>
+                <input id="ac-user" className="input" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="ac-mail">{t("profile.email")}</label>
+                <input id="ac-mail" className="input" type="email" autoComplete="email" value={mail} onChange={(e) => setMail(e.target.value)} />
+              </div>
+              <div className="field">
+                <label htmlFor="ac-pass">{t("profile.current")}</label>
+                <input id="ac-pass" className="input" type="password" autoComplete="current-password" value={accountPass} onChange={(e) => setAccountPass(e.target.value)} />
+              </div>
+            </div>
+            <button type="submit" className="btn" disabled={busy} style={{ marginTop: 4 }}>{t("profile.account_save")}</button>
+          </form>
+        </section>
+      ) : null}
 
       {tab === "password" ? (
       <form className="settings-block" onSubmit={onPassword}>

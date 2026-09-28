@@ -1,12 +1,15 @@
 // idm/profile_actions.baga — смяна на паролата от самия потребител.
 
 import "user_model.baga"
+import "user_actions.baga"
 import "reset_model.baga"
 import "../lib/pass.baga"
+import "fmrbaga/app.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
 import "fmrbaga/jsonx.baga"
 import "ormbaga/orm.baga"
+import "httpdbaga/http.baga"
 import "std/str/str.baga"
 import "std/random/random.baga"
 
@@ -49,4 +52,75 @@ fn act_password(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random {
     let mut o = jobj_new()
     o = jobj_i64(o, "ok", 1)
     return act_ok(orm_db_exec(up), o)
+}
+
+fn act_account(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
+    let auth = act_require_auth(ctx, db)
+    if auth.ok == 0 {
+        return auth.out
+    }
+    let body = jbody_parse_str(fmr_body(ctx))
+    if body.ok == 0 {
+        return act_err(db, 400, body.err)
+    }
+    let b = jbody_require_object(body)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let current = jreq_str(b.doc, b.root, "current")
+    if current.ok == 0 || current.val == "" {
+        return act_err(db, 400, "current password required")
+    }
+    let user_f = jreq_str(b.doc, b.root, "username")
+    if user_f.ok == 0 {
+        return act_err(db, 400, user_f.err)
+    }
+    let email_f = jreq_str(b.doc, b.root, "email")
+    if email_f.ok == 0 {
+        return act_err(db, 400, email_f.err)
+    }
+    let username = to_lower(str_trim(user_f.val))
+    let email = to_lower(str_trim(email_f.val))
+    if idm_username_ok(username) == 0 {
+        return act_err(db, 400, "username is invalid")
+    }
+    if idm_email_ok(email) == 0 {
+        return act_err(db, 400, "email is invalid")
+    }
+    let who = idm_user_authenticate(db, to_lower(str_trim(auth.ctx.user_sub)), current.val)?
+    if who.ok == 0 {
+        return act_err(db, 401, "invalid password")
+    }
+    let uname_hit = idm_field_owner(db, "username", username)?
+    if uname_hit.err != "" {
+        return act_err(uname_hit.db, 500, uname_hit.err)
+    }
+    if uname_hit.found == 1 && uname_hit.id != who.id {
+        return act_err(uname_hit.db, 409, "username taken")
+    }
+    let mail_hit = idm_field_owner(uname_hit.db, "email", email)?
+    if mail_hit.err != "" {
+        return act_err(mail_hit.db, 500, mail_hit.err)
+    }
+    if mail_hit.found == 1 && mail_hit.id != who.id {
+        return act_err(mail_hit.db, 409, "email taken")
+    }
+    let up = idm_user_set_login(mail_hit.db, who.id, username, email)?
+    if orm_ok(up) == 0 {
+        return act_err(orm_db_exec(up), 500, orm_err_exec(up))
+    }
+    let mut extra = "\"uid\":"
+    extra = concat(extra, int_to_str(who.id))
+    if who.is_admin == 1 {
+        extra = concat(extra, ",\"admin\":true")
+    }
+    let token = fmr_issue_token(ctx.jwt_secret, username, extra)
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_str(o, "username", username)
+    o = jobj_str(o, "email", email)
+    o = jobj_str(o, "access_token", token)
+    let mut r = fmr_ok_obj(o)
+    r = http_set_header(r, "Set-Cookie", concat("secp_token=", concat(token, "; Path=/; HttpOnly; SameSite=Lax")))
+    return fmr_out(r, orm_db_exec(up))
 }

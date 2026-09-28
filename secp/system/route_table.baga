@@ -96,6 +96,7 @@ fn RID_S3_CHECK() -> i64 { return 93 }
 fn RID_BAK_CHECK() -> i64 { return 94 }
 fn RID_BAK_RUN() -> i64 { return 95 }
 fn RID_SMTP_CHECK() -> i64 { return 98 }
+fn RID_ACCOUNT() -> i64 { return 99 }
 
 // Всяко id, което dispatch-ът трябва да поеме. Нов маршрут се добавя и тук.
 fn secp_ids() -> Vec<i64> {
@@ -185,6 +186,7 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_BAK_CHECK())
     vec_push(v, RID_BAK_RUN())
     vec_push(v, RID_SMTP_CHECK())
+    vec_push(v, RID_ACCOUNT())
     return v
 }
 
@@ -209,6 +211,7 @@ fn secp_routes() -> Router {
     r = secp_add(r, "POST", "/v1/auth/mfa", RID_MFA(), "auth", 1, "MfaRequest", "TokenResponse", "200", "")
     r = secp_add(r, "GET", "/v1/me", RID_ME(), "auth", 0, "", "Me", "200", "")
     r = secp_add(r, "POST", "/v1/me/password", RID_PASSWORD(), "auth", 0, "PasswordChange", "Message", "200", "")
+    r = secp_add(r, "POST", "/v1/me/account", RID_ACCOUNT(), "auth", 0, "AccountChange", "Account", "200", "")
     r = secp_add(r, "POST", "/v1/me/totp/start", RID_TOTP_START(), "auth", 0, "", "TotpStart", "200", "")
     r = secp_add(r, "POST", "/v1/me/totp/confirm", RID_TOTP_CONFIRM(), "auth", 0, "TotpConfirm", "Message", "200", "")
     r = secp_add(r, "POST", "/v1/me/totp/disable", RID_TOTP_DISABLE(), "auth", 0, "TotpDisable", "Message", "200", "")

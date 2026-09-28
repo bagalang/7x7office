@@ -150,7 +150,7 @@ export const bg: Record<string, string> = {
   "editor.add_col": "Колона",
 
   "login.sub": "Вход в платформата",
-  "login.email": "Имейл",
+  "login.email": "Потребител или имейл",
   "login.password": "Парола",
   "login.submit": "Вход",
   "login.submitting": "Вход…",
@@ -458,7 +458,13 @@ export const bg: Record<string, string> = {
   "login.mfa_back": "Назад към паролата",
 
   "profile.title": "Моят профил",
+  "profile.tab_account": "Акаунт",
   "profile.tab_password": "Парола",
+  "profile.username": "Потребител",
+  "profile.email": "Имейл",
+  "profile.account_hint": "Потребителят е за вход и не се сменя с тестовия адрес. Имейлът се сменя тук — първото нещо след качване на сървър. Нужна е текущата парола.",
+  "profile.account_save": "Запази акаунта",
+  "profile.account_ok": "Акаунтът е записан.",
   "profile.tab_totp": "Код за вход",
   "profile.tab_dav": "Папка",
   "profile.dav": "Папка на компютъра",

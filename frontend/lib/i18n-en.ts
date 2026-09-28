@@ -150,7 +150,7 @@ export const en: Record<string, string> = {
   "editor.add_col": "Column",
 
   "login.sub": "Sign in to the platform",
-  "login.email": "Email",
+  "login.email": "Username or email",
   "login.password": "Password",
   "login.submit": "Sign in",
   "login.submitting": "Signing in…",
@@ -455,7 +455,13 @@ export const en: Record<string, string> = {
   "login.mfa_back": "Back to password",
 
   "profile.title": "My profile",
+  "profile.tab_account": "Account",
   "profile.tab_password": "Password",
+  "profile.username": "Username",
+  "profile.email": "Email",
+  "profile.account_hint": "The username is for signing in and stays when the test address goes away. Change the email here — the first step on a server. The current password is required.",
+  "profile.account_save": "Save account",
+  "profile.account_ok": "Account saved.",
   "profile.tab_totp": "Sign-in code",
   "profile.tab_dav": "Folder",
   "profile.dav": "Folder on this computer",

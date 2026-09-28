@@ -88,6 +88,7 @@ fn secp_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_RESET() { return act_reset(ctx, db)? }
     if id == RID_ME() { return act_me(ctx, db)? }
     if id == RID_PASSWORD() { return act_password(ctx, db)? }
+    if id == RID_ACCOUNT() { return act_account(ctx, db)? }
     if id == RID_TOTP_START() { return act_totp_start(ctx, db)? }
     if id == RID_TOTP_CONFIRM() { return act_totp_confirm(ctx, db)? }
     if id == RID_TOTP_DISABLE() { return act_totp_disable(ctx, db)? }

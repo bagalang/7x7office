@@ -153,7 +153,7 @@ export const de: Record<string, string> = {
   "editor.add_col": "Spalte",
 
   "login.sub": "Anmeldung an der Plattform",
-  "login.email": "E-Mail",
+  "login.email": "Benutzer oder E-Mail",
   "login.password": "Passwort",
   "login.submit": "Anmelden",
   "login.submitting": "Anmeldung…",
@@ -457,7 +457,13 @@ export const de: Record<string, string> = {
   "login.mfa_back": "Zurück zum Passwort",
 
   "profile.title": "Mein Profil",
+  "profile.tab_account": "Konto",
   "profile.tab_password": "Passwort",
+  "profile.username": "Benutzer",
+  "profile.email": "E-Mail",
+  "profile.account_hint": "Der Benutzername ist für die Anmeldung und bleibt, wenn die Testadresse wegfällt. Die E-Mail wird hier geändert — der erste Schritt auf einem Server. Das aktuelle Passwort ist nötig.",
+  "profile.account_save": "Konto speichern",
+  "profile.account_ok": "Konto gespeichert.",
   "profile.tab_totp": "Anmeldecode",
   "profile.tab_dav": "Ordner",
   "profile.dav": "Ordner auf dem Computer",

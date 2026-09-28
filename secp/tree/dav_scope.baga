@@ -69,6 +69,7 @@ fn dav_user(ctx: FmrCtx, db: OrmDb) -> IdmAuth !IO !Net {
     return IdmAuth {
         ok: 1,
         id: orm_cell_by_i64(q, 0, "id"),
+        username: orm_cell_by(q, 0, "username"),
         email: orm_cell_by(q, 0, "email"),
         name: orm_cell_by(q, 0, "name"),
         is_admin: orm_cell_by_i64(q, 0, "is_admin")

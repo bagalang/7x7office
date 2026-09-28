@@ -31,6 +31,7 @@ fn idm_user_next_id(db: OrmDb) -> OrmCount !IO !Net {
 fn idm_user_to_json(q: OrmQuery, row: i64) -> JObj {
     let mut o = jobj_new()
     o = jobj_i64(o, "id", orm_cell_by_i64(q, row, "id"))
+    o = jobj_str(o, "username", orm_cell_by(q, row, "username"))
     o = jobj_str(o, "email", orm_cell_by(q, row, "email"))
     o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
     o = jobj_i64(o, "is_admin", orm_cell_by_i64(q, row, "is_admin"))
@@ -42,26 +43,197 @@ fn idm_user_to_json(q: OrmQuery, row: i64) -> JObj {
     return o
 }
 
+// Входът е имейл или потребителско име. Старият JWT носи имейла.
 fn idm_user_find_by_email(db: OrmDb, email: str) -> OrmQuery !IO !Net {
-    return orm_where_eq_str(db, idm_user_table(), "email", email)?
+    let vals = vec_new()
+    vec_push(vals, email)
+    return orm_query_params_str(db, "SELECT * FROM idm_users WHERE email = $1 OR username = $1", vals)?
 }
 
 // Public columns only — pass_hash never leaves this query.
 fn idm_user_list(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, "SELECT id, email, name, is_admin, quota_mb, created_at FROM idm_users ORDER BY id")?
+    return orm_query(db, "SELECT id, username, email, name, is_admin, quota_mb, created_at FROM idm_users ORDER BY id")?
 }
 
 fn idm_user_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT id, email, name, pass_hash, pass_salt, pass_iters, is_admin, created_at FROM idm_users WHERE id = $1"
+    let sql = "SELECT id, username, email, name, pass_hash, pass_salt, pass_iters, is_admin, created_at FROM idm_users WHERE id = $1"
     let vals = vec_new()
     let nulls = vec_new()
     pg_param_i64(vals, nulls, id)
     return orm_query_params(db, sql, vals, nulls)?
 }
 
+struct IdmHit {
+    db: OrmDb,
+    id: i64,
+    found: i64,
+    err: str
+}
+
+struct IdmName {
+    db: OrmDb,
+    name: str,
+    err: str
+}
+
+fn idm_username_ok(name: str) -> i64 {
+    if len(name) < 2 {
+        return 0
+    }
+    if len(name) > 32 {
+        return 0
+    }
+    let mut i: i64 = 0
+    while i < len(name) {
+        let c = char_at(name, i)
+        let mut okc: i64 = 0
+        if c >= 97 && c <= 122 {
+            okc = 1
+        }
+        if c >= 48 && c <= 57 {
+            okc = 1
+        }
+        if c == 46 || c == 95 || c == 45 {
+            okc = 1
+        }
+        if okc == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+fn idm_username_from_email(email: str) -> str {
+    let low = to_lower(email)
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(low) {
+        let c = char_at(low, i)
+        if c == 64 {
+            return out
+        }
+        let mut keep: i64 = 0
+        if c >= 97 && c <= 122 {
+            keep = 1
+        }
+        if c >= 48 && c <= 57 {
+            keep = 1
+        }
+        if c == 46 || c == 95 || c == 45 {
+            keep = 1
+        }
+        if keep == 1 {
+            out = concat(out, chr(c))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn idm_field_owner(db: OrmDb, col: str, val: str) -> IdmHit !IO !Net {
+    let sql = concat(concat("SELECT id FROM idm_users WHERE ", col), " = $1")
+    let vals = vec_new()
+    vec_push(vals, val)
+    let q = orm_query_params_str(db, sql, vals)?
+    if orm_ok_q(q) == 0 {
+        return IdmHit { db: orm_db_q(q), id: 0, found: 0, err: orm_err_q(q) }
+    }
+    if orm_nrows(q) < 1 {
+        return IdmHit { db: orm_db_q(q), id: 0, found: 0, err: "" }
+    }
+    return IdmHit { db: orm_db_q(q), id: orm_cell_by_i64(q, 0, "id"), found: 1, err: "" }
+}
+
+fn idm_pick_username(db: OrmDb, base: str, except_id: i64) -> IdmName !IO !Net {
+    let mut name = base
+    if idm_username_ok(name) == 0 {
+        name = "user"
+    }
+    let mut n: i64 = 2
+    let mut d = db
+    while n < 100 {
+        let hit = idm_field_owner(d, "username", name)?
+        d = hit.db
+        if hit.err != "" {
+            return IdmName { db: d, name: "", err: hit.err }
+        }
+        if hit.found == 0 || hit.id == except_id {
+            return IdmName { db: d, name: name, err: "" }
+        }
+        name = concat(base, int_to_str(n))
+        if idm_username_ok(name) == 0 {
+            name = concat("user", int_to_str(n))
+        }
+        n = n + 1
+    }
+    return IdmName { db: d, name: "", err: "username taken" }
+}
+
+fn idm_user_set_login(db: OrmDb, user_id: i64, username: str, email: str) -> OrmExec !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, username)
+    vec_push(vals, email)
+    vec_push(vals, int_to_str(user_id))
+    return orm_exec_params_str(db, "UPDATE idm_users SET username = $1, email = $2 WHERE id = $3", vals)?
+}
+
+fn idm_fill_usernames(db: OrmDb) -> i64 !IO !Net {
+    let q = orm_query(db, "SELECT id, email, username FROM idm_users ORDER BY id")?
+    if orm_ok_q(q) == 0 {
+        eprintln(concat("username backfill: ", orm_err_q(q)))
+        return 1
+    }
+    let ids = vec_new()
+    let emails = vec_new()
+    let names = vec_new()
+    let mut i: i64 = 0
+    while i < orm_nrows(q) {
+        vec_push(ids, int_to_str(orm_cell_by_i64(q, i, "id")))
+        vec_push(emails, orm_cell_by(q, i, "email"))
+        vec_push(names, orm_cell_by(q, i, "username"))
+        i = i + 1
+    }
+    let mut d = orm_db_q(q)
+    i = 0
+    while i < vec_len(ids) {
+        if vec_get(names, i) == "" {
+            let uid = parse_int(vec_get(ids, i))
+            let picked = idm_pick_username(d, idm_username_from_email(vec_get(emails, i)), uid)?
+            d = picked.db
+            if picked.err != "" {
+                eprintln(concat("username backfill: ", picked.err))
+                return 1
+            }
+            let vals = vec_new()
+            vec_push(vals, picked.name)
+            vec_push(vals, vec_get(ids, i))
+            let up = orm_exec_params_str(d, "UPDATE idm_users SET username = $1 WHERE id = $2", vals)?
+            if orm_ok(up) == 0 {
+                eprintln(concat("username backfill: ", orm_err_exec(up)))
+                return 1
+            }
+            d = orm_db_exec(up)
+            print(concat("username: ", concat(vec_get(emails, i), concat(" → ", picked.name))))
+        }
+        i = i + 1
+    }
+    let idx = orm_exec(d, "CREATE UNIQUE INDEX IF NOT EXISTS index_idm_users_on_username ON idm_users (username)")?
+    if orm_ok(idx) == 0 {
+        eprintln(concat("username index: ", orm_err_exec(idx)))
+    }
+    return 0
+}
+
 fn idm_user_create(db: OrmDb, email: str, name: str, pass_hash: str, pass_salt: str, pass_iters: i64, is_admin: i64) -> OrmExec !IO !Net {
+    let picked = idm_pick_username(db, idm_username_from_email(email), 0)?
+    if picked.err != "" {
+        return OrmEErr(OrmExecFail { err: picked.err, tag: "", db: picked.db })
+    }
+    let uname = picked.name
+    let db0 = picked.db
     if idm_backend_boila()? == 1 {
-        let c = idm_user_next_id(db)?
+        let c = idm_user_next_id(db0)?
         if orm_ok_c(c) == 0 {
             return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
         }
@@ -69,6 +241,7 @@ fn idm_user_create(db: OrmDb, email: str, name: str, pass_hash: str, pass_salt: 
         let mut d = orm_db_c(c)
         let cols = vec_new()
         vec_push(cols, "id")
+        vec_push(cols, "username")
         vec_push(cols, "email")
         vec_push(cols, "name")
         vec_push(cols, "pass_hash")
@@ -77,6 +250,7 @@ fn idm_user_create(db: OrmDb, email: str, name: str, pass_hash: str, pass_salt: 
         vec_push(cols, "is_admin")
         let vals = vec_new()
         vec_push(vals, int_to_str(nid))
+        vec_push(vals, uname)
         vec_push(vals, email)
         vec_push(vals, name)
         vec_push(vals, pass_hash)
@@ -86,6 +260,7 @@ fn idm_user_create(db: OrmDb, email: str, name: str, pass_hash: str, pass_salt: 
         return orm_insert_strs(d, idm_user_table(), cols, vals)?
     }
     let cols = vec_new()
+    vec_push(cols, "username")
     vec_push(cols, "email")
     vec_push(cols, "name")
     vec_push(cols, "pass_hash")
@@ -93,26 +268,35 @@ fn idm_user_create(db: OrmDb, email: str, name: str, pass_hash: str, pass_salt: 
     vec_push(cols, "pass_iters")
     vec_push(cols, "is_admin")
     let vals = vec_new()
+    vec_push(vals, uname)
     vec_push(vals, email)
     vec_push(vals, name)
     vec_push(vals, pass_hash)
     vec_push(vals, pass_salt)
     vec_push(vals, int_to_str(pass_iters))
     vec_push(vals, int_to_str(is_admin))
-    return orm_insert_strs(db, idm_user_table(), cols, vals)?
+    return orm_insert_strs(db0, idm_user_table(), cols, vals)?
 }
 
 // Authenticate by email + password. On ok=1, row fields are usable.
 struct IdmAuth {
     ok: i64,
     id: i64,
+    username: str,
     email: str,
     name: str,
     is_admin: i64
 }
 
 fn idm_auth_bad() -> IdmAuth {
-    return IdmAuth { ok: 0, id: 0, email: "", name: "", is_admin: 0 }
+    return IdmAuth { ok: 0, id: 0, username: "", email: "", name: "", is_admin: 0 }
+}
+
+fn idm_session_sub(username: str, email: str) -> str {
+    if username != "" {
+        return username
+    }
+    return email
 }
 
 // Constant-time-ish: unknown email still runs one PBKDF2 (dummy salt).
@@ -131,6 +315,7 @@ fn idm_user_authenticate(db: OrmDb, email: str, password: str) -> IdmAuth !IO !N
     return IdmAuth {
         ok: 1,
         id: orm_cell_by_i64(q, 0, "id"),
+        username: orm_cell_by(q, 0, "username"),
         email: orm_cell_by(q, 0, "email"),
         name: orm_cell_by(q, 0, "name"),
         is_admin: orm_cell_by_i64(q, 0, "is_admin")

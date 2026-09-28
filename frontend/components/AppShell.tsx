@@ -13,7 +13,7 @@ import { IconActivity, IconChat, IconClose, IconFileText, IconFolder, IconLogout
 import { ActivityFeed } from "./ActivityFeed";
 import { ChatPanel } from "./ChatPanel";
 
-export type Me = { sub?: string; name?: string; is_admin?: number };
+export type Me = { sub?: string; username?: string; email?: string; name?: string; is_admin?: number };
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -77,7 +77,7 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
   const used = usage?.used_bytes ?? 0;
   const quota = usage?.quota_bytes ?? 0;
   const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
-  const email = me?.sub ?? "";
+  const email = me?.username || me?.email || me?.sub || "";
 
   // Realtime (Фаза 3): брояч „има ново" и състояние на канала. Броячът се
   // изчиства при отваряне на лентата — както badge-ът на нотификациите.

@@ -36,6 +36,11 @@ fn boot_migrate() -> i64 !Net !IO !Random {
         orm_close(migrate_db(up))?
         return rc0
     }
+    let filled = idm_fill_usernames(migrate_db(up))?
+    if filled != 0 {
+        orm_close(migrate_db(up))?
+        return filled
+    }
     let rc = boot_seed_admin(migrate_db(up))?
     orm_close(migrate_db(up))?
     return rc

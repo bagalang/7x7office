@@ -118,5 +118,5 @@ fn dav_key_auth(db: OrmDb, email: str, secret: str) -> IdmAuth !IO !Net {
     if dav_key_hash(secret) != row.hash {
         return idm_auth_bad()
     }
-    return IdmAuth { ok: 1, id: uid, email: mail, name: name, is_admin: admin }
+    return IdmAuth { ok: 1, id: uid, username: orm_cell_by(q, 0, "username"), email: mail, name: name, is_admin: admin }
 }

@@ -152,7 +152,7 @@ export const ru: Record<string, string> = {
   "editor.add_col": "Столбец",
 
   "login.sub": "Вход в платформу",
-  "login.email": "Эл. почта",
+  "login.email": "Пользователь или почта",
   "login.password": "Пароль",
   "login.submit": "Войти",
   "login.submitting": "Вход…",
@@ -456,7 +456,13 @@ export const ru: Record<string, string> = {
   "login.mfa_back": "Назад к паролю",
 
   "profile.title": "Мой профиль",
+  "profile.tab_account": "Аккаунт",
   "profile.tab_password": "Пароль",
+  "profile.username": "Пользователь",
+  "profile.email": "Почта",
+  "profile.account_hint": "Имя пользователя нужно для входа и остаётся, когда тестовый адрес уходит. Почту меняют здесь — это первый шаг на сервере. Нужен текущий пароль.",
+  "profile.account_save": "Сохранить аккаунт",
+  "profile.account_ok": "Аккаунт сохранён.",
   "profile.tab_totp": "Код входа",
   "profile.tab_dav": "Папка",
   "profile.dav": "Папка на компьютере",
