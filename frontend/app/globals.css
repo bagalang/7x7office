@@ -560,6 +560,14 @@ a { color: var(--accent); text-decoration: none; }
 
 /* ---------- file table ---------- */
 
+.table.files { table-layout: fixed; }
+.table.files td.when,
+.table.files th.when {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.table.files td.name { overflow: hidden; }
+
 .table {
   width: 100%;
   border-collapse: collapse;

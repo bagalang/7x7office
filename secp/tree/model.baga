@@ -120,14 +120,43 @@ fn tree_subtree(db: OrmDb, ws: i64, path: str) -> OrmQuery !IO !Net {
     return orm_query_params_str(db, sql2, vals)?
 }
 
+// schema_boila няма DEFAULT now(), а INSERT/UPDATE не приемат now().
+// SELECT now() връща микросекунди на boila и текстов timestamptz на Postgres.
+// Същият низ се записва обратно.
+struct TreeStamp {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    stamp: str
+}
+
+fn tree_stamp_bad(db: OrmDb, err: str) -> TreeStamp {
+    return TreeStamp { ok: 0, db: db, err: err, stamp: "" }
+}
+
+fn tree_stamp(db: OrmDb) -> TreeStamp !IO !Net {
+    let q = orm_query(db, "SELECT now() AS stamp")?
+    if orm_ok_q(q) == 0 {
+        return tree_stamp_bad(orm_db_q(q), orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return tree_stamp_bad(orm_db_q(q), "clock")
+    }
+    return TreeStamp { ok: 1, db: orm_db_q(q), err: "", stamp: orm_cell(q, 0, 0) }
+}
+
 fn tree_insert(db: OrmDb, ws: i64, owner: i64, path: str, parent_path: str, name: str, is_dir: i64, size: i64, hash: str, thumb_hash: str) -> OrmExec !IO !Net {
+    let st = tree_stamp(db)?
+    if st.ok == 0 {
+        return OrmEErr(OrmExecFail { err: st.err, tag: "", db: st.db })
+    }
     if tree_backend_boila()? == 1 {
-        let c = tree_next_id(db)?
+        let c = tree_next_id(st.db)?
         if orm_ok_c(c) == 0 {
             return OrmEErr(OrmExecFail { err: orm_err_c(c), tag: "", db: orm_db_c(c) })
         }
         let nid = orm_count_n(c) + 1
-        let mut d = orm_db_c(c)
+        let d = orm_db_c(c)
         let cols = vec_new()
         vec_push(cols, "id")
         vec_push(cols, "workspace_id")
@@ -139,6 +168,8 @@ fn tree_insert(db: OrmDb, ws: i64, owner: i64, path: str, parent_path: str, name
         vec_push(cols, "size")
         vec_push(cols, "hash")
         vec_push(cols, "thumb_hash")
+        vec_push(cols, "created_at")
+        vec_push(cols, "updated_at")
         let vals = vec_new()
         vec_push(vals, int_to_str(nid))
         vec_push(vals, int_to_str(ws))
@@ -150,6 +181,8 @@ fn tree_insert(db: OrmDb, ws: i64, owner: i64, path: str, parent_path: str, name
         vec_push(vals, int_to_str(size))
         vec_push(vals, hash)
         vec_push(vals, thumb_hash)
+        vec_push(vals, st.stamp)
+        vec_push(vals, st.stamp)
         return orm_insert_strs(d, tree_table(), cols, vals)?
     }
     let cols = vec_new()
@@ -162,6 +195,8 @@ fn tree_insert(db: OrmDb, ws: i64, owner: i64, path: str, parent_path: str, name
     vec_push(cols, "size")
     vec_push(cols, "hash")
     vec_push(cols, "thumb_hash")
+    vec_push(cols, "created_at")
+    vec_push(cols, "updated_at")
     let vals = vec_new()
     vec_push(vals, int_to_str(ws))
     vec_push(vals, int_to_str(owner))
@@ -172,33 +207,45 @@ fn tree_insert(db: OrmDb, ws: i64, owner: i64, path: str, parent_path: str, name
     vec_push(vals, int_to_str(size))
     vec_push(vals, hash)
     vec_push(vals, thumb_hash)
-    return orm_insert_strs(db, tree_table(), cols, vals)?
+    vec_push(vals, st.stamp)
+    vec_push(vals, st.stamp)
+    return orm_insert_strs(st.db, tree_table(), cols, vals)?
 }
 
-// Overwrite file content columns (updated_at stays DB-default on PG;
-// boila has no triggers — accepted v1, versions land in Phase 5).
 fn tree_update_file(db: OrmDb, id: i64, size: i64, hash: str, thumb_hash: str) -> OrmExec !IO !Net {
+    let st = tree_stamp(db)?
+    if st.ok == 0 {
+        return OrmEErr(OrmExecFail { err: st.err, tag: "", db: st.db })
+    }
     let cols = vec_new()
     vec_push(cols, "size")
     vec_push(cols, "hash")
     vec_push(cols, "thumb_hash")
+    vec_push(cols, "updated_at")
     let vals = vec_new()
     vec_push(vals, int_to_str(size))
     vec_push(vals, hash)
     vec_push(vals, thumb_hash)
-    return orm_update_by_id(db, tree_table(), id, cols, vals)?
+    vec_push(vals, st.stamp)
+    return orm_update_by_id(st.db, tree_table(), id, cols, vals)?
 }
 
 fn tree_update_path(db: OrmDb, id: i64, path: str, parent_path: str, name: str) -> OrmExec !IO !Net {
+    let st = tree_stamp(db)?
+    if st.ok == 0 {
+        return OrmEErr(OrmExecFail { err: st.err, tag: "", db: st.db })
+    }
     let cols = vec_new()
     vec_push(cols, "path")
     vec_push(cols, "parent_path")
     vec_push(cols, "name")
+    vec_push(cols, "updated_at")
     let vals = vec_new()
     vec_push(vals, path)
     vec_push(vals, parent_path)
     vec_push(vals, name)
-    return orm_update_by_id(db, tree_table(), id, cols, vals)?
+    vec_push(vals, st.stamp)
+    return orm_update_by_id(st.db, tree_table(), id, cols, vals)?
 }
 
 fn tree_delete_subtree(db: OrmDb, ws: i64, path: str) -> OrmExec !IO !Net {

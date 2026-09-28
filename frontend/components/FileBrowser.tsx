@@ -49,9 +49,22 @@ export function formatBytes(n: number): string {
   return `${(n / 1073741824).toFixed(2)} GB`;
 }
 
+// boila връща timestamptz като микросекунди (16+ цифри). Postgres връща ISO.
+function epochMs(raw: string): number | null {
+  if (!/^-?\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const digits = raw.replace("-", "").length;
+  if (digits >= 16) return n / 1000;
+  if (digits >= 13) return n;
+  return n * 1000;
+}
+
 export function formatDate(iso?: string): string {
   if (!iso) return "—";
-  const d = new Date(iso);
+  const raw = iso.trim();
+  const fromEpoch = epochMs(raw);
+  const d = fromEpoch === null ? new Date(raw) : new Date(fromEpoch);
   if (Number.isNaN(d.getTime())) return "—";
   const pad = (x: number) => String(x).padStart(2, "0");
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -537,7 +550,7 @@ export function FileBrowser() {
         {error ? <p className="err">{error}</p> : null}
 
         {view === "list" ? (
-          <table className="table">
+          <table className="table files">
             <thead>
               <tr>
                 {writable ? (
@@ -552,8 +565,8 @@ export function FileBrowser() {
                   </th>
                 ) : null}
                 <th>{t("files.col_name")}</th>
-                <th style={{ width: 110 }}>{t("files.col_size")}</th>
-                <th style={{ width: 170 }}>{t("files.col_modified")}</th>
+                <th className="when" style={{ width: 110 }}>{t("files.col_size")}</th>
+                <th className="when" style={{ width: 158 }}>{t("files.col_modified")}</th>
                 <th style={{ width: 188 }} />
               </tr>
             </thead>
@@ -566,7 +579,7 @@ export function FileBrowser() {
                   }}
                 >
                   {writable ? <td /> : null}
-                  <td>
+                  <td className="name">
                     <span className="cell-name">
                       <span className="cell-icon">
                         <IconFolder />
@@ -574,8 +587,8 @@ export function FileBrowser() {
                       <span className="label">..</span>
                     </span>
                   </td>
-                  <td className="muted">—</td>
-                  <td className="muted">—</td>
+                  <td className="muted when">—</td>
+                  <td className="muted when">—</td>
                   <td />
                 </tr>
               ) : null}
@@ -599,7 +612,7 @@ export function FileBrowser() {
                       />
                     </td>
                   ) : null}
-                  <td>
+                  <td className="name">
                     {renamePath === node.path ? (
                       <form className="rename-form" onSubmit={onRename} onClick={(e) => e.stopPropagation()}>
                         <input
@@ -625,8 +638,8 @@ export function FileBrowser() {
                       </span>
                     )}
                   </td>
-                  <td className="muted">{node.is_dir ? "—" : formatBytes(node.size)}</td>
-                  <td className="muted">{formatDate(node.updated_at)}</td>
+                  <td className="muted when">{node.is_dir ? "—" : formatBytes(node.size)}</td>
+                  <td className="muted when">{formatDate(node.updated_at)}</td>
                   <td>{rowActions(node)}</td>
                 </tr>
               ))}
