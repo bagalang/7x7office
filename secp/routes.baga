@@ -94,6 +94,7 @@ fn secp_dispatch(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if id == RID_DAV_KEY_POST() { return act_dav_key_post(ctx, db)? }
     if id == RID_USERS_LIST() { return act_users_list(ctx, db)? }
     if id == RID_USERS_CREATE() { return act_users_create(ctx, db)? }
+    if id == RID_USERS_QUOTA() { return act_users_quota(ctx, db)? }
     if id == RID_WS_LIST() { return act_ws_list(ctx, db)? }
     if id == RID_WS_CREATE() { return act_ws_create(ctx, db)? }
     if id == RID_WS_UPDATE() { return act_ws_update(ctx, db)? }

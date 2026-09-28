@@ -25,6 +25,11 @@ export const bg: Record<string, string> = {
   "theme.aria": "Тема на интерфейса",
   "lang.aria": "Език на интерфейса",
   "quota.used_of": "{used} от {quota}",
+  "quota.col": "Квота (MB)",
+  "quota.placeholder": "0 = 1 GB",
+  "quota.hint_user": "Личното пространство ползва тази квота, ако на самото пространство не е записана друга. 0 оставя 1 GB.",
+  "quota.hint_ws": "За това пространство. 0 оставя 1 GB, а при лично — квотата на потребителя.",
+  "quota.saved": "Квотата е записана.",
 
   "files.title": "Файлове",
   "files.search_placeholder": "Търсене в папката…",

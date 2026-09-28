@@ -6,10 +6,10 @@ import { AppShell } from "../../components/AppShell";
 import { Dialog } from "../../components/Dialog";
 import { useI18n } from "../../components/I18nProvider";
 import { IconPlus } from "../../components/icons";
-import { ApiError, api } from "../../lib/api";
+import { ApiError, api, setUserQuota } from "../../lib/api";
 
 type Me = { sub?: string; is_admin?: number; name?: string };
-type UserRow = { id: number; email: string; name: string; is_admin: number };
+type UserRow = { id: number; email: string; name: string; is_admin: number; quota_mb?: number };
 type UserList = { items: UserRow[]; count: number };
 
 const AVATAR_COLORS = ["#1a73e8", "#188038", "#e37400", "#9334e6", "#d93025", "#0b8043"];
@@ -45,6 +45,8 @@ function UsersScreen() {
   const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
+  const [quotaDraft, setQuotaDraft] = useState<Record<number, string>>({});
+  const [notice, setNotice] = useState("");
 
   useEffect(() => {
     let cancel = false;
@@ -96,6 +98,26 @@ function UsersScreen() {
     }
   }
 
+  async function onQuota(row: UserRow) {
+    const raw = (quotaDraft[row.id] ?? (row.quota_mb ? String(row.quota_mb) : "")).trim();
+    const n = raw === "" ? 0 : Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 1048576) {
+      setError(t("common.error"));
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await setUserQuota(row.id, n);
+      setNotice(t("quota.saved"));
+      window.dispatchEvent(new Event("secp-quota"));
+      setReload((k) => k + 1);
+    } catch (err) {
+      setError(messageOf(err, t("common.error")));
+      setBusy(false);
+    }
+  }
+
   return (
     <AppShell>
       <main className="content-main">
@@ -111,7 +133,9 @@ function UsersScreen() {
         </div>
 
         {me && me.is_admin !== 1 ? <p className="err">{t("users.admin_only")}</p> : null}
+        <p className="muted">{t("quota.hint_user")}</p>
         {error ? <p className="err">{error}</p> : null}
+        {notice ? <p className="ok">{notice}</p> : null}
         {busy ? <p className="muted">{t("common.loading")}</p> : null}
 
         {me?.is_admin === 1 ? (
@@ -121,6 +145,7 @@ function UsersScreen() {
                 <th>{t("users.col_email")}</th>
                 <th style={{ width: 220 }}>{t("users.col_name")}</th>
                 <th style={{ width: 140 }}>{t("users.col_role")}</th>
+                <th style={{ width: 220 }}>{t("quota.col")}</th>
               </tr>
             </thead>
             <tbody>
@@ -138,6 +163,21 @@ function UsersScreen() {
                   <td>
                     <span className={`badge${row.is_admin === 1 ? " admin" : ""}`}>
                       {row.is_admin === 1 ? t("users.role_admin") : t("users.role_user")}
+                    </span>
+                  </td>
+                  <td>
+                    <span className="rename-form">
+                      <input
+                        className="input"
+                        inputMode="numeric"
+                        aria-label={t("quota.col")}
+                        placeholder={t("quota.placeholder")}
+                        value={quotaDraft[row.id] ?? (row.quota_mb ? String(row.quota_mb) : "")}
+                        onChange={(e) => setQuotaDraft({ ...quotaDraft, [row.id]: e.target.value })}
+                      />
+                      <button type="button" className="btn ghost sm" onClick={() => void onQuota(row)}>
+                        {t("common.save")}
+                      </button>
                     </span>
                   </td>
                 </tr>

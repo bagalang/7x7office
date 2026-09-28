@@ -1,0 +1,85 @@
+// idm/quota.baga — квота в мегабайти за потребител и за пространство.
+//
+// 0 значи „няма своя“: личното пространство взима квотата на собственика,
+// а тя ако също е 0 — SECP_QUOTA_MB (подразбиране 1 GiB). На екипно
+// пространство 0 отива направо към подразбирането.
+
+import "ormbaga/orm.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+struct QuotaHit {
+    ok: i64,
+    db: OrmDb,
+    bytes: i64,
+    err: str
+}
+
+fn idm_quota_bad(db: OrmDb, err: str) -> QuotaHit {
+    return QuotaHit { ok: 0, db: db, bytes: 0, err: err }
+}
+
+fn idm_quota_mb_ok(n: i64) -> i64 {
+    if n < 0 {
+        return 0
+    }
+    if n > 1048576 {
+        return 0
+    }
+    return 1
+}
+
+fn idm_quota_default() -> i64 !IO {
+    let raw = env("SECP_QUOTA_MB")?
+    if raw == "" {
+        return 1073741824
+    }
+    let n = parse_int(raw)
+    if n < 1 {
+        return 1073741824
+    }
+    return n * 1048576
+}
+
+fn idm_quota_bytes(db: OrmDb, ws: i64) -> QuotaHit !IO !Net {
+    let vals = vec_new()
+    vec_push(vals, int_to_str(ws))
+    let q = orm_query_params_str(db, "SELECT quota_mb, is_personal, owner_id FROM idm_workspaces WHERE id = $1", vals)?
+    if orm_ok_q(q) == 0 {
+        return idm_quota_bad(orm_db_q(q), orm_err_q(q))
+    }
+    if orm_nrows(q) < 1 {
+        return QuotaHit { ok: 1, db: orm_db_q(q), bytes: idm_quota_default()?, err: "" }
+    }
+    let mb = orm_cell_by_i64(q, 0, "quota_mb")
+    let personal = orm_cell_by_i64(q, 0, "is_personal")
+    let owner = orm_cell_by_i64(q, 0, "owner_id")
+    let mut d = orm_db_q(q)
+    if mb > 0 {
+        return QuotaHit { ok: 1, db: d, bytes: mb * 1048576, err: "" }
+    }
+    if personal == 1 && owner > 0 {
+        let vals2 = vec_new()
+        vec_push(vals2, int_to_str(owner))
+        let u = orm_query_params_str(d, "SELECT quota_mb FROM idm_users WHERE id = $1", vals2)?
+        if orm_ok_q(u) == 0 {
+            return idm_quota_bad(orm_db_q(u), orm_err_q(u))
+        }
+        d = orm_db_q(u)
+        if orm_nrows(u) > 0 {
+            let umb = orm_cell_by_i64(u, 0, "quota_mb")
+            if umb > 0 {
+                return QuotaHit { ok: 1, db: d, bytes: umb * 1048576, err: "" }
+            }
+        }
+    }
+    return QuotaHit { ok: 1, db: d, bytes: idm_quota_default()?, err: "" }
+}
+
+fn idm_set_quota(db: OrmDb, table: str, id: i64, mb: i64) -> OrmExec !IO !Net {
+    let cols = vec_new()
+    vec_push(cols, "quota_mb")
+    let vals = vec_new()
+    vec_push(vals, int_to_str(mb))
+    return orm_update_by_id(db, table, id, cols, vals)?
+}

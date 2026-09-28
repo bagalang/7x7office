@@ -36,7 +36,7 @@ fn ws_member_count(db: OrmDb, ws: i64) -> OrmCount !IO !Net {
 }
 
 fn ws_cols() -> str {
-    return "id, slug, label, description, is_personal, owner_id, created_at"
+    return "id, slug, label, description, is_personal, owner_id, quota_mb, created_at"
 }
 
 // ---------- id (boila няма SERIAL) ----------
@@ -67,7 +67,7 @@ fn ws_find_by_slug(db: OrmDb, slug: str) -> OrmQuery !IO !Net {
 // WHERE/ORDER BY колоните са неквалифицирани и недвусмислени (user_id,
 // is_personal, label ги има само в едната таблица).
 fn ws_list_for_user(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
-    let sql = "SELECT w.id, w.slug, w.label, w.description, w.is_personal, w.owner_id, w.created_at, m.role AS role FROM idm_workspaces w LEFT JOIN idm_workspace_members m ON w.id = m.workspace_id WHERE user_id = $1 ORDER BY is_personal DESC, label"
+    let sql = "SELECT w.id, w.slug, w.label, w.description, w.is_personal, w.owner_id, w.quota_mb, w.created_at, m.role AS role FROM idm_workspaces w LEFT JOIN idm_workspace_members m ON w.id = m.workspace_id WHERE user_id = $1 ORDER BY is_personal DESC, label"
     let vals = vec_new()
     vec_push(vals, int_to_str(user_id))
     return orm_query_params_str(db, sql, vals)?
@@ -77,7 +77,7 @@ fn ws_list_for_user(db: OrmDb, user_id: i64) -> OrmQuery !IO !Net {
 // boilaSQL не поддържа AND условия в ON, затова ролите се теглят с
 // ws_roles_of_user и се сливат в кода (работи еднакво и на Postgres).
 fn ws_list_all(db: OrmDb) -> OrmQuery !IO !Net {
-    let sql = "SELECT id, slug, label, description, is_personal, owner_id, created_at FROM idm_workspaces ORDER BY is_personal DESC, label"
+    let sql = "SELECT id, slug, label, description, is_personal, owner_id, quota_mb, created_at FROM idm_workspaces ORDER BY is_personal DESC, label"
     return orm_query_params_str(db, sql, vec_new())?
 }
 
@@ -398,6 +398,7 @@ fn ws_json_base(q: OrmQuery, row: i64) -> JObj {
     o = jobj_str(o, "description", orm_cell_by(q, row, "description"))
     o = jobj_i64(o, "is_personal", orm_cell_by_i64(q, row, "is_personal"))
     o = jobj_i64(o, "owner_id", orm_cell_by_i64(q, row, "owner_id"))
+    o = jobj_i64(o, "quota_mb", orm_cell_by_i64(q, row, "quota_mb"))
     let ca = orm_cell_by(q, row, "created_at")
     if ca != "" {
         o = jobj_str(o, "created_at", ca)

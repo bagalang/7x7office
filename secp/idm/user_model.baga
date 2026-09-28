@@ -34,6 +34,7 @@ fn idm_user_to_json(q: OrmQuery, row: i64) -> JObj {
     o = jobj_str(o, "email", orm_cell_by(q, row, "email"))
     o = jobj_str(o, "name", orm_cell_by(q, row, "name"))
     o = jobj_i64(o, "is_admin", orm_cell_by_i64(q, row, "is_admin"))
+    o = jobj_i64(o, "quota_mb", orm_cell_by_i64(q, row, "quota_mb"))
     let ca = orm_cell_by(q, row, "created_at")
     if ca != "" {
         o = jobj_str(o, "created_at", ca)
@@ -47,7 +48,7 @@ fn idm_user_find_by_email(db: OrmDb, email: str) -> OrmQuery !IO !Net {
 
 // Public columns only — pass_hash never leaves this query.
 fn idm_user_list(db: OrmDb) -> OrmQuery !IO !Net {
-    return orm_query(db, "SELECT id, email, name, is_admin, created_at FROM idm_users ORDER BY id")?
+    return orm_query(db, "SELECT id, email, name, is_admin, quota_mb, created_at FROM idm_users ORDER BY id")?
 }
 
 fn idm_user_find(db: OrmDb, id: i64) -> OrmQuery !IO !Net {

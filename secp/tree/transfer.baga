@@ -5,6 +5,7 @@
 
 import "model.baga"
 import "store.baga"
+import "../idm/quota.baga"
 import "mutate.baga"
 import "auth.baga"
 import "text.baga"
@@ -191,10 +192,14 @@ fn tree_copy_subtree(db: OrmDb, src_ws: i64, dst_ws: i64, owner: i64, from: str,
     if orm_ok_c(usage) == 0 {
         return act_err(orm_db_c(usage), 500, orm_err_c(usage))
     }
-    if orm_count_n(usage) + bytes > tree_quota_bytes()? {
-        return act_err(orm_db_c(usage), 413, "quota exceeded")
+    let hit = idm_quota_bytes(orm_db_c(usage), dst_ws)?
+    if hit.ok == 0 {
+        return act_err(hit.db, 500, hit.err)
     }
-    d = orm_db_c(usage)
+    if orm_count_n(usage) + bytes > hit.bytes {
+        return act_err(hit.db, 413, "quota exceeded")
+    }
+    d = hit.db
     let master = data_master()?
     if master.err != "" {
         return act_err(d, 500, master.err)

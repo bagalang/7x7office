@@ -33,6 +33,7 @@ fn RID_FS_THUMB() -> i64 { return 27 }
 fn RID_FS_USAGE() -> i64 { return 28 }
 fn RID_USERS_LIST() -> i64 { return 30 }
 fn RID_USERS_CREATE() -> i64 { return 31 }
+fn RID_USERS_QUOTA() -> i64 { return 97 }
 fn RID_FS_PREVIEW() -> i64 { return 32 }
 fn RID_DOC_LOAD() -> i64 { return 33 }
 fn RID_DOC_SAVE() -> i64 { return 34 }
@@ -120,6 +121,7 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_FS_USAGE())
     vec_push(v, RID_USERS_LIST())
     vec_push(v, RID_USERS_CREATE())
+    vec_push(v, RID_USERS_QUOTA())
     vec_push(v, RID_FS_PREVIEW())
     vec_push(v, RID_DOC_LOAD())
     vec_push(v, RID_DOC_SAVE())
@@ -212,6 +214,7 @@ fn secp_routes() -> Router {
     r = secp_add(r, "POST", "/v1/me/dav", RID_DAV_KEY_POST(), "auth", 0, "", "DavKey", "200", "")
     r = secp_add(r, "GET", "/v1/users", RID_USERS_LIST(), "idm", 0, "", "UserList", "200", "")
     r = secp_add(r, "POST", "/v1/users", RID_USERS_CREATE(), "idm", 0, "UserCreate", "User", "201", "")
+    r = secp_add(r, "PATCH", "/v1/users", RID_USERS_QUOTA(), "idm", 0, "UserQuota", "User", "200", "id")
     r = secp_add(r, "GET", "/v1/workspaces", RID_WS_LIST(), "idm", 0, "", "WorkspaceList", "200", "")
     r = secp_add(r, "POST", "/v1/workspaces", RID_WS_CREATE(), "idm", 0, "WorkspaceCreate", "Workspace", "201", "")
     r = secp_add(r, "PATCH", "/v1/workspaces", RID_WS_UPDATE(), "idm", 0, "WorkspaceUpdate", "Workspace", "200", "workspace_id")

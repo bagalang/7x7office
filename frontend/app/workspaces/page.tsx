@@ -76,6 +76,7 @@ function WorkspacesScreen() {
   const [label, setLabel] = useState("");
   const [desc, setDesc] = useState("");
   const [editing, setEditing] = useState<Workspace | null>(null);
+  const [quotaDraft, setQuotaDraft] = useState<Record<number, string>>({});
 
   // членове
   const [membersOf, setMembersOf] = useState<Workspace | null>(null);
@@ -238,6 +239,24 @@ function WorkspacesScreen() {
     return n === 0 ? wsId === 0 : Number(ws.id) === wsId;
   }
 
+  async function onQuota(ws: Workspace) {
+    const raw = (quotaDraft[ws.id] ?? (ws.quota_mb ? String(ws.quota_mb) : "")).trim();
+    const n = raw === "" ? 0 : Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 1048576) {
+      setError(t("common.error"));
+      return;
+    }
+    setError("");
+    try {
+      await updateWorkspace(ws.id, ws.label, ws.description || "", n);
+      setNotice(t("quota.saved"));
+      window.dispatchEvent(new Event("secp-quota"));
+      setReload((k) => k + 1);
+    } catch (err) {
+      setError(messageOf(err, t("common.error")));
+    }
+  }
+
   function activate(ws: Workspace) {
     const n = davNo(ws);
     select(n);
@@ -258,6 +277,7 @@ function WorkspacesScreen() {
         </div>
 
         <p className="muted">{t("ws.hint")}</p>
+        <p className="muted">{t("quota.hint_ws")}</p>
         {error ? <p className="err">{error}</p> : null}
         {notice ? <p className="ok">{notice}</p> : null}
         {busy && rows.length === 0 ? <p className="muted">{t("common.loading")}</p> : null}
@@ -270,6 +290,7 @@ function WorkspacesScreen() {
                 <th>{t("ws.col_label")}</th>
                 <th style={{ width: 88 }}>{t("ws.col_number")}</th>
                 <th>{t("ws.col_dav")}</th>
+                <th style={{ width: 220 }}>{t("quota.col")}</th>
                 <th style={{ width: 140 }}>{t("ws.col_role")}</th>
                 <th style={{ width: 280 }}>{t("ws.col_actions")}</th>
               </tr>
@@ -299,6 +320,25 @@ function WorkspacesScreen() {
                       aria-label={t("ws.dav")}
                       onFocus={(e) => e.currentTarget.select()}
                     />
+                  </td>
+                  <td>
+                    {canManage(ws) ? (
+                      <span className="rename-form">
+                        <input
+                          className="input"
+                          inputMode="numeric"
+                          aria-label={t("quota.col")}
+                          placeholder={t("quota.placeholder")}
+                          value={quotaDraft[ws.id] ?? (ws.quota_mb ? String(ws.quota_mb) : "")}
+                          onChange={(e) => setQuotaDraft({ ...quotaDraft, [ws.id]: e.target.value })}
+                        />
+                        <button type="button" className="btn ghost sm" onClick={() => void onQuota(ws)}>
+                          {t("common.save")}
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="muted">{ws.quota_mb ? `${ws.quota_mb} MB` : t("quota.placeholder")}</span>
+                    )}
                   </td>
                   <td>
                     <span className={`badge${canManage(ws) ? " admin" : ""}`}>{roleLabel(t, ws.role)}</span>

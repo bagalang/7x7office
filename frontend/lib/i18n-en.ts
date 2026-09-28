@@ -25,6 +25,11 @@ export const en: Record<string, string> = {
   "theme.aria": "Interface theme",
   "lang.aria": "Interface language",
   "quota.used_of": "{used} of {quota}",
+  "quota.col": "Quota (MB)",
+  "quota.placeholder": "0 = 1 GB",
+  "quota.hint_user": "The personal workspace uses this quota unless that workspace has its own. 0 keeps 1 GB.",
+  "quota.hint_ws": "For this workspace. 0 keeps 1 GB, or the user's quota when the workspace is personal.",
+  "quota.saved": "Quota saved.",
 
   "files.title": "Files",
   "files.search_placeholder": "Search in folder…",

@@ -42,19 +42,24 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
   const [chatOpen, setChatOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Квотата е на потребител, не на workspace, но се преизчислява при смяна на
-  // workspace, за да не остане стар надпис, докато файловете вече са други.
+  // Квотата е на отвореното пространство. Презарежда се при смяна и след
+  // запис от страниците за потребители и пространства.
   useEffect(() => {
     let cancel = false;
-    Promise.all([api.get<Me>("/v1/me"), api.get<FsUsage>("/v1/fs/usage")])
-      .then(([who, use]) => {
-        if (cancel) return;
-        setMe(who);
-        setUsage(use);
-      })
-      .catch(() => {});
+    function load() {
+      Promise.all([api.get<Me>("/v1/me"), api.get<FsUsage>("/v1/fs/usage")])
+        .then(([who, use]) => {
+          if (cancel) return;
+          setMe(who);
+          setUsage(use);
+        })
+        .catch(() => {});
+    }
+    load();
+    window.addEventListener("secp-quota", load);
     return () => {
       cancel = true;
+      window.removeEventListener("secp-quota", load);
     };
   }, [wsId]);
 

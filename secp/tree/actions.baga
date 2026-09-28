@@ -13,6 +13,7 @@ import "activity_model.baga"
 import "share_model.baga"
 import "share_roles.baga"
 import "store.baga"
+import "../idm/quota.baga"
 import "mutate.baga"
 import "transfer.baga"
 import "model.baga"
@@ -373,7 +374,11 @@ fn act_fs_usage(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let mut o = jobj_new()
     o = jobj_i64(o, "used_bytes", orm_count_n(usage))
-    o = jobj_i64(o, "quota_bytes", tree_quota_bytes()?)
+    let hit = idm_quota_bytes(orm_db_c(usage), t.ws)?
+    if hit.ok == 0 {
+        return act_err(hit.db, 500, hit.err)
+    }
+    o = jobj_i64(o, "quota_bytes", hit.bytes)
     o = jobj_i64(o, "workspace_id", t.ws)
-    return act_ok(orm_db_c(usage), o)
+    return act_ok(hit.db, o)
 }

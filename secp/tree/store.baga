@@ -6,6 +6,7 @@
 // и за да го ползват всички handler-и (doc save, в бъдеще upload от WebDAV).
 
 import "model.baga"
+import "../idm/quota.baga"
 import "versions.baga"
 import "activity_model.baga"
 import "text.baga"
@@ -176,11 +177,15 @@ fn tree_store_file(db: OrmDb, ws: i64, owner: i64, path: str, body: bytes, thumb
     if orm_ok_c(usage) == 0 {
         return act_err(orm_db_c(usage), 500, orm_err_c(usage))
     }
-    let quota = tree_quota_bytes()?
-    if orm_count_n(usage) + size - old_size > quota {
-        return act_err(orm_db_c(usage), 413, "quota exceeded")
+    let hit = idm_quota_bytes(orm_db_c(usage), ws)?
+    if hit.ok == 0 {
+        return act_err(hit.db, 500, hit.err)
     }
-    d = orm_db_c(usage)
+    let quota = hit.bytes
+    if orm_count_n(usage) + size - old_size > quota {
+        return act_err(hit.db, 413, "quota exceeded")
+    }
+    d = hit.db
     // parents (mkdir -p), blob, thumbnail
     let perr = tree_mkdir_p(d, ws, owner, tree_parent_of(path))?
     if perr != "" {

@@ -25,6 +25,11 @@ export const de: Record<string, string> = {
   "theme.aria": "Design der Oberfläche",
   "lang.aria": "Sprache der Oberfläche",
   "quota.used_of": "{used} von {quota}",
+  "quota.col": "Kontingent (MB)",
+  "quota.placeholder": "0 = 1 GB",
+  "quota.hint_user": "Der persönliche Bereich nutzt dieses Kontingent, solange der Bereich selbst keines hat. 0 lässt 1 GB.",
+  "quota.hint_ws": "Für diesen Bereich. 0 lässt 1 GB, beim persönlichen Bereich das Kontingent des Benutzers.",
+  "quota.saved": "Kontingent gespeichert.",
 
   "files.title": "Dateien",
   "files.search_placeholder": "Im Ordner suchen…",

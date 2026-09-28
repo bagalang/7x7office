@@ -407,6 +407,7 @@ export type Workspace = {
   is_personal: number;
   owner_id: number;
   role: string;
+  quota_mb?: number;
   created_at?: string;
 };
 
@@ -432,8 +433,19 @@ export async function createWorkspace(label: string, description: string): Promi
   return request<Workspace>("/v1/workspaces", "POST", { label, description });
 }
 
-export async function updateWorkspace(id: number, label: string, description: string): Promise<Workspace> {
-  return request<Workspace>(`/v1/workspaces?workspace_id=${id}`, "PATCH", { label, description });
+export async function updateWorkspace(
+  id: number,
+  label: string,
+  description: string,
+  quotaMb?: number,
+): Promise<Workspace> {
+  const body: { label: string; description: string; quota_mb?: number } = { label, description };
+  if (quotaMb !== undefined) body.quota_mb = quotaMb;
+  return request<Workspace>(`/v1/workspaces?workspace_id=${id}`, "PATCH", body);
+}
+
+export async function setUserQuota(id: number, quotaMb: number): Promise<{ id: number; quota_mb: number }> {
+  return request(`/v1/users?id=${id}`, "PATCH", { quota_mb: quotaMb });
 }
 
 export async function deleteWorkspace(id: number): Promise<void> {

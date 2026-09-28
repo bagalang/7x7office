@@ -371,5 +371,19 @@ fn secp_boila_migrations() -> MigrationSet {
         "DROP TABLE IF EXISTS idm_user_s3",
         "CREATE TABLE IF NOT EXISTS idm_user_s3 (user_id BIGINT, enabled BIGINT, provider TEXT, endpoint TEXT, bucket TEXT, region TEXT, access_key TEXT, secret_key TEXT, PRIMARY KEY (user_id))"
     )
+    set = migrate_add(
+        set,
+        20260928051,
+        "add_idm_users_quota_mb",
+        "ALTER TABLE idm_users ADD COLUMN quota_mb BIGINT",
+        "ALTER TABLE idm_users DROP COLUMN quota_mb"
+    )
+    set = migrate_add(
+        set,
+        20260928052,
+        "add_idm_workspaces_quota_mb",
+        "ALTER TABLE idm_workspaces ADD COLUMN quota_mb BIGINT",
+        "ALTER TABLE idm_workspaces DROP COLUMN quota_mb"
+    )
     return set
 }
