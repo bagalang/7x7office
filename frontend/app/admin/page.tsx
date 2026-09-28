@@ -128,6 +128,12 @@ function normalizeBak(raw?: BakForm): BakForm {
   return s;
 }
 
+// normalizeBak чисти ключа за показване. При запис трябва да тръгне написаното,
+// иначе след презареждане остава старият (или празен) ключ.
+function bakForSave(raw: BakForm): BakForm {
+  return { ...normalizeBak(raw), secret_key: raw.secret_key };
+}
+
 function sourceLabel(source: string, t: (k: string) => string): string {
   if (source === "db") return t("settings.source_db");
   if (source === "default") return t("settings.source_default");
@@ -179,8 +185,7 @@ function SettingsScreen() {
     };
   }, [t]);
 
-  async function onSave(e: FormEvent) {
-    e.preventDefault();
+  async function persist(): Promise<boolean> {
     setBusy(true);
     setError("");
     setSaved(false);
@@ -190,21 +195,30 @@ function SettingsScreen() {
     if (isB2Region(s3.region)) {
       next = { ...s3, endpoint: b2Endpoint(s3.region) };
     }
-    const nextBak = normalizeBak(bak);
     try {
-      const body = await api.put<Settings>("/v1/admin/settings", { site, smtp, s3: next, bak: nextBak });
+      const body = await api.put<Settings>("/v1/admin/settings", { site, smtp, s3: next, bak: bakForSave(bak) });
       setSite({ ...emptySite, ...body.site });
       setSmtp({ ...emptySmtp, ...body.smtp });
       setS3(normalizeS3(body.s3));
+      setBak(normalizeBak(body.bak));
       setSaved(true);
+      return true;
     } catch (err) {
       setError(messageOf(err, t("common.error")));
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
+  async function onSave(e: FormEvent) {
+    e.preventDefault();
+    await persist();
+  }
+
   async function onCheck() {
+    const ok = await persist();
+    if (!ok) return;
     setBusy(true);
     setError("");
     setChecked(false);
@@ -219,6 +233,8 @@ function SettingsScreen() {
   }
 
   async function onBakCheck() {
+    const ok = await persist();
+    if (!ok) return;
     setBusy(true);
     setError("");
     setBakChecked(false);
@@ -233,6 +249,8 @@ function SettingsScreen() {
   }
 
   async function onBakRun() {
+    const ok = await persist();
+    if (!ok) return;
     setBusy(true);
     setError("");
     setBakKey("");
