@@ -16,6 +16,8 @@ import {
   IconMove,
   IconFileText,
   IconSlides,
+  IconCloud,
+  IconDisk,
   IconFolder,
   IconGridView,
   IconImage,
@@ -136,6 +138,19 @@ function FileIcon({ node }: { node: FsNode }) {
   if (SLIDE_EXT.test(node.name)) return <IconSlides />;
   if (TEXT_EXT.test(node.name)) return <IconFileText />;
   return <IconFile />;
+}
+
+export function StoreMark({ store }: { store?: string }) {
+  const { t } = useI18n();
+  if (store !== "fs" && store !== "s3") return null;
+  const remote = store === "s3";
+  const label = remote ? t("files.store_s3") : t("files.store_fs");
+  return (
+    <span className={remote ? "store-mark s3" : "store-mark"} title={label}>
+      {remote ? <IconCloud width={13} height={13} /> : <IconDisk width={13} height={13} />}
+      {remote ? "S3" : "FS"}
+    </span>
+  );
 }
 
 type View = "list" | "grid";
@@ -635,6 +650,7 @@ export function FileBrowser() {
                           {node.has_thumb === 1 ? <Thumb path={node.path} /> : <FileIcon node={node} />}
                         </span>
                         <span className="label">{node.name}</span>
+                        {node.is_dir ? null : <StoreMark store={node.store} />}
                       </span>
                     )}
                   </td>
@@ -674,7 +690,10 @@ export function FileBrowser() {
                   )}
                 </span>
                 <span className="grid-meta">
-                  <span className="label">{node.name}</span>
+                  <span className="grid-name">
+                    <span className="label">{node.name}</span>
+                    {node.is_dir ? null : <StoreMark store={node.store} />}
+                  </span>
                   <span className="sub">{node.is_dir ? t("files.folder") : formatBytes(node.size)}</span>
                 </span>
                 {rowActions(node)}

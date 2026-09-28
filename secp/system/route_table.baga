@@ -95,6 +95,7 @@ fn RID_DAV_KEY_POST() -> i64 { return 92 }
 fn RID_S3_CHECK() -> i64 { return 93 }
 fn RID_BAK_CHECK() -> i64 { return 94 }
 fn RID_BAK_RUN() -> i64 { return 95 }
+fn RID_SMTP_CHECK() -> i64 { return 98 }
 
 // Всяко id, което dispatch-ът трябва да поеме. Нов маршрут се добавя и тук.
 fn secp_ids() -> Vec<i64> {
@@ -183,6 +184,7 @@ fn secp_ids() -> Vec<i64> {
     vec_push(v, RID_S3_CHECK())
     vec_push(v, RID_BAK_CHECK())
     vec_push(v, RID_BAK_RUN())
+    vec_push(v, RID_SMTP_CHECK())
     return v
 }
 
@@ -260,6 +262,7 @@ fn secp_routes() -> Router {
     r = secp_add(r, "GET", "/v1/admin/settings", RID_SETTINGS_GET(), "admin", 0, "", "AdminSettings", "200", "")
     r = secp_add(r, "PUT", "/v1/admin/settings", RID_SETTINGS_PUT(), "admin", 0, "AdminSettings", "AdminSettings", "200", "")
     r = secp_add(r, "POST", "/v1/admin/settings/check", RID_S3_CHECK(), "admin", 0, "", "StorageCheck", "200", "")
+    r = secp_add(r, "POST", "/v1/admin/smtp/check", RID_SMTP_CHECK(), "admin", 0, "", "SmtpCheck", "200", "")
     r = secp_add(r, "POST", "/v1/admin/backup/check", RID_BAK_CHECK(), "admin", 0, "", "StorageCheck", "200", "")
     r = secp_add(r, "POST", "/v1/admin/backup", RID_BAK_RUN(), "admin", 0, "", "BackupMade", "200", "")
     r = secp_add(r, "GET", "/v1/reports/storage", RID_REPORT_STORAGE(), "reports", 0, "", "StorageReport", "200", "format,lang")

@@ -120,6 +120,25 @@ fn data_blob_path(root: str, hash: str) -> str {
     return buf_str(b)
 }
 
+// Къде се чете файлът. Дискът печели: след качване локалното копие се маха
+// и остава кофата. Празен hash не е в кофата.
+fn data_where(on: i64, ws: i64, hash: str) -> str !IO {
+    if hash == "" {
+        return "fs"
+    }
+    let root = data_root()?
+    if file_exists(data_blob_path_ws(root, ws, hash)) == 1 {
+        return "fs"
+    }
+    if file_exists(data_blob_path(root, hash)) == 1 {
+        return "fs"
+    }
+    if on == 1 {
+        return "s3"
+    }
+    return "fs"
+}
+
 // Шифрован blob: отделен файл на пространство, същият plaintext hash.
 fn data_blob_path_ws(root: str, ws: i64, hash: str) -> str {
     let mut b = buf_from(root)

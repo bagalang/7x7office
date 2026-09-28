@@ -176,6 +176,8 @@ export type FsNode = {
   has_thumb: number;
   etag?: string;
   updated_at?: string;
+  // "fs" докато байтовете са на диска, "s3" след като локалното копие е махнато.
+  store?: string;
 };
 
 export type FsList = { path: string; items: FsNode[]; count: number };

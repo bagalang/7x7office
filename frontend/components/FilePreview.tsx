@@ -5,10 +5,11 @@
 // Изнесено от FileBrowser, за да останат двата файла четими.
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Dialog } from "./Dialog";
 import { useI18n } from "./I18nProvider";
-import { IconActivity, IconClose, IconCopy, IconDownload, IconHistory, IconMove, IconPencil, IconShare, IconTrash } from "./icons";
+import { IconActivity, IconClose, IconCopy, IconDownload, IconExpand, IconHistory, IconMove, IconPencil, IconShare, IconTrash } from "./icons";
 import { ActivityFeed } from "./ActivityFeed";
 import {
   FsNode,
@@ -27,7 +28,7 @@ import {
 import { mdToHtml } from "../lib/markdown";
 import { isOfficeName, openOffice } from "../lib/office";
 import { useWorkspace, canWrite, canShare } from "./WorkspaceProvider";
-import { formatBytes, formatDate, messageOf } from "./FileBrowser";
+import { formatBytes, formatDate, messageOf, StoreMark } from "./FileBrowser";
 
 export function FilePreview({
   node,
@@ -63,22 +64,30 @@ export function FilePreview({
   // (преглед). Отваря се с един бутон и се презарежда при смяна на файла —
   // затова е state тук, а не отделен диалог.
   const [showHistory, setShowHistory] = useState(false);
+  // Картина и PDF в лентата са твърде тесни. Пълният преглед е отделен слой.
+  const [full, setFull] = useState(false);
   const office = isOfficeName(node.name);
   const plainEditable = /\.(txt|md|csv)$/i.test(node.name);
 
-  // Нов файл → историята се затваря. Иначе редът „кой промени файла" остава
-  // от предишния файл, докато панелът вече показва друг.
+  // Нов файл → историята и пълният преглед се затварят. Иначе редът „кой
+  // промени файла" остава от предишния файл, докато панелът вече показва друг.
   useEffect(() => {
     setShowHistory(false);
+    setFull(false);
   }, [node.path]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      if (full) {
+        setFull(false);
+        return;
+      }
+      onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, full]);
 
   useEffect(() => {
     let dead = false;
@@ -116,20 +125,79 @@ export function FilePreview({
     };
   }, [node.path, node.name, t]);
 
+  const visual = (kind === "image" || kind === "pdf") && img !== "";
+
+  function openFull() {
+    setFull(true);
+  }
+
+  const fullView =
+    full && visual
+      ? createPortal(
+          <div className="preview-full" role="dialog" aria-modal="true" aria-label={node.name}>
+            <div className="preview-full-bar">
+              <span className="label">{node.name}</span>
+              <span className="grow" />
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => void downloadFile(node).catch((e) => onError(messageOf(e, t("common.error"))))}
+              >
+                <IconDownload width={16} height={16} /> {t("preview.download")}
+              </button>
+              <button type="button" className="btn" onClick={() => setFull(false)} autoFocus>
+                {t("preview.close")}
+              </button>
+            </div>
+            <div
+              className="preview-full-stage"
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setFull(false);
+              }}
+            >
+              {kind === "image" ? (
+                <img src={img} alt={node.name} />
+              ) : (
+                <embed className="preview-full-pdf" src={img} type="application/pdf" title={node.name} />
+              )}
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
     <aside className="preview-pane">
+      {fullView}
       <div className="preview-bar">
         <span className="label">{node.name}</span>
         <span className="grow" />
+        {visual ? (
+          <button type="button" className="icon-btn" title={t("preview.full")} onClick={openFull}>
+            <IconExpand />
+          </button>
+        ) : null}
         <button type="button" className="icon-btn" title={t("preview.close")} onClick={onClose}>
           <IconClose />
         </button>
       </div>
       <div className="preview-body">
         {err ? <p className="err">{err}</p> : null}
-        {kind === "image" && img ? <img className="preview-img" src={img} alt="" /> : null}
-        {kind === "pdf" && img ? (
-          <embed className="preview-pdf" src={img} type="application/pdf" />
+        {visual ? (
+          <button type="button" className="btn preview-full-open" onClick={openFull}>
+            <IconExpand width={16} height={16} /> {t("preview.full")}
+          </button>
+        ) : null}
+        {kind === "image" && img ? (
+          <button type="button" className="preview-zoom" title={t("preview.full")} onClick={openFull}>
+            <img className="preview-img" src={img} alt={node.name} />
+          </button>
+        ) : null}
+        {kind === "pdf" && img && !full ? (
+          <embed className="preview-pdf" src={img} type="application/pdf" title={node.name} />
+        ) : null}
+        {(kind === "image" || kind === "pdf") && !img && !err ? (
+          <p className="muted">{t("preview.opening")}</p>
         ) : null}
         {kind === "markdown" ? (
           <div className="preview-md" dangerouslySetInnerHTML={{ __html: mdToHtml(text) }} />
@@ -156,6 +224,14 @@ export function FilePreview({
             <dt>{t("preview.path")}</dt>
             <dd>{node.path}</dd>
           </div>
+          {node.is_dir || (node.store !== "fs" && node.store !== "s3") ? null : (
+            <div>
+              <dt>{t("files.store")}</dt>
+              <dd>
+                <StoreMark store={node.store} />
+              </dd>
+            </div>
+          )}
         </dl>
 
         {/* История на възела и поддървото му: същата лента като в горния бар,

@@ -148,6 +148,8 @@ function SettingsScreen() {
   const [s3, setS3] = useState<S3Form>(emptyS3);
   const [bak, setBak] = useState<BakForm>(emptyBak);
   const [error, setError] = useState("");
+  const [smtpTo, setSmtpTo] = useState("");
+  const [smtpSent, setSmtpSent] = useState("");
   const [saved, setSaved] = useState(false);
   const [checked, setChecked] = useState(false);
   const [bakChecked, setBakChecked] = useState(false);
@@ -160,7 +162,7 @@ function SettingsScreen() {
       setBusy(true);
       setError("");
       try {
-        const who = await api.get<{ is_admin?: number }>("/v1/me");
+        const who = await api.get<{ is_admin?: number; email?: string }>("/v1/me");
         if (cancel) return;
         if (who.is_admin !== 1) {
           setAdmin(false);
@@ -168,6 +170,7 @@ function SettingsScreen() {
           return;
         }
         setAdmin(true);
+        if (who.email) setSmtpTo((cur) => cur || who.email || "");
         const body = await api.get<Settings>("/v1/admin/settings");
         if (cancel) return;
         setSite({ ...emptySite, ...body.site });
@@ -191,6 +194,7 @@ function SettingsScreen() {
     setSaved(false);
     setChecked(false);
     setBakChecked(false);
+    setSmtpSent("");
     let next = s3;
     if (isB2Region(s3.region)) {
       next = { ...s3, endpoint: b2Endpoint(s3.region) };
@@ -214,6 +218,24 @@ function SettingsScreen() {
   async function onSave(e: FormEvent) {
     e.preventDefault();
     await persist();
+  }
+
+  async function onSmtpTest() {
+    const to = smtpTo.trim();
+    if (!to) return;
+    const ok = await persist();
+    if (!ok) return;
+    setBusy(true);
+    setError("");
+    setSmtpSent("");
+    try {
+      await api.post("/v1/admin/smtp/check", { to });
+      setSmtpSent(to);
+    } catch (err) {
+      setError(messageOf(err, t("common.error")));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onCheck() {
@@ -299,6 +321,7 @@ function SettingsScreen() {
         {admin === false ? <p className="err">{t("settings.admin_only")}</p> : null}
         {error ? <p className="err">{error}</p> : null}
         {saved ? <p className="muted">{t("settings.saved")}</p> : null}
+        {smtpSent ? <p className="muted">{t("settings.smtp_test_ok", { to: smtpSent })}</p> : null}
         {checked ? <p className="muted">{t("settings.s3_check_ok")}</p> : null}
         {bakChecked ? <p className="muted">{t("settings.bak_check_ok")}</p> : null}
         {bakKey ? <p className="muted">{t("settings.bak_ok")} {bakKey}</p> : null}
@@ -374,6 +397,27 @@ function SettingsScreen() {
                 />
                 {t("settings.insecure")}
               </label>
+              <div className="settings-mail-test">
+                <div className="field">
+                  <label htmlFor="smtp-test-to">{t("settings.smtp_test_to")}</label>
+                  <input
+                    id="smtp-test-to"
+                    className="input"
+                    type="email"
+                    autoComplete="email"
+                    value={smtpTo}
+                    onChange={(e) => setSmtpTo(e.target.value)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  disabled={busy || smtp.host.trim() === "" || smtpTo.trim() === ""}
+                  onClick={onSmtpTest}
+                >
+                  {t("settings.smtp_test")}
+                </button>
+              </div>
             </section>
 
             <section className="settings-block">

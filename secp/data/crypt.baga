@@ -152,6 +152,21 @@ fn data_open_sealed(db: OrmDb, ws: i64, packed: bytes) -> DataGot !IO !Net {
     return DataGot { db: key.db, body: opened.pt, err: "" }
 }
 
+struct DataPlace {
+    db: OrmDb,
+    on: i64,
+    err: str
+}
+
+// Едно четене на настройките за целия списък, не по файл.
+fn data_place(db: OrmDb) -> DataPlace !IO !Net {
+    let store = data_s3_view(db)?
+    if store.ok == 0 {
+        return DataPlace { db: store.db, on: 0, err: store.err }
+    }
+    return DataPlace { db: store.db, on: store.on, err: "" }
+}
+
 fn data_open(db: OrmDb, ws: i64, hash: str) -> DataGot !IO !Net !Random !Time {
     if hash == "" {
         return DataGot { db: db, body: bytes_new(0), err: "" }

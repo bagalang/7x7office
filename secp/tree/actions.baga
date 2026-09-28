@@ -73,14 +73,23 @@ fn act_fs_list(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if acl.err != "" {
         return act_err(acl.db, 500, acl.err)
     }
-    d = acl.db
+    let place = data_place(acl.db)?
+    if place.err != "" {
+        return act_err(place.db, 500, place.err)
+    }
+    d = place.db
     let mut arr = jarr_new()
     let mut kept: i64 = 0
     let mut i: i64 = 0
     while i < orm_nrows(q) {
         let cp = orm_cell_by(q, i, "path")
         if acl_effective(acl.paths, acl.levels, acl.inherits, cp, t.level, protect) >= acl_level_read() {
-            arr = jarr_obj(arr, tree_node_json(q, i))
+            let mut node = tree_node_json(q, i)
+            if orm_cell_by_i64(q, i, "is_dir") == 0 {
+                let wh = data_where(place.on, t.ws, orm_cell_by(q, i, "hash"))?
+                node = jobj_str(node, "store", wh)
+            }
+            arr = jarr_obj(arr, node)
             kept = kept + 1
         }
         i = i + 1

@@ -242,8 +242,31 @@ export const IconMove = (p: P) => (
   </svg>
 );
 
+// Диск на сървъра — файлът още се чете от локалния blob.
+export const IconDisk = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M3 10h18" />
+    <circle cx="7.5" cy="14.5" r="0.9" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+// Кофа — локалното копие е махнато и файлът се чете от S3.
+export const IconCloud = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M7 18h10a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6 1.6A3.5 3.5 0 0 0 7 18z" />
+  </svg>
+);
+
 export const IconChat = (p: P) => (
   <svg {...base(p)}>
     <path d="M5 6h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9l-4 3v-3H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
+  </svg>
+);
+
+// Четири ъгъла навън — преглед на целия екран, не нов прозорец.
+export const IconExpand = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
   </svg>
 );

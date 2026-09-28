@@ -1,0 +1,51 @@
+// system/smtp_check.baga — пробно писмо до адрес, написан от админа.
+// Ползва записания SMTP. Писмото е кратко и без връзки.
+
+import "../idm/mail.baga"
+import "../idm/user_actions.baga"
+import "fmrbaga/ctx.baga"
+import "fmrbaga/action.baga"
+import "fmrbaga/jsonx.baga"
+import "ormbaga/orm.baga"
+import "std/str/str.baga"
+
+fn act_smtp_check(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
+    let c = idm_require_admin(ctx, db)?
+    if c.ok == 0 {
+        return c.out
+    }
+    let parsed = jbody_parse_str(fmr_body(ctx))
+    if parsed.ok == 0 {
+        return act_err(db, 400, parsed.err)
+    }
+    let b = jbody_require_object(parsed)
+    if b.ok == 0 {
+        return act_err(db, 400, b.err)
+    }
+    let to_f = jreq_str(b.doc, b.root, "to")
+    if to_f.ok == 0 {
+        return act_err(db, 400, to_f.err)
+    }
+    let to = mail_lower(str_trim(to_f.val))
+    if len(to) > 200 {
+        return act_err(db, 400, "to is invalid")
+    }
+    if idm_email_ok(to) == 0 {
+        return act_err(db, 400, "to is invalid")
+    }
+    let mail = mail_view(db)?
+    if mail.ok == 0 {
+        return act_err(mail.db, 500, mail.err)
+    }
+    if mail.on == 0 {
+        return act_err(mail.db, 400, "smtp is off")
+    }
+    let sent = mail_send_one(mail.cfg, to, "7x7office пробно писмо", "Това е пробно писмо от настройките на 7x7office. Ако го четеш, пощата работи.")?
+    if sent.ok == 0 {
+        return act_err(mail.db, 502, sent.err)
+    }
+    let mut o = jobj_new()
+    o = jobj_i64(o, "ok", 1)
+    o = jobj_str(o, "to", to)
+    return act_ok(mail.db, o)
+}
