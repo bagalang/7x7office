@@ -403,7 +403,7 @@ export const de: Record<string, string> = {
   "settings.s3_check": "Verbindung prüfen",
   "settings.s3_check_ok": "Die Verbindung zu Backblaze ist in Ordnung.",
   "settings.bak": "Datenbankarchiv",
-  "settings.bak_hint": "Getrennt von den Dateien. Sie können auf der Platte bleiben, während der Dump der Datenbank in einen eigenen Bucket geht. Der S3-Ordner ist standardmäßig beckupDB.",
+  "settings.bak_hint": "Getrennt von den Dateien. Sie können auf der Platte bleiben, während der Dump der Datenbank in einen eigenen Bucket geht. Der S3-Ordner ist standardmäßig beckupDB. Im Bucket bleiben die letzten 20 Archive.",
   "settings.bak_on": "Datenbank nach S3 archivieren",
   "settings.bak_prefix": "Ordner in S3",
   "settings.bak_check": "Archiv prüfen",

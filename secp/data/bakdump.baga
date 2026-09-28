@@ -226,6 +226,198 @@ fn bak_object_key(prefix: str, stamp: str) -> str {
     return concat(concat(concat(prefix, "/"), "7x7office_backup_"), concat(stamp, ".sql"))
 }
 
+// В кофата остават толкова последни архива. По-старите се трият след качване.
+fn bak_keep() -> i64 {
+    return 20
+}
+
+fn bak_find_from(s: str, needle: str, from: i64) -> i64 {
+    if from < 0 || from > len(s) {
+        return 0 - 1
+    }
+    let rest = substr(s, from, len(s))
+    let i = str_find(rest, needle)
+    if i < 0 {
+        return 0 - 1
+    }
+    return from + i
+}
+
+fn bak_replace(s: str, a: str, b: str) -> str {
+    let mut out = ""
+    let mut i: i64 = 0
+    while i < len(s) {
+        let rest = substr(s, i, len(s))
+        if str_starts_with(rest, a) == 1 {
+            out = concat(out, b)
+            i = i + len(a)
+        } else {
+            out = concat(out, chr(char_at(s, i)))
+            i = i + 1
+        }
+    }
+    return out
+}
+
+fn bak_xml_unescape(s: str) -> str {
+    let a = bak_replace(s, "&amp;", "&")
+    let b = bak_replace(a, "&lt;", "<")
+    let c = bak_replace(b, "&gt;", ">")
+    let d = bak_replace(c, "&quot;", "\"")
+    return bak_replace(d, "&apos;", "'")
+}
+
+fn bak_is_archive(prefix: str, key: str) -> i64 {
+    let head = concat(concat(prefix, "/"), "7x7office_backup_")
+    if str_starts_with(key, head) == 0 {
+        return 0
+    }
+    if str_ends_with(key, ".sql") == 0 {
+        return 0
+    }
+    return 1
+}
+
+// -1 ако a е по-стар от b, 0 равни, 1 ако a е по-нов. Печатът в името расте с времето.
+fn bak_cmp(a: str, b: str) -> i64 {
+    let mut n = len(a)
+    if len(b) < n {
+        n = len(b)
+    }
+    let mut i: i64 = 0
+    while i < n {
+        let ca = char_at(a, i)
+        let cb = char_at(b, i)
+        if ca < cb {
+            return 0 - 1
+        }
+        if ca > cb {
+            return 1
+        }
+        i = i + 1
+    }
+    if len(a) < len(b) {
+        return 0 - 1
+    }
+    if len(a) > len(b) {
+        return 1
+    }
+    return 0
+}
+
+fn bak_insert_desc(out: Vec<str>, cur: str) -> Vec<str> {
+    let next = vec_new()
+    let mut i: i64 = 0
+    let mut placed: i64 = 0
+    while i < vec_len(out) {
+        if placed == 0 {
+            if bak_cmp(cur, vec_get(out, i)) > 0 {
+                vec_push(next, cur)
+                placed = 1
+            }
+        }
+        vec_push(next, vec_get(out, i))
+        i = i + 1
+    }
+    if placed == 0 {
+        vec_push(next, cur)
+    }
+    return next
+}
+
+fn bak_sort_desc(keys: Vec<str>) -> Vec<str> {
+    let mut out = vec_new()
+    let mut i: i64 = 0
+    while i < vec_len(keys) {
+        out = bak_insert_desc(out, vec_get(keys, i))
+        i = i + 1
+    }
+    return out
+}
+
+fn bak_collect_keys(xml: str, prefix: str, keys: Vec<str>) -> Vec<str> {
+    let mut from: i64 = 0
+    let mut going: i64 = 1
+    while going == 1 {
+        let at = bak_find_from(xml, "<Key>", from)
+        if at < 0 {
+            going = 0
+        } else {
+            let start = at + 5
+            let end = bak_find_from(xml, "</Key>", start)
+            if end < 0 {
+                going = 0
+            } else {
+                let key = bak_xml_unescape(substr(xml, start, end))
+                if bak_is_archive(prefix, key) == 1 {
+                    vec_push(keys, key)
+                }
+                from = end + 6
+            }
+        }
+    }
+    return keys
+}
+
+fn bak_xml_tag(xml: str, open: str, close: str) -> str {
+    let at = str_find(xml, open)
+    if at < 0 {
+        return ""
+    }
+    let start = at + len(open)
+    let end = bak_find_from(xml, close, start)
+    if end < 0 {
+        return ""
+    }
+    return bak_xml_unescape(substr(xml, start, end))
+}
+
+fn bak_prune(cfg: S3Cfg, prefix: str) -> i64 !Net !IO !Random !Time {
+    let mut keys = vec_new()
+    let mut token = ""
+    let mut page: i64 = 0
+    let mut going: i64 = 1
+    while going == 1 && page < 20 {
+        let listed = s3_list_cfg(cfg, concat(prefix, "/"), token)?
+        if listed.ok == 0 || listed.status != 200 {
+            let mut why = listed.err
+            if why == "" {
+                why = concat("status ", int_to_str(listed.status))
+            }
+            eprintln(concat("backup prune list failed: ", why))
+            return 0
+        }
+        let xml = str_of_bytes(listed.body)
+        keys = bak_collect_keys(xml, prefix, keys)
+        if str_find(xml, "<IsTruncated>true</IsTruncated>") < 0 {
+            going = 0
+        } else {
+            token = bak_xml_tag(xml, "<NextContinuationToken>", "</NextContinuationToken>")
+            if token == "" {
+                going = 0
+            }
+        }
+        page = page + 1
+    }
+    let sorted = bak_sort_desc(keys)
+    let mut dropped: i64 = 0
+    let mut i = bak_keep()
+    while i < vec_len(sorted) {
+        let key = vec_get(sorted, i)
+        let del = s3_delete_cfg(cfg, key)?
+        if del.ok == 0 {
+            eprintln(concat("backup prune delete failed: ", del.err))
+        } else {
+            dropped = dropped + 1
+        }
+        i = i + 1
+    }
+    if dropped > 0 {
+        eprintln(concat("backup prune dropped ", int_to_str(dropped)))
+    }
+    return dropped
+}
+
 fn bak_upload(db: OrmDb) -> BakUp !IO !Net !Random !Time {
     let view = bak_view(db)?
     if view.ok == 0 {
@@ -247,6 +439,10 @@ fn bak_upload(db: OrmDb) -> BakUp !IO !Net !Random !Time {
             why = concat("backup upload ", int_to_str(put.status))
         }
         return BakUp { ok: 0, db: dump.db, err: why, key: "", bytes: 0, tables: dump.tables, rows: dump.rows }
+    }
+    let pruned = bak_prune(view.cfg, view.prefix)?
+    if pruned < 0 {
+        return BakUp { ok: 0, db: dump.db, err: "backup prune failed", key: "", bytes: 0, tables: dump.tables, rows: dump.rows }
     }
     return BakUp {
         ok: 1,

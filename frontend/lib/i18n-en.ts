@@ -401,7 +401,7 @@ export const en: Record<string, string> = {
   "settings.s3_check": "Check connection",
   "settings.s3_check_ok": "The Backblaze connection is fine.",
   "settings.bak": "Database archive",
-  "settings.bak_hint": "Separate from the files. They can stay on disk while the database dump goes to its own bucket. The S3 folder defaults to beckupDB.",
+  "settings.bak_hint": "Separate from the files. They can stay on disk while the database dump goes to its own bucket. The S3 folder defaults to beckupDB. The bucket keeps the latest 20 archives.",
   "settings.bak_on": "archive the database to S3",
   "settings.bak_prefix": "Folder in S3",
   "settings.bak_check": "Check the archive",

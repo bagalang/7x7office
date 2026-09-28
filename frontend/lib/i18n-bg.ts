@@ -404,7 +404,7 @@ export const bg: Record<string, string> = {
   "settings.s3_check": "Провери връзката",
   "settings.s3_check_ok": "Връзката с Backblaze е наред.",
   "settings.bak": "Архив на базата",
-  "settings.bak_hint": "Отделно от файловете. Те могат да останат на диска, а dump-ът на базата да отива в своя кофа. Папката в S3 по подразбиране е beckupDB.",
+  "settings.bak_hint": "Отделно от файловете. Те могат да останат на диска, а dump-ът на базата да отива в своя кофа. Папката в S3 по подразбиране е beckupDB. В кофата остават последните 20 архива.",
   "settings.bak_on": "архивирай базата в S3",
   "settings.bak_prefix": "Папка в S3",
   "settings.bak_check": "Провери архива",

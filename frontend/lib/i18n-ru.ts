@@ -402,7 +402,7 @@ export const ru: Record<string, string> = {
   "settings.s3_check": "Проверить связь",
   "settings.s3_check_ok": "Связь с Backblaze в порядке.",
   "settings.bak": "Архив базы",
-  "settings.bak_hint": "Отдельно от файлов. Они могут оставаться на диске, а дамп базы уходит в свою корзину. Папка в S3 по умолчанию — beckupDB.",
+  "settings.bak_hint": "Отдельно от файлов. Они могут оставаться на диске, а дамп базы уходит в свою корзину. Папка в S3 по умолчанию — beckupDB. В корзине хранятся последние 20 архивов.",
   "settings.bak_on": "архивировать базу в S3",
   "settings.bak_prefix": "Папка в S3",
   "settings.bak_check": "Проверить архив",
