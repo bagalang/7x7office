@@ -1,14 +1,11 @@
 # 7x7office — **secp**
 
-**Office платформа за споделяне на файлове като [Pydio Cells](https://pydio.com/),
+**Самохоствана платформа за файлове и офис документи,
 написана на [Baga](https://github.com/katehonz/baga-lang).**
-
-> `secp/cells-5-dev/` е **референтно копие** на Pydio Cells v5 (Go) — ползваме
-> го като архитектурна карта (сервизи, потоци, протоколи), не като код за порт.
 
 | | |
 |--|--|
-| **Език** | Baga 1.1.2 |
+| **Език** | Baga 1.1.4 |
 | **Приложение** | `app-product/7x7office/secp/` (sandak app, модулен монолит) |
 | **Стек** | `fmrbaga → httpdbaga · jwtbaga · ormbaga → pgbaga / boilaDB` (виж [BASE.md](../BASE.md)) |
 | **План** | [PLAN.md](PLAN.md) |
@@ -21,13 +18,11 @@ workspaces, споделени „клетки" (cells), ACL права, вер�
 редакция на офис файлове в Collabora (DOCX, XLSX, ODT, ODS, PPTX, PPT, ODP),
 realtime събития по WebSocket и фонови задачи.
 
-## От Cells микросервизи → към Baga модули
+## Модули
 
-Cells v5 е микросервизна архитектура (Go + gRPC + NATS + MySQL + S3).
 **secp е модулен монолит** по шаблона `apps/*` от BASE.md — един fmrbaga
-процес с вътрешни модули, които огледално следват областите на Cells.
-Приложението остава в един процес: няма отделни микросервизи и няма
-разцепване на scheduler-а или метаданните.
+процес. Няма отделни микросервизи и няма разцепване на scheduler-а
+или метаданните.
 
 ```
                         ┌──────────────────────────────────────────┐
@@ -56,25 +51,25 @@ Cells v5 е микросервизна архитектура (Go + gRPC + NATS 
                      (или boilabaga → boilaDB)      или S3 (blobs)
 ```
 
-### Съответствие Cells → secp
+### Модули и пакети
 
-| Cells v5 (`cells-5-dev/`) | secp модул | Baga пакети |
+| Област | secp модул | Baga пакети |
 |---|---|---|
-| `gateway/restv2` | REST API | fmrbaga, httpdbaga, jsonrpcbaga |
-| `gateway/dav` | WebDAV gateway | **davbaga (нов)** ← httpdbaga + xmlbaga |
-| `gateway/websocket` | events/нотификации | wsbaga |
-| `gateway/wopi` | WOPI (Collabora/OnlyOffice) | wopibaga |
-| `idm/user · role · policy` | idm | jwtbaga, otpbaga, oauthbaga, ormbaga |
-| `idm/workspace · acl` | workspaces + ACL | ormbaga, pathbaga |
-| `idm/share` | share links / cells | uuidbaga, jwtbaga |
-| `data/tree · versions · meta` | tree + versions | ormbaga, chronobaga |
-| `data/source` | datasources | локален FS или **s3baga** (`SECP_BLOB=s3`) |
-| `data/search` | търсене | PG FTS чрез pgbaga → **searchbaga (нов)** |
-| `broker/activity · chat · log` | activity + chat | chatbaga, wsbaga, logbaga |
-| `broker/mailer` | поща | **smtpbaga (нов)** ← std TLS |
-| `scheduler/jobs · tasks · timer` | scheduler | queuebaga, relbaga, ctxbaga |
-| `common/crypto` | енкрипция | std/crypto (AES-GCM, X25519) |
-| — | офис документи | индексът е `officebaga`; редакцията е Collabora през WOPI |
+| REST | REST API | fmrbaga, httpdbaga, jsonrpcbaga |
+| WebDAV | WebDAV gateway | **davbaga** ← httpdbaga + xmlbaga |
+| Събития | нотификации | wsbaga |
+| Офис редакция | WOPI (Collabora) | wopibaga |
+| Потребители | idm | jwtbaga, otpbaga, oauthbaga, ormbaga |
+| Права | workspaces + ACL | ormbaga, pathbaga |
+| Споделяне | публични линкове | uuidbaga, jwtbaga |
+| Файлове | tree + versions | ormbaga, chronobaga |
+| Съдържание | datasources | локален FS или **s3baga** (`SECP_BLOB=s3`) |
+| Търсене | търсене | PG FTS чрез pgbaga |
+| Лента | activity + chat | chatbaga, wsbaga, logbaga |
+| Поща | покани и смяна на парола | **smtpbaga** ← std TLS |
+| Фон | scheduler | queuebaga, relbaga, ctxbaga |
+| Крипто | енкрипция | std/crypto (AES-GCM, X25519) |
+| Офис файлове | преглед и индекс | `officebaga`; редакцията е Collabora през WOPI |
 
 ## Модулен монолит (архитектурно решение)
 
