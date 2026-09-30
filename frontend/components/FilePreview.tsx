@@ -43,12 +43,13 @@ export function FilePreview({
 }: {
   node: FsNode;
   onClose: () => void;
-  onRename: () => void;
-  onCopy: () => void;
-  onMove: () => void;
-  onDelete: () => void;
-  onShowVersions: () => void;
-  onShare: () => void;
+  // Липсват при преглед от търсенето: там няма диалозите за копиране и триене.
+  onRename?: () => void;
+  onCopy?: () => void;
+  onMove?: () => void;
+  onDelete?: () => void;
+  onShowVersions?: () => void;
+  onShare?: () => void;
   onError: (msg: string) => void;
 }) {
   const { t } = useI18n();
@@ -266,17 +267,21 @@ export function FilePreview({
           >
             <IconDownload width={16} height={16} /> {t("preview.download")}
           </button>
-          <button type="button" className="btn ghost" onClick={onCopy}>
-            <IconCopy width={16} height={16} /> {t("files.copy")}
-          </button>
-          {writable ? (
+          {onCopy ? (
+            <button type="button" className="btn ghost" onClick={onCopy}>
+              <IconCopy width={16} height={16} /> {t("files.copy")}
+            </button>
+          ) : null}
+          {writable && onMove ? (
             <button type="button" className="btn ghost" onClick={onMove}>
               <IconMove width={16} height={16} /> {t("files.move")}
             </button>
           ) : null}
-          <button type="button" className="btn ghost" onClick={onShowVersions}>
-            <IconHistory width={16} height={16} /> {t("preview.versions")}
-          </button>
+          {onShowVersions ? (
+            <button type="button" className="btn ghost" onClick={onShowVersions}>
+              <IconHistory width={16} height={16} /> {t("preview.versions")}
+            </button>
+          ) : null}
           <button
             type="button"
             className={`btn ghost${showHistory ? " active" : ""}`}
@@ -285,17 +290,17 @@ export function FilePreview({
           >
             <IconActivity width={16} height={16} /> {t("activity.history")}
           </button>
-          {writable ? (
-            <>
-              <button type="button" className="btn ghost" onClick={onRename}>
-                <IconPencil width={16} height={16} /> {t("preview.rename")}
-              </button>
-              <button type="button" className="btn danger-ghost" onClick={onDelete}>
-                <IconTrash width={16} height={16} /> {t("preview.delete")}
-              </button>
-            </>
+          {writable && onRename ? (
+            <button type="button" className="btn ghost" onClick={onRename}>
+              <IconPencil width={16} height={16} /> {t("preview.rename")}
+            </button>
           ) : null}
-          {shareable ? (
+          {writable && onDelete ? (
+            <button type="button" className="btn danger-ghost" onClick={onDelete}>
+              <IconTrash width={16} height={16} /> {t("preview.delete")}
+            </button>
+          ) : null}
+          {shareable && onShare ? (
             <button type="button" className="btn ghost" onClick={onShare}>
               <IconShare width={16} height={16} /> {t("ws.share")}
             </button>

@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { RequireAuth } from "../../components/RequireAuth";
 import { AppShell } from "../../components/AppShell";
+import { FolderPick } from "../../components/FolderPickDialog";
 import { useI18n } from "../../components/I18nProvider";
 import { api } from "../../lib/api";
 import { messageOf } from "../../components/FileBrowser";
@@ -26,7 +27,7 @@ const empty = {
   path_prefix: "",
   ext: "",
   action: "move",
-  arg: "/Архив",
+  arg: "",
 };
 
 function FlowsScreen() {
@@ -68,6 +69,10 @@ function FlowsScreen() {
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
+    if (form.action !== "mail" && form.arg.trim() === "") {
+      setError(t("flows.pick_required"));
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -132,10 +137,13 @@ function FlowsScreen() {
                     <option value="manual">{t("flows.trigger_manual")}</option>
                   </select>
                 </div>
-                <div className="field">
-                  <label htmlFor="flow-prefix">{t("flows.prefix")}</label>
-                  <input id="flow-prefix" className="input" value={form.path_prefix} placeholder="/Входящи" onChange={(e) => setForm({ ...form, path_prefix: e.target.value })} />
-                </div>
+                <FolderPick
+                  id="flow-prefix"
+                  label={t("flows.prefix")}
+                  value={form.path_prefix}
+                  allowAll
+                  onChange={(path_prefix) => setForm({ ...form, path_prefix })}
+                />
                 <div className="field">
                   <label htmlFor="flow-ext">{t("flows.ext")}</label>
                   <input id="flow-ext" className="input" value={form.ext} placeholder="pdf" onChange={(e) => setForm({ ...form, ext: e.target.value })} />
@@ -146,18 +154,39 @@ function FlowsScreen() {
                     id="flow-action"
                     className="input"
                     value={form.action}
-                    onChange={(e) => setForm({ ...form, action: e.target.value, arg: e.target.value === "mail" ? "" : "/Архив" })}
+                    onChange={(e) => {
+                      const action = e.target.value;
+                      const mail = action === "mail";
+                      const wasMail = form.action === "mail";
+                      setForm({
+                        ...form,
+                        action,
+                        ext: action === "ocr" && !form.ext ? "pdf" : form.ext,
+                        arg: mail === wasMail ? form.arg : "",
+                      });
+                    }}
                   >
                     <option value="move">{t("flows.action_move")}</option>
                     <option value="copy">{t("flows.action_copy")}</option>
                     <option value="mail">{t("flows.action_mail")}</option>
+                    <option value="ocr">{t("flows.action_ocr")}</option>
                   </select>
                 </div>
-                <div className="field">
-                  <label htmlFor="flow-arg">{form.action === "mail" ? t("flows.arg_mail") : t("flows.arg_folder")}</label>
-                  <input id="flow-arg" className="input" value={form.arg} onChange={(e) => setForm({ ...form, arg: e.target.value })} required />
-                </div>
+                {form.action === "mail" ? (
+                  <div className="field">
+                    <label htmlFor="flow-arg">{t("flows.arg_mail")}</label>
+                    <input id="flow-arg" className="input" type="email" value={form.arg} onChange={(e) => setForm({ ...form, arg: e.target.value })} required />
+                  </div>
+                ) : (
+                  <FolderPick
+                    id="flow-arg"
+                    label={t("flows.arg_folder")}
+                    value={form.arg}
+                    onChange={(arg) => setForm({ ...form, arg })}
+                  />
+                )}
               </div>
+              {form.action === "ocr" ? <p className="muted small">{t("flows.ocr_note")}</p> : null}
               <button type="submit" className="btn" disabled={busy}>
                 {t("common.create")}
               </button>

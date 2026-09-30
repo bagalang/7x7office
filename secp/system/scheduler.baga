@@ -12,6 +12,8 @@
 // Регистрирани видове (kind):
 //   extract-text  — извлича текст за търсене от вече качен файл
 //   mail-send     — праща писмо от опашката (Фаза 6.3)
+//   flow-run      — премести, копирай или писмо
+//   ocr-run       — PDF → markdown. Най-много един на tick.
 //   expire        — чисти стари записи по TTL (подготвено за Фаза 7)
 
 import "ormbaga/orm.baga"
@@ -167,17 +169,28 @@ fn ops_tick(db: OrmDb) -> i64 !IO !Net !Time !Random {
     let mut d = orm_db_q(q)
     let mut n: i64 = 0
     let mut i: i64 = 0
+    let mut ocr_slot: i64 = 0
     while i < orm_nrows(q) {
         let id = orm_cell_by_i64(q, i, "id")
         let kind = orm_cell_by(q, i, "kind")
         let payload = orm_cell_by(q, i, "payload")
         let att = orm_cell_by_i64(q, i, "attempts") + 1
-        let run = ops_set_status(d, id, "running")?
-        d = orm_db_exec(run)
-        let r = ops_run_one(d, id, kind, payload, att)?
-        d = r.db
-        if r.ok == 1 {
-            n = n + 1
+        let mut skip: i64 = 0
+        if kind == "ocr-run" {
+            if ocr_slot == 1 {
+                skip = 1
+            } else {
+                ocr_slot = 1
+            }
+        }
+        if skip == 0 {
+            let run = ops_set_status(d, id, "running")?
+            d = orm_db_exec(run)
+            let r = ops_run_one(d, id, kind, payload, att)?
+            d = r.db
+            if r.ok == 1 {
+                n = n + 1
+            }
         }
         i = i + 1
     }
@@ -217,13 +230,19 @@ fn ops_run_one(db: OrmDb, id: i64, kind: str, payload: str, att: i64) -> OpsRun 
         let f = ops_fail(m.db, id, kind, att, m.err)?
         return OpsRun { ok: 0, db: orm_db_exec(f) }
     }
-    if kind == "flow-run" {
+    if kind == "flow-run" || kind == "ocr-run" {
         let fr = flow_run(db, payload)?
         if fr.ok == 1 {
             let s = ops_set_status(fr.db, id, "done")?
             return OpsRun { ok: 1, db: orm_db_exec(s) }
         }
-        let f = ops_fail(fr.db, id, kind, att, fr.err)?
+        let mut used = att
+        let mut msg = fr.err
+        if str_starts_with(msg, "fatal ") {
+            used = 3
+            msg = substr(msg, 6, len(msg))
+        }
+        let f = ops_fail(fr.db, id, kind, used, msg)?
         return OpsRun { ok: 0, db: orm_db_exec(f) }
     }
     if kind == "expire" {

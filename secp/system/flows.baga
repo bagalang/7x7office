@@ -1,7 +1,7 @@
 // system/flows.baga — дефиниции на потоци и запис в опашката.
 //
 // Опростен Cells Flows: едно събитие (качване или ръчно) и едно
-// действие (премести, копирай, писмо). Няма визуално платно.
+// действие (премести, копирай, писмо, OCR към markdown). Няма визуално платно.
 
 import "ormbaga/orm.baga"
 import "fmrbaga/jsonx.baga"
@@ -58,11 +58,44 @@ fn flow_dir(raw: str) -> str {
     return n
 }
 
-// 1 когато пътят вече е в папката-цел на преместване/копиране.
+fn flow_job_kind(action: str) -> str {
+    if action == "ocr" {
+        return "ocr-run"
+    }
+    return "flow-run"
+}
+
+// Едно ръчно пускане. Обичайната пачка от клиент е 30–50 PDF.
+fn flow_manual_max() -> i64 {
+    return 60
+}
+
+// Име на markdown-а: /Входящи/фактура.pdf → /OCR/фактура.md
+fn flow_ocr_dest(folder: str, file_path: str) -> str {
+    let name = tree_name_of(file_path)
+    let ext = tree_ext(file_path)
+    let mut stem = name
+    if ext != "" {
+        let cut = len(name) - len(ext) - 1
+        if cut > 0 {
+            stem = substr(name, 0, cut)
+        }
+    }
+    let file = concat(stem, ".md")
+    let dir = flow_dir(folder)
+    if dir == "/" {
+        return concat("/", file)
+    }
+    return concat(concat(dir, "/"), file)
+}
+
+// 1 когато пътят вече е в папката-цел на преместване, копиране или OCR.
 fn flow_in_dest(path: str, action: str, arg: str) -> i64 {
     if action != "move" {
         if action != "copy" {
-            return 0
+            if action != "ocr" {
+                return 0
+            }
         }
     }
     let dest = flow_dir(arg)
@@ -124,13 +157,21 @@ fn flow_on_upload(db: OrmDb, ws: i64, owner: i64, path: str) -> FlowKick !IO !Ne
                 let arg = orm_cell_by(q, i, "arg")
                 if flow_match(path, prefix, ext) == 1 {
                     if flow_in_dest(path, action, arg) == 0 {
-                        let id = orm_cell_by_i64(q, i, "id")
-                        let job = ops_enqueue(d, "flow-run", flow_payload(id, ws, owner, path))?
-                        if orm_ok(job) == 0 {
-                            eprintln(concat("secp flow: ", orm_err_exec(job)))
-                            d = orm_db_exec(job)
-                        } else {
-                            d = orm_db_exec(job)
+                        let mut take: i64 = 1
+                        if action == "ocr" {
+                            if tree_ext(path) != "pdf" {
+                                take = 0
+                            }
+                        }
+                        if take == 1 {
+                            let id = orm_cell_by_i64(q, i, "id")
+                            let job = ops_enqueue(d, flow_job_kind(action), flow_payload(id, ws, owner, path))?
+                            if orm_ok(job) == 0 {
+                                eprintln(concat("secp flow: ", orm_err_exec(job)))
+                                d = orm_db_exec(job)
+                            } else {
+                                d = orm_db_exec(job)
+                            }
                         }
                     }
                 }

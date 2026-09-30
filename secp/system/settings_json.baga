@@ -1,0 +1,91 @@
+// system/settings_json.baga — JSON на админ настройките.
+// Изнесено от settings_actions.baga заради гейта от 600 реда.
+
+import "ocr.baga"
+import "site.baga"
+import "../idm/mail.baga"
+import "../data/s3live.baga"
+import "../data/baklive.baga"
+import "fmrbaga/jsonx.baga"
+
+fn set_smtp_json(v: MailView) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "host", v.host)
+    o = jobj_str(o, "port", v.port)
+    o = jobj_str(o, "tls", v.tls)
+    o = jobj_str(o, "from", v.from)
+    o = jobj_str(o, "user", v.user)
+    o = jobj_str(o, "pass", v.pass)
+    o = jobj_str(o, "helo", v.helo)
+    o = jobj_str(o, "timeout_s", v.timeout_s)
+    let mut insecure = "0"
+    if v.insecure == "1" {
+        insecure = "1"
+    }
+    o = jobj_str(o, "insecure", insecure)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_s3_json(v: S3View) -> JObj {
+    let mut o = jobj_new()
+    let mut on = "0"
+    if v.on == 1 {
+        on = "1"
+    }
+    o = jobj_str(o, "on", on)
+    o = jobj_str(o, "endpoint", v.endpoint)
+    o = jobj_str(o, "bucket", v.bucket)
+    o = jobj_str(o, "access_key", v.access)
+    o = jobj_str(o, "secret_key", "")
+    let mut secret_set = "0"
+    if v.secret != "" {
+        secret_set = "1"
+    }
+    o = jobj_str(o, "secret_set", secret_set)
+    o = jobj_str(o, "region", v.region)
+    o = jobj_str(o, "timeout_s", v.timeout_s)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_site_json(v: SiteUrl) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "url", v.url)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_bak_json(v: BakView) -> JObj {
+    let mut o = jobj_new()
+    let mut on = "0"
+    if v.on == 1 {
+        on = "1"
+    }
+    o = jobj_str(o, "on", on)
+    o = jobj_str(o, "endpoint", v.endpoint)
+    o = jobj_str(o, "bucket", v.bucket)
+    o = jobj_str(o, "access_key", v.access)
+    o = jobj_str(o, "secret_key", "")
+    let mut secret_set = "0"
+    if v.secret != "" {
+        secret_set = "1"
+    }
+    o = jobj_str(o, "secret_set", secret_set)
+    o = jobj_str(o, "region", v.region)
+    o = jobj_str(o, "prefix", v.prefix)
+    o = jobj_str(o, "timeout_s", v.timeout_s)
+    o = jobj_str(o, "last", v.last)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+fn set_body(mail: MailView, store: S3View, site: SiteUrl, bak: BakView, ocr: OcrView) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_raw(o, "site", jobj_encode(set_site_json(site)))
+    o = jobj_raw(o, "smtp", jobj_encode(set_smtp_json(mail)))
+    o = jobj_raw(o, "s3", jobj_encode(set_s3_json(store)))
+    o = jobj_raw(o, "bak", jobj_encode(set_bak_json(bak)))
+    o = jobj_raw(o, "ocr", jobj_encode(ocr_public_json(ocr)))
+    return o
+}

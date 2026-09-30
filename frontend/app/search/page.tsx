@@ -12,8 +12,13 @@ import { useI18n } from "../../components/I18nProvider";
 import { useWorkspace } from "../../components/WorkspaceProvider";
 import { api, downloadFile, FsNode, SearchHit } from "../../lib/api";
 import { isOfficeName, officeHref } from "../../lib/office";
+import { FilePreview } from "../../components/FilePreview";
 import { formatBytes, messageOf } from "../../components/FileBrowser";
 import { IconDownload, IconFileText, IconSearch } from "../../components/icons";
+
+function isPdfName(name: string): boolean {
+  return name.toLowerCase().endsWith(".pdf");
+}
 
 function toNode(hit: SearchHit): FsNode {
   return {
@@ -36,6 +41,7 @@ function SearchInner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searched, setSearched] = useState(false);
+  const [preview, setPreview] = useState<FsNode | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Последно търсеният въпрос — пази от повторни заявки при re-render.
   const lastSearched = useRef("");
@@ -52,6 +58,7 @@ function SearchInner() {
   useEffect(() => {
     setHits([]);
     setSearched(false);
+    setPreview(null);
     lastSearched.current = "";
   }, [wsId]);
 
@@ -162,14 +169,20 @@ function SearchInner() {
                       <td>
                         <span className="name-cell">
                           <IconFileText width={16} height={16} />
-                          <Link
-                            href={isOfficeName(hit.name) ? officeHref(hit.path) : `/edit?path=${encodeURIComponent(hit.path)}`}
-                            className="link"
-                            target={isOfficeName(hit.name) ? "_blank" : undefined}
-                            rel={isOfficeName(hit.name) ? "noopener noreferrer" : undefined}
-                          >
-                            {hit.name}
-                          </Link>
+                          {isPdfName(hit.name) ? (
+                            <button type="button" className="text-link" onClick={() => setPreview(toNode(hit))}>
+                              {hit.name}
+                            </button>
+                          ) : (
+                            <Link
+                              href={isOfficeName(hit.name) ? officeHref(hit.path) : `/edit?path=${encodeURIComponent(hit.path)}`}
+                              className="link"
+                              target={isOfficeName(hit.name) ? "_blank" : undefined}
+                              rel={isOfficeName(hit.name) ? "noopener noreferrer" : undefined}
+                            >
+                              {hit.name}
+                            </Link>
+                          )}
                         </span>
                       </td>
                       <td className="muted">{hit.path}</td>
@@ -203,6 +216,7 @@ function SearchInner() {
           <div className="card content muted">{t("search.hint")}</div>
         ) : null}
       </main>
+      {preview ? <FilePreview node={preview} onClose={() => setPreview(null)} onError={setError} /> : null}
     </AppShell>
   );
 }

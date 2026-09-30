@@ -1,0 +1,247 @@
+// system/ocr.baga — PDF → текст през Mistral OCR.
+//
+// Потокът записва markdown в друга папка. По-евтиният модел чете
+// вече готовия текст и не получава самия PDF.
+// Ключ: ocr.api_key след запис в Настройки, иначе SECP_MISTRAL_API_KEY.
+
+import "settings.baga"
+import "fmrbaga/jsonx.baga"
+import "std/json/json.baga"
+import "std/net/http_client.baga"
+import "std/crypto/pkey.baga"
+import "std/os/os.baga"
+import "std/str/str.baga"
+
+struct OcrView {
+    ok: i64,
+    db: OrmDb,
+    err: str,
+    key: str,
+    source: str
+}
+
+struct OcrText {
+    ok: i64,
+    fatal: i64,
+    db: OrmDb,
+    text: str,
+    err: str
+}
+
+fn ocr_view_bad(db: OrmDb, err: str) -> OcrView {
+    return OcrView { ok: 0, db: db, err: err, key: "", source: "" }
+}
+
+fn ocr_text_bad(db: OrmDb, fatal: i64, err: str) -> OcrText {
+    return OcrText { ok: 0, fatal: fatal, db: db, text: "", err: err }
+}
+
+fn ocr_text_ok(db: OrmDb, text: str) -> OcrText {
+    return OcrText { ok: 1, fatal: 0, db: db, text: text, err: "" }
+}
+
+// 8 MB. Фактурите са по 4–5 MB; по-голям PDF не се праща към OCR.
+fn ocr_max_bytes() -> i64 {
+    return 8388608
+}
+
+fn ocr_model() -> str {
+    return "mistral-ocr-latest"
+}
+
+fn ocr_url() -> str {
+    return "https://api.mistral.ai/v1/ocr"
+}
+
+// Google Trust Services WE1 — издателят на листовия сертификат на
+// api.mistral.ai. При ротация: SECP_MISTRAL_ANCHOR_FILE=<pem път>.
+fn ocr_anchor_pem() -> str {
+    return "-----BEGIN CERTIFICATE-----\nMIICnzCCAiWgAwIBAgIQf/MZd5csIkp2FV0TttaF4zAKBggqhkjOPQQDAzBHMQsw\nCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU\nMBIGA1UEAxMLR1RTIFJvb3QgUjQwHhcNMjMxMjEzMDkwMDAwWhcNMjkwMjIwMTQw\nMDAwWjA7MQswCQYDVQQGEwJVUzEeMBwGA1UEChMVR29vZ2xlIFRydXN0IFNlcnZp\nY2VzMQwwCgYDVQQDEwNXRTEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARvzTr+\nZ1dHTCEDhUDCR127WEcPQMFcF4XGGTfn1XzthkubgdnXGhOlCgP4mMTG6J7/EFmP\nLCaY9eYmJbsPAvpWo4H+MIH7MA4GA1UdDwEB/wQEAwIBhjAdBgNVHSUEFjAUBggr\nBgEFBQcDAQYIKwYBBQUHAwIwEgYDVR0TAQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQU\nkHeSNWfE/6jMqeZ72YB5e8yT+TgwHwYDVR0jBBgwFoAUgEzW63T/STaj1dj8tT7F\navCUHYwwNAYIKwYBBQUHAQEEKDAmMCQGCCsGAQUFBzAChhhodHRwOi8vaS5wa2ku\nZ29vZy9yNC5jcnQwKwYDVR0fBCQwIjAgoB6gHIYaaHR0cDovL2MucGtpLmdvb2cv\nci9yNC5jcmwwEwYDVR0gBAwwCjAIBgZngQwBAgEwCgYIKoZIzj0EAwMDaAAwZQIx\nAOcCq1HW90OVznX+0RGU1cxAQXomvtgM8zItPZCuFQ8jSBJSjz5keROv9aYsAm5V\nsQIwJonMaAFi54mrfhfoFNZEfuNMSQ6/bIBiNLiyoX46FohQvKeIoJ99cx7sUkFN\n7uJW\n-----END CERTIFICATE-----\n"
+}
+
+fn ocr_anchor_der() -> bytes !IO {
+    let f = env("SECP_MISTRAL_ANCHOR_FILE")?
+    if f != "" {
+        if file_readable(f)? == 1 {
+            let pem = read_file(f)?
+            return pem_der_block(pem, "CERTIFICATE")
+        }
+    }
+    return pem_der_block(ocr_anchor_pem(), "CERTIFICATE")
+}
+
+fn ocr_view(db: OrmDb) -> OcrView !IO !Net {
+    let q = set_all(db)?
+    if orm_ok_q(q) == 0 {
+        return ocr_view_bad(orm_db_q(q), orm_err_q(q))
+    }
+    let d = orm_db_q(q)
+    if set_saved(q, "ocr.saved") == 1 {
+        let key = str_trim(set_get(q, "ocr.api_key"))
+        return OcrView { ok: 1, db: d, err: "", key: key, source: "db" }
+    }
+    let envk = env("SECP_MISTRAL_API_KEY")?
+    return OcrView { ok: 1, db: d, err: "", key: str_trim(envk), source: "env" }
+}
+
+fn ocr_public_json(v: OcrView) -> JObj {
+    let mut o = jobj_new()
+    o = jobj_str(o, "api_key", "")
+    let mut set = "0"
+    if v.key != "" {
+        set = "1"
+    }
+    o = jobj_str(o, "key_set", set)
+    o = jobj_str(o, "source", v.source)
+    return o
+}
+
+// Празен низ оставя досегашния ключ. Първият непразен запис печели пред средата.
+fn ocr_store_key(db: OrmDb, raw: str) -> SetWrite !IO !Net {
+    let key = str_trim(raw)
+    if key == "" {
+        return SetWrite { ok: 1, db: db, err: "" }
+    }
+    if len(key) > 400 {
+        return SetWrite { ok: 0, db: db, err: "ocr.api_key is too long" }
+    }
+    let w = set_write(db, "ocr.api_key", key)?
+    if w.ok == 0 {
+        return w
+    }
+    return set_write(w.db, "ocr.saved", "1")?
+}
+
+// Един буфер с точния размер. Посимволният base64_encode е квадратичен
+// и за 4–5 MB PDF изяжда процеса.
+fn ocr_b64(body: bytes) -> str {
+    let n = bytes_len(body)
+    if n < 1 {
+        return ""
+    }
+    let out_n = ((n + 2) / 3) * 4
+    let raw = bytes_new(out_n)
+    let alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let mut i: i64 = 0
+    let mut o: i64 = 0
+    while i + 3 <= n {
+        let v = bytes_at(body, i) * 65536 + bytes_at(body, i + 1) * 256 + bytes_at(body, i + 2)
+        bytes_set(raw, o, char_at(alpha, (v >> 18) & 63))
+        bytes_set(raw, o + 1, char_at(alpha, (v >> 12) & 63))
+        bytes_set(raw, o + 2, char_at(alpha, (v >> 6) & 63))
+        bytes_set(raw, o + 3, char_at(alpha, v & 63))
+        i = i + 3
+        o = o + 4
+    }
+    let rem = n - i
+    if rem == 1 {
+        let v = bytes_at(body, i) * 65536
+        bytes_set(raw, o, char_at(alpha, (v >> 18) & 63))
+        bytes_set(raw, o + 1, char_at(alpha, (v >> 12) & 63))
+        bytes_set(raw, o + 2, 61)
+        bytes_set(raw, o + 3, 61)
+    }
+    if rem == 2 {
+        let v = bytes_at(body, i) * 65536 + bytes_at(body, i + 1) * 256
+        bytes_set(raw, o, char_at(alpha, (v >> 18) & 63))
+        bytes_set(raw, o + 1, char_at(alpha, (v >> 12) & 63))
+        bytes_set(raw, o + 2, char_at(alpha, (v >> 6) & 63))
+        bytes_set(raw, o + 3, 61)
+    }
+    return str_of_bytes(raw)
+}
+
+fn ocr_field(d: JsonDoc, obj: i64, key: str) -> str {
+    let n = json_get(d, obj, key)
+    if n < 0 {
+        return ""
+    }
+    if json_tag(d, n) != 4 {
+        return ""
+    }
+    return json_str(d, n)
+}
+
+fn ocr_pages(body: str) -> str {
+    let parsed = jbody_parse_str(body)
+    if parsed.ok == 0 {
+        return ""
+    }
+    let pages = json_get(parsed.doc, parsed.root, "pages")
+    if pages < 0 || json_tag(parsed.doc, pages) != 5 {
+        return ""
+    }
+    let mut out = ""
+    let n = json_count(parsed.doc, pages)
+    let mut i: i64 = 0
+    while i < n {
+        let p = json_at(parsed.doc, pages, i)
+        if json_tag(parsed.doc, p) == 6 {
+            let md = ocr_field(parsed.doc, p, "markdown")
+            if md != "" {
+                if out != "" {
+                    out = concat(out, "\n\n")
+                }
+                out = concat(out, md)
+            }
+        }
+        i = i + 1
+    }
+    return out
+}
+
+fn ocr_note(prefix: str, resp: HttpResponse) -> str {
+    let mut b = resp.body
+    if len(b) > 180 {
+        b = substr(b, 0, 180)
+    }
+    let mut s = concat(prefix, " HTTP ")
+    s = concat(s, int_to_str(resp.status))
+    return concat(concat(s, ": "), b)
+}
+
+fn ocr_pdf(db: OrmDb, body: bytes) -> OcrText !IO !Net !Random {
+    let n = bytes_len(body)
+    if n < 1 {
+        return ocr_text_bad(db, 1, "празен PDF")
+    }
+    if n > ocr_max_bytes() {
+        return ocr_text_bad(db, 1, "PDF е над 8 MB")
+    }
+    let view = ocr_view(db)?
+    if view.ok == 0 {
+        return ocr_text_bad(view.db, 1, view.err)
+    }
+    if view.key == "" {
+        return ocr_text_bad(view.db, 1, "няма ключ за Mistral OCR")
+    }
+    let b64 = ocr_b64(body)
+    let data_url = concat("data:application/pdf;base64,", b64)
+    let mut doc = jobj_new()
+    doc = jobj_str(doc, "type", "document_url")
+    doc = jobj_str(doc, "document_url", data_url)
+    let mut req = jobj_new()
+    req = jobj_str(req, "model", ocr_model())
+    req = jobj_obj(req, "document", doc)
+    req = jobj_bool(req, "include_image_base64", 0)
+    let headers: Map<str, str> = map_new()
+    map_set(headers, "authorization", concat("Bearer ", view.key))
+    map_set(headers, "content-type", "application/json")
+    map_set(headers, "user-agent", "7x7office")
+    let anchor = ocr_anchor_der()?
+    let resp = http_request_anchor("POST", ocr_url(), headers, jobj_encode(req), 120, anchor)?
+    if resp.ok == 0 {
+        return ocr_text_bad(view.db, 0, "Mistral OCR: връзката се скъса")
+    }
+    if resp.status == 429 || resp.status >= 500 {
+        return ocr_text_bad(view.db, 0, ocr_note("Mistral OCR", resp))
+    }
+    if resp.status != 200 {
+        return ocr_text_bad(view.db, 1, ocr_note("Mistral OCR", resp))
+    }
+    let text = ocr_pages(resp.body)
+    if text == "" {
+        return ocr_text_bad(view.db, 1, "OCR не върна текст")
+    }
+    return ocr_text_ok(view.db, text)
+}

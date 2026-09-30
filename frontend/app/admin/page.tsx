@@ -48,7 +48,9 @@ type BakForm = {
 
 type SiteForm = { url: string; source: string };
 
-type Settings = { site: SiteForm; smtp: SmtpForm; s3: S3Form; bak?: BakForm };
+type OcrForm = { api_key: string; key_set?: string; source: string };
+
+type Settings = { site: SiteForm; smtp: SmtpForm; s3: S3Form; bak?: BakForm; ocr?: OcrForm };
 
 const emptySmtp: SmtpForm = {
   host: "",
@@ -64,6 +66,8 @@ const emptySmtp: SmtpForm = {
 };
 
 const emptySite: SiteForm = { url: "http://127.0.0.1:3010", source: "env" };
+
+const emptyOcr: OcrForm = { api_key: "", key_set: "0", source: "env" };
 
 const B2_REGIONS = [
   "eu-central-003",
@@ -147,6 +151,7 @@ function SettingsScreen() {
   const [smtp, setSmtp] = useState<SmtpForm>(emptySmtp);
   const [s3, setS3] = useState<S3Form>(emptyS3);
   const [bak, setBak] = useState<BakForm>(emptyBak);
+  const [ocr, setOcr] = useState<OcrForm>(emptyOcr);
   const [error, setError] = useState("");
   const [smtpTo, setSmtpTo] = useState("");
   const [smtpSent, setSmtpSent] = useState("");
@@ -177,6 +182,7 @@ function SettingsScreen() {
         setSmtp({ ...emptySmtp, ...body.smtp });
         setS3(normalizeS3(body.s3));
         setBak(normalizeBak(body.bak));
+        setOcr({ ...emptyOcr, ...body.ocr, api_key: "" });
       } catch (err) {
         if (!cancel) setError(messageOf(err, t("common.error")));
       } finally {
@@ -200,11 +206,12 @@ function SettingsScreen() {
       next = { ...s3, endpoint: b2Endpoint(s3.region) };
     }
     try {
-      const body = await api.put<Settings>("/v1/admin/settings", { site, smtp, s3: next, bak: bakForSave(bak) });
+      const body = await api.put<Settings>("/v1/admin/settings", { site, smtp, s3: next, bak: bakForSave(bak), ocr });
       setSite({ ...emptySite, ...body.site });
       setSmtp({ ...emptySmtp, ...body.smtp });
       setS3(normalizeS3(body.s3));
       setBak(normalizeBak(body.bak));
+      setOcr({ ...emptyOcr, ...body.ocr, api_key: "" });
       setSaved(true);
       return true;
     } catch (err) {
@@ -524,6 +531,25 @@ function SettingsScreen() {
               <button type="button" className="btn activate" disabled={busy || bak.on !== "1"} onClick={onBakRun}>
                 {t("settings.bak_now")}
               </button>
+            </section>
+
+            <section className="settings-block">
+              <h2>{t("settings.ocr")}</h2>
+              <p className="muted small">
+                {t("settings.ocr_hint")} {sourceLabel(ocr.source, t)}
+              </p>
+              <div className="field">
+                <label htmlFor="ocr-key">{t("settings.ocr_key")}</label>
+                <input
+                  id="ocr-key"
+                  className="input"
+                  type="password"
+                  autoComplete="new-password"
+                  value={ocr.api_key}
+                  placeholder={ocr.key_set === "1" ? t("settings.ocr_key_keep") : ""}
+                  onChange={(e) => setOcr({ ...ocr, api_key: e.target.value })}
+                />
+              </div>
             </section>
 
             <button type="submit" className="btn" disabled={busy}>

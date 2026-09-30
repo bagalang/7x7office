@@ -20,6 +20,9 @@ fn flow_action_ok(action: str) -> i64 {
     if action == "mail" {
         return 1
     }
+    if action == "ocr" {
+        return 1
+    }
     return 0
 }
 
@@ -80,7 +83,7 @@ fn act_flows_create(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     }
     let action = str_trim(action_f.val)
     if flow_action_ok(action) == 0 {
-        return act_err(db, 400, "action must be move, copy or mail")
+        return act_err(db, 400, "action must be move, copy, mail or ocr")
     }
     let prefix_f = jopt_str(b.doc, b.root, "path_prefix", "")
     if prefix_f.ok == 0 {
