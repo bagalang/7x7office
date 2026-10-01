@@ -866,7 +866,11 @@ export function FileBrowser() {
           mode={transfer.mode}
           nodes={transfer.nodes}
           workspaces={workspaces}
-          sourceWsId={wsId > 0 ? wsId : (workspaces.find((w) => w.is_personal === 1)?.id ?? 0)}
+          sourceWsId={
+            wsId > 0
+              ? wsId
+              : (workspaces.find((w) => w.is_personal === 1 && w.role === "owner")?.id ?? 0)
+          }
           onClose={() => setTransfer(null)}
           onDone={() => {
             const moved = transfer.mode === "move" ? transfer.nodes : [];

@@ -41,8 +41,8 @@ function messageOf(err: unknown, fallback: string): string {
   return fallback;
 }
 
-function davNo(ws: Workspace): number {
-  return ws.is_personal === 1 ? 0 : Number(ws.id);
+function wsNo(ws: Workspace): number {
+  return Number(ws.id);
 }
 
 function davAddress(host: string, scheme: string, n: number): string {
@@ -172,7 +172,10 @@ function WorkspacesScreen() {
     setError("");
     try {
       await deleteWorkspace(ws.id);
-      if (Number(ws.id) === wsId) select(0);
+      if (Number(ws.id) === wsId) {
+        const mine = rows.find((w) => w.is_personal === 1 && w.role === "owner");
+        select(mine ? Number(mine.id) : 0);
+      }
       setNotice(t("ws.deleted"));
       reloadWs();
       setReload((n) => n + 1);
@@ -235,8 +238,9 @@ function WorkspacesScreen() {
   }
 
   function isOn(ws: Workspace): boolean {
-    const n = davNo(ws);
-    return n === 0 ? wsId === 0 : Number(ws.id) === wsId;
+    if (wsNo(ws) === wsId) return true;
+    // Стар избор 0 е личното пространство на влезлия, не на всеки потребител.
+    return wsId === 0 && ws.is_personal === 1 && ws.role === "owner";
   }
 
   async function onQuota(ws: Workspace) {
@@ -258,7 +262,7 @@ function WorkspacesScreen() {
   }
 
   function activate(ws: Workspace) {
-    const n = davNo(ws);
+    const n = wsNo(ws);
     select(n);
     setNotice(t("ws.activated", { label: ws.label, id: String(n) }));
     router.push("/");
@@ -297,7 +301,7 @@ function WorkspacesScreen() {
             </thead>
             <tbody>
               {rows.map((ws) => {
-                const n = davNo(ws);
+                const n = wsNo(ws);
                 const on = isOn(ws);
                 return (
                 <tr key={ws.id} className={on ? "active" : undefined} style={{ cursor: "default" }}>

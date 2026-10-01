@@ -92,7 +92,6 @@ function FolderPickDialog({
 }) {
   const { t } = useI18n();
   const { wsId, workspaces } = useWorkspace();
-  const teams = workspaces.filter((w) => w.is_personal === 0);
   const [space, setSpace] = useState(wsId);
   const [path, setPath] = useState(initial || "/");
   const [listed, setListed] = useState<FsNode[]>([]);
@@ -100,8 +99,8 @@ function FolderPickDialog({
   const [folderName, setFolderName] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const ws = workspaces.find((w) => w.id === space);
-  const writable = space === 0 || (ws ? canWrite(ws) : false);
+  const ws = workspaces.find((w) => Number(w.id) === space);
+  const writable = ws ? canWrite(ws) : space === 0;
 
   useEffect(() => {
     let dead = false;
@@ -154,7 +153,7 @@ function FolderPickDialog({
 
   return (
     <Dialog wide title={title} onClose={onClose}>
-      {teams.length > 0 ? (
+      {workspaces.length > 1 ? (
         <div className="field">
           <label htmlFor="flow-folder-ws">{t("files.dest_space")}</label>
           <select
@@ -167,9 +166,10 @@ function FolderPickDialog({
               setErr("");
             }}
           >
-            <option value="0">{t("ws.personal_files")} · №0</option>
-            {space > 0 && !teams.some((w) => w.id === space) ? <option value={String(space)}>№{space}</option> : null}
-            {teams.map((w) => (
+            {!workspaces.some((w) => Number(w.id) === space) ? (
+              <option value={String(space)}>{space > 0 ? `№${space}` : t("ws.personal_files")}</option>
+            ) : null}
+            {workspaces.map((w) => (
               <option key={w.id} value={String(w.id)}>
                 {w.label} · №{w.id}
               </option>

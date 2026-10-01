@@ -3,6 +3,7 @@
 
 import "user_model.baga"
 import "dav_key_model.baga"
+import "ws_model.baga"
 import "../system/site.baga"
 import "fmrbaga/ctx.baga"
 import "fmrbaga/action.baga"
@@ -42,7 +43,7 @@ struct DavUrl {
     err: str
 }
 
-// Dolphin: http → dav://, https → davs://. Пътят си остава /dav/0.
+// Dolphin: http → dav://, https → davs://. Пътят е /dav/<номер> на личното пространство.
 fn dav_client_url(raw: str) -> str {
     if str_starts_with(raw, "https://") == 1 {
         return concat("davs://", substr(raw, 8, len(raw)))
@@ -53,15 +54,20 @@ fn dav_client_url(raw: str) -> str {
     return raw
 }
 
-fn dav_folder_url(db: OrmDb) -> DavUrl !IO !Net {
-    let site = site_public(db)?
+fn dav_folder_url(db: OrmDb, user_id: i64) -> DavUrl !IO !Net {
+    let ens = ws_personal_ensure(db, user_id)?
+    if ens.err != "" {
+        return DavUrl { db: ens.db, url: "", err: ens.err }
+    }
+    let path = concat("/dav/", int_to_str(ens.id))
+    let site = site_public(ens.db)?
     if site.ok == 0 {
         return DavUrl { db: site.db, url: "", err: site.err }
     }
     if site.url == "" {
-        return DavUrl { db: site.db, url: "dav://127.0.0.1:3010/dav/0", err: "" }
+        return DavUrl { db: site.db, url: concat("dav://127.0.0.1:3010", path), err: "" }
     }
-    return DavUrl { db: site.db, url: dav_client_url(concat(site.url, "/dav/0")), err: "" }
+    return DavUrl { db: site.db, url: dav_client_url(concat(site.url, path)), err: "" }
 }
 
 fn dav_key_json(url: str, email: str, has: i64, prefix: str, key: str) -> JObj {
@@ -89,7 +95,7 @@ fn act_dav_key_get(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net {
     if row.err != "" {
         return act_err(row.db, 500, row.err)
     }
-    let url = dav_folder_url(row.db)?
+    let url = dav_folder_url(row.db, who.id)?
     if url.err != "" {
         return act_err(url.db, 500, url.err)
     }
@@ -110,7 +116,7 @@ fn act_dav_key_post(ctx: FmrCtx, db: OrmDb) -> FmrOut !IO !Net !Random !Time {
     if row.err != "" {
         return act_err(row.db, 500, row.err)
     }
-    let url = dav_folder_url(row.db)?
+    let url = dav_folder_url(row.db, who.id)?
     if url.err != "" {
         return act_err(url.db, 500, url.err)
     }

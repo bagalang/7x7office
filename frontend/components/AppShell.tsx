@@ -108,18 +108,16 @@ export function AppShell({ search, children }: { search?: ReactNode; children: R
                 else router.push("/");
               }}
             >
-              {/* 0 = личният workspace; WebDAV адресът е /dav/0. */}
-              <option value="0">{t("ws.personal_files")} · №0</option>
-              {wsId > 0 && !workspaces.some((w) => Number(w.id) === wsId) ? (
-                <option value={String(wsId)}>№{wsId}</option>
+              {!workspaces.some((w) => Number(w.id) === wsId) ? (
+                <option value={String(wsId)}>
+                  {wsId > 0 ? `№${wsId}` : t("ws.personal_files")}
+                </option>
               ) : null}
-              {workspaces
-                .filter((w) => w.is_personal === 0)
-                .map((w) => (
-                  <option key={w.id} value={String(w.id)}>
-                    {w.label} · №{w.id}
-                  </option>
-                ))}
+              {workspaces.map((w) => (
+                <option key={w.id} value={String(w.id)}>
+                  {w.label} · №{w.id}
+                </option>
+              ))}
             </select>
           </label>
         ) : null}

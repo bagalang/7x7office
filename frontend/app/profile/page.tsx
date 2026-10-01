@@ -1,9 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import QRCode from "qrcode";
 import { RequireAuth } from "../../components/RequireAuth";
 import { AppShell } from "../../components/AppShell";
 import { useI18n } from "../../components/I18nProvider";
+import { ownPersonal, useWorkspace } from "../../components/WorkspaceProvider";
 import { api, setToken } from "../../lib/api";
 import { messageOf } from "../../components/FileBrowser";
 
@@ -12,8 +14,32 @@ type AccountSaved = { username?: string; email?: string; access_token?: string }
 type TotpStart = { secret: string; uri: string; recovery_codes: string[] };
 type DavFolder = { url?: string; user?: string; has_key?: number; prefix?: string; key?: string };
 
+function downloadText(name: string, text: string) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function recoveryFile(account: string, codes: string[]): string {
+  return ["7x7office", account, "", ...codes, ""].join("\n");
+}
+
+function folderUrl(raw: string, id: number): string {
+  if (!raw || id < 1) return raw;
+  const at = raw.lastIndexOf("/dav/");
+  if (at < 0) return raw;
+  return `${raw.slice(0, at)}/dav/${id}`;
+}
+
 function ProfileScreen() {
   const { t } = useI18n();
+  const { workspaces } = useWorkspace();
   const [me, setMe] = useState<Me | null>(null);
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
@@ -31,6 +57,31 @@ function ProfileScreen() {
   const [accountPass, setAccountPass] = useState("");
   const [dav, setDav] = useState<DavFolder | null>(null);
   const [davKey, setDavKey] = useState("");
+  const [qr, setQr] = useState("");
+
+  useEffect(() => {
+    const uri = totp?.uri || "";
+    if (!uri) {
+      setQr("");
+      return;
+    }
+    let dead = false;
+    QRCode.toDataURL(uri, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 360,
+      color: { dark: "#000000", light: "#ffffff" },
+    })
+      .then((url) => {
+        if (!dead) setQr(url);
+      })
+      .catch(() => {
+        if (!dead) setQr("");
+      });
+    return () => {
+      dead = true;
+    };
+  }, [totp?.uri]);
 
   useEffect(() => {
     let cancel = false;
@@ -277,13 +328,20 @@ function ProfileScreen() {
           <>
             {totp ? (
               <form onSubmit={confirmTotp}>
-                <div className="field">
-                  <label htmlFor="totp-secret">{t("profile.totp_secret")}</label>
-                  <input id="totp-secret" className="input" readOnly value={totp.secret} />
-                </div>
-                <div className="field">
-                  <label htmlFor="totp-uri">{t("profile.totp_uri")}</label>
-                  <input id="totp-uri" className="input" readOnly value={totp.uri} />
+                <div className="totp-setup">
+                  {qr ? (
+                    <img className="totp-qr" src={qr} width={180} height={180} alt={t("profile.totp_qr")} />
+                  ) : null}
+                  <div className="totp-setup-fields">
+                    <div className="field">
+                      <label htmlFor="totp-secret">{t("profile.totp_secret")}</label>
+                      <input id="totp-secret" className="input" readOnly value={totp.secret} />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="totp-uri">{t("profile.totp_uri")}</label>
+                      <input id="totp-uri" className="input" readOnly value={totp.uri} />
+                    </div>
+                  </div>
                 </div>
                 <p className="muted small">{t("profile.totp_recovery_hint")}</p>
                 <div className="code-list">
@@ -291,6 +349,13 @@ function ProfileScreen() {
                     <div key={c}>{c}</div>
                   ))}
                 </div>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => downloadText("7x7office-recovery-codes.txt", recoveryFile(email, totp.recovery_codes))}
+                >
+                  {t("profile.totp_download")}
+                </button>
                 <div className="field">
                   <label htmlFor="totp-code">{t("profile.totp_code")}</label>
                   <input id="totp-code" className="input" inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} />
@@ -311,7 +376,12 @@ function ProfileScreen() {
         <p className="muted small">{t("profile.dav_hint")}</p>
         <div className="field">
           <label htmlFor="dav-url">{t("profile.dav_url")}</label>
-          <input id="dav-url" className="input" readOnly value={dav?.url || ""} />
+          <input
+            id="dav-url"
+            className="input"
+            readOnly
+            value={folderUrl(dav?.url || "", Number(ownPersonal(workspaces)?.id || 0))}
+          />
         </div>
         <div className="field">
           <label htmlFor="dav-user">{t("profile.dav_user")}</label>

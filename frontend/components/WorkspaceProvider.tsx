@@ -79,11 +79,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (dead) return;
         const items = list.items ?? [];
         setWorkspaces(items);
-        // Ако избраният вече не съществува (махнат от друг член, изтрит),
-        // връщаме се на личния, за да не остане клиентът с 404-та.
+        // 0 е стар пряк път към личното на влезлия. В списъка всяко
+        // пространство, включително личното, си има номер. Ако изборът
+        // липсва или сочи изтрито пространство, отваряме своето.
         const cur = getActiveWorkspace();
-        if (cur > 0 && !items.some((w) => Number(w.id) === cur)) {
-          setActiveWorkspace(0);
+        const known = cur > 0 && items.some((w) => Number(w.id) === cur);
+        if (!known) {
+          const mine = ownPersonal(items);
+          if (mine) setActiveWorkspace(Number(mine.id));
+          else if (cur > 0) setActiveWorkspace(0);
         }
       })
       .catch(() => {
@@ -94,7 +98,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, [tick, token]);
 
-  const active = workspaces.find((w) => w.id === wsId) ?? null;
+  const active =
+    workspaces.find((w) => Number(w.id) === wsId) ??
+    (wsId === 0 ? ownPersonal(workspaces) : null);
 
   const value = useMemo<WorkspaceContextValue>(
     () => ({ wsId, workspaces, active, reload, select: setActiveWorkspace }),
@@ -128,7 +134,11 @@ export function canShare(ws: Workspace | null): boolean {
 
 // ACL (права за потребители) е смисъл само в ЕКИПНО пространство. Личното
 // показва само раздел „Линкове".
+export function ownPersonal(list: Workspace[]): Workspace | null {
+  return list.find((w) => w.is_personal === 1 && w.role === "owner") ?? null;
+}
+
 export function canAcl(ws: Workspace | null): boolean {
-  if (!ws) return false;
+  if (!ws || ws.is_personal === 1) return false;
   return ws.role === "owner" || ws.role === "admin";
 }

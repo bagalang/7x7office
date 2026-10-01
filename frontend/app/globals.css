@@ -1463,6 +1463,25 @@ button.input.folder-pick.placeholder { color: var(--muted); }
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
+.totp-setup {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.totp-setup-fields { flex: 1; min-width: 0; }
+.totp-qr {
+  width: 180px;
+  height: 180px;
+  flex: none;
+  background: #fff;
+  padding: 8px;
+  border-radius: var(--radius);
+}
+.totp-setup + .muted { margin-top: 4px; }
+.code-list + .btn { margin-top: 8px; }
+@media (max-width: 640px) {
+  .totp-setup { flex-direction: column; }
+}
 .settings-block { max-width: 880px; margin-bottom: 28px; }
 .settings-actions { margin-top: 12px; }
 .settings-mail-test {
